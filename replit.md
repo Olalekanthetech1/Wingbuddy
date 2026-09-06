@@ -40,7 +40,7 @@ A Telegram personal AI assistant that keeps isolated PostgreSQL conversation mem
 
 ## Product
 
-Users can message the Telegram bot naturally, revisit context later, clear or reset memory, and restrict access to a private allowlist.
+Users can message the Telegram bot naturally, choose a persistent personality with `/personality`, revisit context later, clear or reset memory, and restrict access to a private allowlist.
 
 ## User preferences
 

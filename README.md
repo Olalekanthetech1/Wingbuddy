@@ -4,7 +4,8 @@ A production-ready Telegram personal AI assistant backed by Google Gemini and Po
 
 ## What is included
 
-- Telegram commands: `/start`, `/help`, `/clear`, `/reset`, and `/status`
+- Telegram commands: `/start`, `/help`, `/clear`, `/reset`, `/status`, and `/personality`
+- Persistent personality modes through `/personality`: Playful & chatty, Balanced, Focused, and Professional
 - Persistent PostgreSQL conversation memory
 - Configurable context window so history is never sent without a limit
 - Google Gemini through the official `@google/genai` SDK
@@ -15,6 +16,8 @@ A production-ready Telegram personal AI assistant backed by Google Gemini and Po
 - Polling for local development or a configurable webhook for a stable HTTPS deployment
 - Friendly user-facing errors with technical details kept in server logs
 - Strict TypeScript and automated unit/endpoint tests
+
+The default personality is **Playful & chatty**. Users can run `/personality` to open an inline keyboard and choose a different tone. The selected mode is saved per Telegram user and included as Gemini personality guidance without being written into the conversation transcript.
 
 ## Architecture
 

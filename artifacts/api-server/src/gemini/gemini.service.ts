@@ -30,7 +30,11 @@ export class GeminiService {
     this.client = client ?? new GoogleGenAI({ apiKey });
   }
 
-  async generateReply(history: GeminiMessage[], message: string): Promise<string> {
+  async generateReply(
+    history: GeminiMessage[],
+    message: string,
+    personalityInstruction?: string,
+  ): Promise<string> {
     const contents: Content[] = [
       ...history.map((item) => ({
         role: item.role,
@@ -50,7 +54,9 @@ export class GeminiService {
             model: this.model,
             contents,
             config: {
-              systemInstruction: this.systemInstruction,
+              systemInstruction: personalityInstruction
+                ? `${this.systemInstruction}\n\nPersonality guidance:\n${personalityInstruction}`
+                : this.systemInstruction,
             },
           }),
           new Promise<never>((_, reject) => {

@@ -6,6 +6,7 @@ import {
   usersTable,
   type Message,
 } from "@workspace/db";
+import { isPersonalityKey, type PersonalityKey } from "../config/personality";
 
 export interface TelegramUserProfile {
   id: number;
@@ -61,6 +62,26 @@ export class ConversationService {
       .returning({ id: conversationsTable.id });
 
     return created[0]?.id ?? this.getConversationId(telegramUserId, chatId);
+  }
+
+  async getUserPersonality(telegramUserId: number): Promise<PersonalityKey> {
+    const result = await db
+      .select({ personality: usersTable.personality })
+      .from(usersTable)
+      .where(eq(usersTable.telegramUserId, telegramUserId))
+      .limit(1);
+    const personality = result[0]?.personality;
+    return isPersonalityKey(personality) ? personality : "playful";
+  }
+
+  async setUserPersonality(
+    telegramUserId: number,
+    personality: PersonalityKey,
+  ): Promise<void> {
+    await db
+      .update(usersTable)
+      .set({ personality, updatedAt: new Date() })
+      .where(eq(usersTable.telegramUserId, telegramUserId));
   }
 
   private async getConversationId(telegramUserId: number, chatId: number): Promise<number> {
