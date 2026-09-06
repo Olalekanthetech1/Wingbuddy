@@ -1,0 +1,1 @@
+- [Telegram bot runtime](telegram-bot-runtime.md) — Keep grammY external in esbuild and only initialize its webhook callback when webhook mode is selected.

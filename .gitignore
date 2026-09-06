@@ -47,3 +47,11 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Environment and runtime output
+.env
+.env.*
+!.env.example
+*.log
+coverage/
+drizzle/

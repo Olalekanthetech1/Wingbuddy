@@ -1,15 +1,17 @@
-# [Project name]
+# Telegram Gemini Assistant
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+A Telegram personal AI assistant that keeps isolated PostgreSQL conversation memory and uses Google Gemini for natural replies.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
+- `pnpm --filter @workspace/api-server run dev` — run the Telegram/Gemini API server
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- `pnpm --filter @workspace/api-server run test` — run bot service and health endpoint tests
+- Required secrets: `TELEGRAM_BOT_TOKEN`, `GEMINI_API_KEY`
+- Required runtime env: `DATABASE_URL`
 
 ## Stack
 
@@ -22,23 +24,32 @@ _Replace the heading above with the project's name, and this line with one sente
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/api-server/src/telegram` — grammY bot, commands, webhook/polling startup, typing indicator
+- `artifacts/api-server/src/gemini` — official Google GenAI service
+- `artifacts/api-server/src/services` — authorization, rate limiting, and conversation persistence
+- `artifacts/api-server/src/utils` — Telegram-safe message splitting
+- `lib/db/src/schema/index.ts` — PostgreSQL source-of-truth schema
+- `artifacts/api-server/tests` — unit and endpoint tests
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- Polling is the default for local/Replit development; setting `TELEGRAM_WEBHOOK_URL` switches to webhook mode and prevents duplicate consumers.
+- Gemini calls are isolated in `GeminiService`, with a timeout and a configurable model/system instruction.
+- Conversations are scoped by Telegram user ID and chat ID, so group chats and separate users cannot share memory.
+- The API server keeps user-facing errors generic and logs technical failures server-side.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+Users can message the Telegram bot naturally, revisit context later, clear or reset memory, and restrict access to a private allowlist.
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+No additional preferences recorded.
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- Run `pnpm --filter @workspace/db run push` after provisioning PostgreSQL and after schema changes.
+- Do not place bot tokens, Gemini keys, or database credentials in source control.
 
 ## Pointers
 
