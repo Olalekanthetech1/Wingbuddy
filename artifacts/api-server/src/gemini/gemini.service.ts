@@ -6,6 +6,11 @@ export interface GeminiMessage {
   content: string;
 }
 
+export interface AssistantGuidance {
+  personalityInstruction?: string;
+  modeInstruction?: string;
+}
+
 interface GeminiClient {
   models: {
     generateContent: (params: {
@@ -33,7 +38,7 @@ export class GeminiService {
   async generateReply(
     history: GeminiMessage[],
     message: string,
-    personalityInstruction?: string,
+    guidance?: AssistantGuidance | string,
   ): Promise<string> {
     const contents: Content[] = [
       ...history.map((item) => ({
@@ -54,9 +59,7 @@ export class GeminiService {
             model: this.model,
             contents,
             config: {
-              systemInstruction: personalityInstruction
-                ? `${this.systemInstruction}\n\nPersonality guidance:\n${personalityInstruction}`
-                : this.systemInstruction,
+              systemInstruction: buildSystemInstruction(this.systemInstruction, guidance),
             },
           }),
           new Promise<never>((_, reject) => {
@@ -77,6 +80,25 @@ export class GeminiService {
     if (lastError instanceof GeminiError) throw lastError;
     throw new GeminiServiceError("Gemini request failed.", lastError);
   }
+}
+
+function buildSystemInstruction(
+  baseInstruction: string,
+  guidance?: AssistantGuidance | string,
+): string {
+  if (!guidance) return baseInstruction;
+  const personalityInstruction =
+    typeof guidance === "string" ? guidance : guidance.personalityInstruction;
+  const modeInstruction =
+    typeof guidance === "string" ? undefined : guidance.modeInstruction;
+  const sections = [baseInstruction];
+  if (personalityInstruction) {
+    sections.push(`Personality guidance:\n${personalityInstruction}`);
+  }
+  if (modeInstruction) {
+    sections.push(`Assistant mode guidance:\n${modeInstruction}`);
+  }
+  return sections.join("\n\n");
 }
 
 function isRetryableGeminiError(error: unknown): boolean {

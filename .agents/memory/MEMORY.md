@@ -1,1 +1,2 @@
 - [Telegram bot runtime](telegram-bot-runtime.md) — Keep grammY external in esbuild and only initialize its webhook callback when webhook mode is selected.
+- [Assistant UX foundation](assistant-ux-foundation.md) — Keep personality, task mode, and deferred capabilities as separate concepts.

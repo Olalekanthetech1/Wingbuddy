@@ -18,6 +18,7 @@ export const usersTable = pgTable(
     firstName: text("first_name"),
     lastName: text("last_name"),
     personality: text("personality").default("playful").notNull(),
+    mode: text("mode").default("general").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },

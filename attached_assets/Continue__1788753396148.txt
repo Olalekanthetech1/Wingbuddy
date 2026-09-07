@@ -1,0 +1,378 @@
+You are continuing development of the EXISTING Telegram Gemini AI assistant in this repository.
+
+DO NOT rebuild the application from scratch.
+DO NOT replace the existing architecture unnecessarily.
+FIRST inspect the current codebase and preserve all working functionality.
+
+Repository:
+https://github.com/umarhawau/AI-Assistant
+
+CURRENT STATE:
+
+• Telegram bot using grammY
+• Google Gemini using @google/genai
+• PostgreSQL persistence
+• Conversation history
+• User/chat isolation
+• Personality selection with InlineKeyboard
+• /start, /help, /clear, /reset, /status, /personality
+• Rate limiting
+• Authorization
+• Typing indicator
+• Telegram message splitting
+• Polling/webhook support
+• Tests and TypeScript
+• Replit deployment configuration
+
+OBJECTIVE:
+Transform the existing bot from a basic Gemini chatbot into a natural-feeling personal AI assistant.
+
+PHASE 1 ONLY:
+Focus on UX, natural conversation behavior, and the architectural foundation for future Memory, Modes, Voice, Reminders, and Tools.
+
+==================================================
+
+1. AUDIT THE EXISTING CODE FIRST
+
+Before changing anything:
+
+• Inspect all existing Telegram handlers.
+• Inspect GeminiService.
+• Inspect personality configuration.
+• Inspect ConversationService.
+• Inspect database schema.
+• Inspect configuration/env handling.
+• Inspect tests.
+• Identify exactly where new functionality should be integrated.
+
+Do not duplicate existing logic.
+Do not create parallel implementations when an existing service can be extended cleanly.
+
+==================================================
+2. REPLACE PERSONALITY-FIRST UX WITH A MAIN MENU
+
+Create a reusable Telegram InlineKeyboard main menu.
+
+Main menu:
+
+🤖 AI Assistant
+
+[ 💬 Chat ]
+[ 🧠 Memory ] [ 🎯 Modes ]
+[ 🎙️ Voice ] [ ⏰ Reminders ]
+[ ⚙️ Settings ] [ ❓ Help ]
+
+Use callback queries and clean navigation.
+
+Important:
+
+• Normal text messages must ALWAYS work without pressing Chat.
+• The Chat button should simply return the user to the normal conversation experience.
+• Keep slash commands as power-user shortcuts.
+• Do not remove existing working commands.
+
+The /start response should introduce the assistant naturally and show the main menu.
+
+==================================================
+3. NATURAL CONVERSATION BEHAVIOR
+
+Create a strong central conversational system instruction for Gemini.
+
+The assistant should feel natural, warm, intelligent, and context-aware.
+
+Core behavioral rules:
+
+• Sound conversational, not robotic.
+• Avoid generic AI phrases such as:
+"Certainly!"
+"Absolutely!"
+"I'd be happy to help!"
+"As an AI..."
+"Here is a comprehensive answer..."
+• Do not repeatedly restate the user's question.
+• Do not force headings and bullet points into every answer.
+• Use natural paragraphs when a simple conversational response is better.
+• Use bullets or structured formatting only when it genuinely improves clarity.
+• Match the user's level of formality.
+• Match casual users with a relaxed conversational tone.
+• Match professional requests with professional communication.
+• Use contractions naturally.
+• Do not overuse emojis.
+• Do not append unnecessary offers such as:
+"Let me know if you need anything else."
+• Do not ask follow-up questions unless they are actually useful.
+• Keep simple answers simple.
+• Give deeper answers when the problem requires depth.
+• Be honest when uncertain.
+• Never claim to have performed an action unless it actually happened.
+• Maintain context from previous messages.
+• Resolve references such as:
+"that one"
+"the second option"
+"make it shorter"
+"continue"
+using conversation context where possible.
+• When the user changes direction naturally, follow the new direction without forcing the previous task.
+
+IMPORTANT:
+Do NOT instruct Gemini to pretend to be human.
+Do NOT make false claims about having emotions, physical experiences, or a real-world identity.
+
+The goal is natural communication, not deception.
+
+==================================================
+4. SEPARATE PERSONALITY FROM MODE
+
+Refactor the existing concept so:
+
+PERSONALITY =
+how the assistant communicates.
+
+MODE =
+how the assistant approaches the task.
+
+Do not treat these as the same thing.
+
+Preserve the existing personality system if useful, but prepare the architecture for:
+
+Modes:
+
+• General Assistant
+• Study Tutor
+• Writing Editor
+• Brainstorming
+• Coding Assistant
+• Travel Planner
+
+Do not fully implement complex mode behavior yet unless it can be done cleanly without disrupting the current system.
+
+At minimum:
+
+• create a clean mode abstraction/configuration
+• default mode = general
+• persist the selected mode per user
+• make Gemini prompts capable of receiving both personality and mode instructions
+
+==================================================
+5. SETTINGS MENU
+
+Create a Settings InlineKeyboard submenu.
+
+Suggested structure:
+
+⚙️ Settings
+
+[ 🎭 Personality ]
+[ 🎯 Assistant Mode ]
+[ 🔔 Notifications ]
+[ 🔐 Privacy ]
+[ ◀️ Back ]
+
+Only expose settings that are actually implemented.
+
+Do not create fake controls.
+
+==================================================
+6. HELP MENU
+
+Convert Help into a clean InlineKeyboard-driven help experience.
+
+Explain:
+
+• how to chat
+• what the assistant remembers currently
+• available commands
+• personality
+• modes
+• memory (mark upcoming/available status accurately)
+• future capabilities only if clearly labeled as unavailable
+
+Do not oversell features that are not implemented.
+
+==================================================
+7. PREPARE FOR LONG-TERM MEMORY
+
+DO NOT fully implement advanced memory extraction yet.
+
+Instead, design the architecture so long-term memory can be added without a database rewrite.
+
+The database design should be capable of supporting a future structure such as:
+
+users
+conversations
+messages
+memories
+user_preferences
+tasks/reminders
+
+Keep conversation history separate from long-term memory.
+
+Important distinction:
+
+Conversation history:
+temporary/current conversational context.
+
+Long-term memory:
+facts/preferences that persist across conversations.
+
+Do not automatically convert every user message into permanent memory.
+
+==================================================
+8. PREPARE FOR TOOL CALLING
+
+Create a clean service boundary for future tools.
+
+For example:
+
+ToolRegistry
+ToolExecutor
+ToolContext
+
+Do NOT add external tools yet.
+
+The goal is simply to avoid coupling future tools directly into bot.ts.
+
+Future tools may include:
+
+• web search
+• calculator
+• reminders
+• weather
+• files
+• GitHub
+• other APIs
+
+==================================================
+9. TELEGRAM UX QUALITY
+
+Improve Telegram interaction quality:
+
+• consistent menu navigation
+• callback query acknowledgement
+• clean editing of menu messages where appropriate
+• Back buttons
+• no excessive duplicate messages
+• graceful handling of stale callback buttons
+• friendly errors
+• maintain typing indicator
+• maintain safe long-message splitting
+
+Do not make Telegram interactions feel like a form.
+
+==================================================
+10. PRESERVE CURRENT FUNCTIONALITY
+
+The following must continue working:
+
+/start
+/help
+/clear
+/reset
+/status
+/personality
+
+Normal text messages must continue working.
+
+Authorization must continue working.
+
+Rate limiting must continue working.
+
+Polling and webhook support must continue working.
+
+PostgreSQL persistence must continue working.
+
+==================================================
+11. TESTS
+
+Add or update tests for:
+
+• main menu rendering
+• callback navigation
+• personality selection
+• mode persistence
+• natural prompt construction
+• conversation context
+• authorization
+• /clear
+• /reset
+• existing Telegram message handling
+
+Mock Gemini.
+Do not make real Telegram or Gemini requests in tests.
+
+==================================================
+12. CODE QUALITY
+
+Keep the architecture modular.
+
+Prefer services such as:
+
+telegram/
+bot.ts
+keyboards.ts
+navigation.ts
+typing-indicator.ts
+
+assistant/
+assistant.service.ts
+prompt-builder.ts
+mode.ts
+personality.ts
+
+memory/
+memory.service.ts
+
+tools/
+tool-registry.ts
+tool-executor.ts
+
+Keep database access in appropriate repositories/services.
+
+Do not create giant files when clean separation is possible.
+
+==================================================
+13. SECURITY
+
+Never log:
+
+• Telegram bot token
+• Gemini API key
+• database credentials
+
+Continue using environment variables/Replit Secrets.
+
+Do not expose secrets through Telegram responses.
+
+Maintain user/chat isolation.
+
+==================================================
+14. VERIFY EVERYTHING
+
+After implementation:
+
+1. Install required dependencies if necessary.
+2. Run typecheck.
+3. Run tests.
+4. Run build.
+5. Fix all errors.
+6. Verify the Replit workflow still starts.
+7. Verify no existing feature was accidentally broken.
+
+Do not stop after writing code.
+Actually validate the implementation.
+
+==================================================
+15. FINAL REPORT
+
+At the end, report:
+
+• Files created
+• Files modified
+• Database changes
+• New Telegram UI
+• New assistant behavior
+• Tests run
+• Build/typecheck results
+• Any remaining limitations
+
+Do not claim success if a check failed.

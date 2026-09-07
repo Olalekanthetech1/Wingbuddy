@@ -7,6 +7,7 @@ import {
   type Message,
 } from "@workspace/db";
 import { isPersonalityKey, type PersonalityKey } from "../config/personality";
+import { isModeKey, type ModeKey } from "../config/mode";
 
 export interface TelegramUserProfile {
   id: number;
@@ -81,6 +82,23 @@ export class ConversationService {
     await db
       .update(usersTable)
       .set({ personality, updatedAt: new Date() })
+      .where(eq(usersTable.telegramUserId, telegramUserId));
+  }
+
+  async getUserMode(telegramUserId: number): Promise<ModeKey> {
+    const result = await db
+      .select({ mode: usersTable.mode })
+      .from(usersTable)
+      .where(eq(usersTable.telegramUserId, telegramUserId))
+      .limit(1);
+    const mode = result[0]?.mode;
+    return isModeKey(mode) ? mode : "general";
+  }
+
+  async setUserMode(telegramUserId: number, mode: ModeKey): Promise<void> {
+    await db
+      .update(usersTable)
+      .set({ mode, updatedAt: new Date() })
       .where(eq(usersTable.telegramUserId, telegramUserId));
   }
 

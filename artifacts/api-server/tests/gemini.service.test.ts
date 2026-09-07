@@ -34,6 +34,22 @@ describe("GeminiService", () => {
     );
   });
 
+  it("keeps personality and assistant mode guidance separate", async () => {
+    const generateContent = vi.fn().mockResolvedValue({ text: "Let's work through it." });
+    const service = new GeminiService("secret", "gemini-test", 1000, "Be precise", {
+      models: { generateContent },
+    });
+
+    await service.generateReply([], "Teach me this.", {
+      personalityInstruction: "Be warm and playful.",
+      modeInstruction: "Teach step by step.",
+    });
+
+    expect(generateContent.mock.calls[0]?.[0].config.systemInstruction).toBe(
+      "Be precise\n\nPersonality guidance:\nBe warm and playful.\n\nAssistant mode guidance:\nTeach step by step.",
+    );
+  });
+
   it("fails safely when generation times out", async () => {
     const service = new GeminiService("secret", "gemini-test", 5, "Be precise", {
       models: {

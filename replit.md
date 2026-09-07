@@ -24,9 +24,11 @@ A Telegram personal AI assistant that keeps isolated PostgreSQL conversation mem
 
 ## Where things live
 
-- `artifacts/api-server/src/telegram` — grammY bot, commands, webhook/polling startup, typing indicator
+- `artifacts/api-server/src/telegram` — grammY bot, commands, inline keyboards, navigation, webhook/polling startup, typing indicator
 - `artifacts/api-server/src/gemini` — official Google GenAI service
+- `artifacts/api-server/src/config` — environment, personality, and assistant mode configuration
 - `artifacts/api-server/src/services` — authorization, rate limiting, and conversation persistence
+- `artifacts/api-server/src/tools` — future tool registry and execution boundary
 - `artifacts/api-server/src/utils` — Telegram-safe message splitting
 - `lib/db/src/schema/index.ts` — PostgreSQL source-of-truth schema
 - `artifacts/api-server/tests` — unit and endpoint tests
@@ -40,7 +42,7 @@ A Telegram personal AI assistant that keeps isolated PostgreSQL conversation mem
 
 ## Product
 
-Users can message the Telegram bot naturally, choose a persistent personality with `/personality`, revisit context later, clear or reset memory, and restrict access to a private allowlist.
+Users can message the Telegram bot naturally, use the inline main menu, choose a persistent personality and assistant mode, revisit context later, clear or reset memory, and restrict access to a private allowlist.
 
 ## User preferences
 

@@ -4,8 +4,11 @@ A production-ready Telegram personal AI assistant backed by Google Gemini and Po
 
 ## What is included
 
-- Telegram commands: `/start`, `/help`, `/clear`, `/reset`, `/status`, and `/personality`
+- Telegram commands: `/start`, `/help`, `/clear`, `/reset`, `/status`, `/personality`, and `/mode`
 - Persistent personality modes through `/personality`: Playful & chatty, Balanced, Focused, and Professional
+- A main inline-keyboard menu with navigation for Memory, Modes, Voice, Reminders, Settings, and Help
+- Six persistent assistant modes: General Assistant, Study Tutor, Writing Editor, Brainstorming, Coding Assistant, and Travel Planner
+- Helpful/not-quite feedback buttons beneath Gemini replies
 - Persistent PostgreSQL conversation memory
 - Configurable context window so history is never sent without a limit
 - Google Gemini through the official `@google/genai` SDK
@@ -17,7 +20,9 @@ A production-ready Telegram personal AI assistant backed by Google Gemini and Po
 - Friendly user-facing errors with technical details kept in server logs
 - Strict TypeScript and automated unit/endpoint tests
 
-The default personality is **Playful & chatty**. Users can run `/personality` to open an inline keyboard and choose a different tone. The selected mode is saved per Telegram user and included as Gemini personality guidance without being written into the conversation transcript.
+The default personality is **Playful & chatty**. Users can run `/personality` or open **Settings → Personality** to choose a different tone. Assistant modes are selected separately through **Modes** or `/mode`; personality controls communication style while mode controls how the assistant approaches a task. Both preferences are saved per Telegram user and included as separate Gemini guidance without being written into the conversation transcript.
+
+Normal messages always work directly—users do not need to press **Chat** first. Voice messages, long-term personal memory, reminders, and external tools are represented honestly in the menu but remain unavailable until their later implementation phases.
 
 ## Architecture
 
@@ -81,6 +86,7 @@ The schema contains:
 - `users`: Telegram profile metadata
 - `conversations`: one isolated conversation per Telegram user and chat
 - `messages`: ordered `user` and `model` messages
+- `users.personality` and `users.mode`: persistent assistant preferences
 
 Indexes cover Telegram identity, conversation lookup, and recent message retrieval.
 
