@@ -57,7 +57,7 @@ Add these values through the Replit Secrets/environment UI. Never paste them int
 | `TELEGRAM_BOT_TOKEN` | Yes | BotFather token |
 | `GEMINI_API_KEY` | Yes | Google Gemini API key |
 | `DATABASE_URL` | Yes | PostgreSQL connection string; provision a Replit database |
-| `GEMINI_MODEL` | No | Defaults to `gemini-2.5-flash` |
+| `GEMINI_MODEL` | No | Defaults to `gemini-3.6-flash` |
 | `ALLOWED_TELEGRAM_USER_IDS` | No | Comma-separated Telegram user IDs; empty allows everyone |
 | `MAX_HISTORY_MESSAGES` | No | Defaults to 20 messages |
 | `RATE_LIMIT_MAX_REQUESTS` | No | Defaults to 6 requests |

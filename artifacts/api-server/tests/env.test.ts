@@ -7,6 +7,11 @@ describe("environment validation", () => {
     process.env.GEMINI_API_KEY = "test-key";
     delete process.env.TELEGRAM_WEBHOOK_URL;
     delete process.env.ALLOWED_TELEGRAM_USER_IDS;
+    delete process.env.GEMINI_MODEL;
+  });
+
+  it("uses the current Gemini flash default when no model is configured", () => {
+    expect(getConfig().geminiModel).toBe("gemini-3.6-flash");
   });
 
   it("requires the bot token", () => {

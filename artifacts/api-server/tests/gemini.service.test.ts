@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { GeminiService, GeminiTimeoutError } from "../src/gemini/gemini.service";
+import {
+  GeminiService,
+  GeminiServiceError,
+  GeminiTimeoutError,
+} from "../src/gemini/gemini.service";
 
 describe("GeminiService", () => {
   it("passes model, system instruction, and context to the official client", async () => {
@@ -57,5 +61,29 @@ describe("GeminiService", () => {
       },
     });
     await expect(service.generateReply([], "Hello")).rejects.toBeInstanceOf(GeminiTimeoutError);
+  });
+
+  it("surfaces a non-retryable model/API error without retrying it", async () => {
+    const apiError = Object.assign(
+      new Error(
+        JSON.stringify({
+          error: {
+            code: 404,
+            status: "NOT_FOUND",
+            message: "This model is no longer available.",
+          },
+        }),
+      ),
+      { status: 404 },
+    );
+    const generateContent = vi.fn().mockRejectedValue(apiError);
+    const service = new GeminiService("secret", "gemini-3.6-flash", 1000, "Be precise", {
+      models: { generateContent },
+    });
+
+    await expect(service.generateReply([], "Reply with exactly: OK")).rejects.toBeInstanceOf(
+      GeminiServiceError,
+    );
+    expect(generateContent).toHaveBeenCalledTimes(1);
   });
 });

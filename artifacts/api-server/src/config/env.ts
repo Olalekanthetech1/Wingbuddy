@@ -1,4 +1,4 @@
-const DEFAULT_MODEL = "gemini-2.5-flash";
+const DEFAULT_MODEL = "gemini-3.6-flash";
 const DEFAULT_MAX_HISTORY_MESSAGES = 20;
 const DEFAULT_RATE_LIMIT_MAX_REQUESTS = 6;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;

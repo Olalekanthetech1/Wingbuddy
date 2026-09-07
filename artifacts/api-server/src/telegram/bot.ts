@@ -8,6 +8,7 @@ import { GeminiService } from "../gemini/gemini.service";
 import { RateLimitService } from "../services/rate-limit.service";
 import { isAuthorizedTelegramUser } from "../services/authorization.service";
 import { splitTelegramMessage } from "../utils/split-message";
+import { safeErrorMetadata } from "../utils/safe-error";
 import { startTypingIndicator } from "./typing-indicator";
 import {
   PERSONALITIES,
@@ -63,20 +64,45 @@ export function createTelegramBot(): TelegramBotRuntime {
   const authorized = (userId: number): boolean =>
     isAuthorizedTelegramUser(userId, config.allowedTelegramUserIds);
 
+  const runStage = async <T>(
+    stage: string,
+    context: { telegramUserId?: number; chatId?: number },
+    operation: () => Promise<T>,
+  ): Promise<T> => {
+    try {
+      return await operation();
+    } catch (error) {
+      logger.error(
+        { stage, ...context, error: safeErrorMetadata(error) },
+        "Telegram chat stage failed",
+      );
+      throw error;
+    }
+  };
+
   const upsertUser = async (ctx: Context): Promise<void> => {
     if (!ctx.from) return;
-    await conversations.upsertUser({
-      id: ctx.from.id,
-      username: ctx.from.username,
-      firstName: ctx.from.first_name,
-      lastName: ctx.from.last_name,
-    });
+    await runStage(
+      "database_user_upsert",
+      { telegramUserId: ctx.from.id, chatId: ctx.chat?.id },
+      () =>
+        conversations.upsertUser({
+          id: ctx.from!.id,
+          username: ctx.from!.username,
+          firstName: ctx.from!.first_name,
+          lastName: ctx.from!.last_name,
+        }),
+    );
   };
 
   const requireAuthorized = async (
     ctx: Context,
   ): Promise<boolean> => {
     if (!ctx.from || !authorized(ctx.from.id)) {
+      logger.warn(
+        { stage: "authorization", telegramUserId: ctx.from?.id },
+        "Telegram update rejected by authorization policy",
+      );
       await ctx.reply(PRIVATE_MESSAGE);
       return false;
     }
@@ -320,6 +346,10 @@ export function createTelegramBot(): TelegramBotRuntime {
     if (!ctx.from) return;
 
     if (!rateLimiter.consume(ctx.from.id)) {
+      logger.warn(
+        { stage: "rate_limiting", telegramUserId: ctx.from.id },
+        "Telegram message rejected by rate limiter",
+      );
       await ctx.reply("You’re sending messages a little too quickly. Please wait a moment and try again.");
       return;
     }
@@ -333,40 +363,81 @@ export function createTelegramBot(): TelegramBotRuntime {
     const stopTyping = startTypingIndicator(ctx);
     try {
       await upsertUser(ctx);
-      const conversationId = await conversations.getOrCreateConversation(
-        ctx.from.id,
-        ctx.chat.id,
+      const conversationId = await runStage(
+        "conversation_creation",
+        { telegramUserId: ctx.from.id, chatId: ctx.chat.id },
+        () =>
+          conversations.getOrCreateConversation(
+            ctx.from!.id,
+            ctx.chat!.id,
+          ),
       );
-      const [personality, mode] = await Promise.all([
-        conversations.getUserPersonality(ctx.from.id),
-        conversations.getUserMode(ctx.from.id),
-      ]);
-      const history = await conversations.getRecentMessages(
-        conversationId,
-        config.maxHistoryMessages,
+      const [personality, mode] = await runStage(
+        "personality_mode_retrieval",
+        { telegramUserId: ctx.from.id, chatId: ctx.chat.id },
+        () =>
+          Promise.all([
+            conversations.getUserPersonality(ctx.from!.id),
+            conversations.getUserMode(ctx.from!.id),
+          ]),
       );
-      const reply = await gemini.generateReply(
-        history.map((item) => ({
-          role: item.role === "model" ? "model" : "user",
-          content: item.content,
-        })),
-        text,
-        {
-          personalityInstruction: PERSONALITIES[personality].instruction,
-          modeInstruction: MODES[mode].instruction,
-        },
+      const history = await runStage(
+        "conversation_history_retrieval",
+        { telegramUserId: ctx.from.id, chatId: ctx.chat.id },
+        () =>
+          conversations.getRecentMessages(
+            conversationId,
+            config.maxHistoryMessages,
+          ),
+      );
+      const reply = await runStage(
+        "gemini_request",
+        { telegramUserId: ctx.from.id, chatId: ctx.chat.id },
+        () =>
+          gemini.generateReply(
+            history.map((item) => ({
+              role: item.role === "model" ? "model" : "user",
+              content: item.content,
+            })),
+            text,
+            {
+              personalityInstruction: PERSONALITIES[personality].instruction,
+              modeInstruction: MODES[mode].instruction,
+            },
+          ),
       );
 
-      await conversations.addMessage(conversationId, "user", text);
-      await conversations.addMessage(conversationId, "model", reply);
+      await runStage(
+        "user_message_save",
+        { telegramUserId: ctx.from.id, chatId: ctx.chat.id },
+        () => conversations.addMessage(conversationId, "user", text),
+      );
+      await runStage(
+        "model_response_save",
+        { telegramUserId: ctx.from.id, chatId: ctx.chat.id },
+        () => conversations.addMessage(conversationId, "model", reply),
+      );
       const chunks = splitTelegramMessage(reply);
       for (const [index, chunk] of chunks.entries()) {
-        await ctx.reply(chunk, {
-          reply_markup: index === chunks.length - 1 ? feedbackKeyboard() : undefined,
-        });
+        await runStage(
+          "telegram_reply",
+          { telegramUserId: ctx.from.id, chatId: ctx.chat.id },
+          () =>
+            ctx.reply(chunk, {
+              reply_markup: index === chunks.length - 1 ? feedbackKeyboard() : undefined,
+            }),
+        );
       }
     } catch (error) {
-      logger.error({ err: error, telegramUserId: ctx.from.id }, "Telegram message handling failed");
+      logger.error(
+        {
+          stage: "telegram_message_handling",
+          telegramUserId: ctx.from.id,
+          chatId: ctx.chat.id,
+          error: safeErrorMetadata(error),
+        },
+        "Telegram message handling failed",
+      );
       await ctx.reply(GENERIC_ERROR_MESSAGE);
     } finally {
       stopTyping();
@@ -374,7 +445,14 @@ export function createTelegramBot(): TelegramBotRuntime {
   });
 
   bot.catch((error) => {
-    logger.error({ err: error.error, updateId: error.ctx.update.update_id }, "Telegram update failed");
+    logger.error(
+      {
+        stage: "telegram_update",
+        updateId: error.ctx.update.update_id,
+        error: safeErrorMetadata(error.error),
+      },
+      "Telegram update failed",
+    );
   });
 
   return {
@@ -384,7 +462,10 @@ export function createTelegramBot(): TelegramBotRuntime {
         await bot.api.deleteWebhook();
         await bot.start({
           onStart: (botInfo) => {
-            logger.info({ username: botInfo.username }, "Telegram polling started");
+            logger.info(
+              { username: botInfo.username, model: config.geminiModel },
+              "Telegram polling started",
+            );
           },
         });
         return;

@@ -1,5 +1,7 @@
 import { GoogleGenAI, type Content } from "@google/genai";
 import { AI_SYSTEM_INSTRUCTION } from "../config/env";
+import { logger } from "../lib/logger";
+import { safeErrorMetadata } from "../utils/safe-error";
 
 export interface GeminiMessage {
   role: "user" | "model";
@@ -54,22 +56,50 @@ export class GeminiService {
     let lastError: unknown;
     for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
       try {
-        const response = await Promise.race([
-          this.client.models.generateContent({
-            model: this.model,
-            contents,
-            config: {
-              systemInstruction: buildSystemInstruction(this.systemInstruction, guidance),
+        let response: { text?: string };
+        try {
+          response = await Promise.race([
+            this.client.models.generateContent({
+              model: this.model,
+              contents,
+              config: {
+                systemInstruction: buildSystemInstruction(this.systemInstruction, guidance),
+              },
+            }),
+            new Promise<never>((_, reject) => {
+              setTimeout(() => reject(new GeminiTimeoutError()), this.timeoutMs);
+            }),
+          ]);
+        } catch (error) {
+          logger.error(
+            {
+              stage: "gemini_request",
+              model: this.model,
+              attempt,
+              error: safeErrorMetadata(error),
             },
-          }),
-          new Promise<never>((_, reject) => {
-            setTimeout(() => reject(new GeminiTimeoutError()), this.timeoutMs);
-          }),
-        ]);
+            "Gemini request failed",
+          );
+          throw error;
+        }
 
-        const reply = response.text?.trim();
-        if (!reply) throw new GeminiMalformedResponseError();
-        return reply;
+        try {
+          const reply = response.text?.trim();
+          if (!reply) throw new GeminiMalformedResponseError();
+          return reply;
+        } catch (error) {
+          logger.error(
+            {
+              stage: "gemini_response_parsing",
+              model: this.model,
+              attempt,
+              responseTextPopulated: Boolean(response.text?.trim()),
+              error: safeErrorMetadata(error),
+            },
+            "Gemini response parsing failed",
+          );
+          throw error;
+        }
       } catch (error) {
         lastError = error;
         if (!isRetryableGeminiError(error) || attempt === this.maxAttempts) break;
