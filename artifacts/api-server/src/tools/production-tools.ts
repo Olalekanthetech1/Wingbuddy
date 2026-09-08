@@ -3,6 +3,7 @@ import { logger } from "../lib/logger";
 import { taskService } from "../services/task.service";
 import { reminderService, reminderScheduler } from "../services/reminder.service";
 import { installDurableReminderDelivery } from "../services/reliable-reminder-delivery";
+import { tavilyService } from "../services/tavily.service";
 
 function asRecord(input: unknown): Record<string, unknown> {
   if (!input || typeof input !== "object" || Array.isArray(input)) return {};
@@ -43,7 +44,7 @@ export const calculateMathTool: AssistantTool = {
 
 export const searchInformationTool: AssistantTool = {
   name: "search_information",
-  description: "Retrieves factual reference information from a real external knowledge source (Wikipedia REST API).",
+  description: "Retrieves factual reference information from a real external knowledge source (Wikipedia REST API). Use web_search for current, broad, or multi-source research.",
   policy: { sideEffect: false, destructive: false, confirmationRequired: false, idempotent: true, requiredCapabilities: [], timeoutMs: 30000 },
   execute: async (input: unknown, context) => {
     const record = asRecord(input);
@@ -60,6 +61,41 @@ export const searchInformationTool: AssistantTool = {
       if (!extract) throw new Error("External lookup returned no substantive finding.");
       return { query, title: payload.title || query, description: payload.description || "", findings: [extract], sourceUrl: payload.content_urls?.desktop?.page || url, retrievedAt: new Date().toISOString(), requestedByUserId: context.telegramUserId };
     } finally { clearTimeout(timeout); }
+  },
+};
+
+export const webSearchTool: AssistantTool = {
+  name: "web_search",
+  description: "Searches the live web through Tavily and returns source-backed results. Use this dynamically when fresh, current, broad, or multi-source web evidence is needed. Do not invent results when Tavily is unavailable.",
+  policy: { sideEffect: false, destructive: false, confirmationRequired: false, idempotent: true, requiredCapabilities: ["web_research"], timeoutMs: 30000 },
+  execute: async (input: unknown) => {
+    const record = asRecord(input);
+    const query = requireNonEmptyString(record.query, "query");
+    return tavilyService.search({
+      query,
+      searchDepth: record.searchDepth === "advanced" ? "advanced" : "basic",
+      topic: record.topic === "news" || record.topic === "finance" ? record.topic : "general",
+      maxResults: typeof record.maxResults === "number" ? record.maxResults : undefined,
+      timeRange: ["day", "week", "month", "year"].includes(String(record.timeRange)) ? record.timeRange as any : undefined,
+      startDate: typeof record.startDate === "string" ? record.startDate : undefined,
+      endDate: typeof record.endDate === "string" ? record.endDate : undefined,
+      includeDomains: Array.isArray(record.includeDomains) ? record.includeDomains.map(String) : undefined,
+      excludeDomains: Array.isArray(record.excludeDomains) ? record.excludeDomains.map(String) : undefined,
+      country: typeof record.country === "string" ? record.country : undefined,
+      includeRawContent: Boolean(record.includeRawContent),
+    });
+  },
+};
+
+export const webExtractTool: AssistantTool = {
+  name: "web_extract",
+  description: "Extracts readable content from one or more known web URLs through Tavily. Use after web_search when source content needs deeper inspection.",
+  policy: { sideEffect: false, destructive: false, confirmationRequired: false, idempotent: true, requiredCapabilities: ["web_research"], timeoutMs: 45000 },
+  execute: async (input: unknown) => {
+    const record = asRecord(input);
+    const urls = Array.isArray(record.urls) ? record.urls.map(String) : typeof record.url === "string" ? [record.url] : [];
+    if (!urls.length) throw new Error("Missing required field: urls");
+    return tavilyService.extract(urls, record.extractDepth === "advanced" ? "advanced" : "basic");
   },
 };
 
@@ -102,17 +138,7 @@ export const createTaskTool: AssistantTool = {
       const item = typeof step === "string" ? { title: step } : asRecord(step);
       return { title: requireNonEmptyString(item.title, `steps[${index}].title`), description: typeof item.description === "string" ? item.description : undefined };
     }) : undefined;
-    const task = await taskService.createTask({
-      telegramUserId: context.telegramUserId,
-      conversationId: context.conversationId,
-      title,
-      goal,
-      taskType: typeof record.taskType === "string" ? record.taskType : "general",
-      status,
-      steps,
-      contextData: typeof record.contextData === "object" && record.contextData !== null ? record.contextData as Record<string, unknown> : undefined,
-      metadataData: { source: "autonomous_tool", idempotencyKey: context.idempotencyKey || null },
-    });
+    const task = await taskService.createTask({ telegramUserId: context.telegramUserId, conversationId: context.conversationId, title, goal, taskType: typeof record.taskType === "string" ? record.taskType : "general", status, steps, contextData: typeof record.contextData === "object" && record.contextData !== null ? record.contextData as Record<string, unknown> : undefined, metadataData: { source: "autonomous_tool", idempotencyKey: context.idempotencyKey || null } });
     return { taskId: task.task.id, title: task.task.title, goal: task.task.goal, status: task.task.status, currentStep: task.task.currentStep, steps: task.steps.map((step) => ({ id: step.id, order: step.stepOrder, title: step.title, status: step.status })), persisted: true };
   },
 };
@@ -149,6 +175,8 @@ export function getProductionToolRegistry(): ToolRegistry {
     const registry = new ToolRegistry();
     registry.register(calculateMathTool);
     registry.register(searchInformationTool);
+    registry.register(webSearchTool);
+    registry.register(webExtractTool);
     registry.register(summarizeTextTool);
     registry.register(fetchUserMemoryTool);
     registry.register(createTaskTool);
