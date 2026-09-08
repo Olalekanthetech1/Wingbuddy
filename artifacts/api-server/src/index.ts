@@ -4,6 +4,7 @@ import { getPool, ensureDatabaseSchema } from "@workspace/db";
 import { hydrateEnvFromDatabase } from "./routes/env";
 import { getExecutionConfig } from "./execution/config";
 import { apiKeyPoolService } from "./services/api-key-pool.service";
+import { behaviorRegistryService } from "./services/behavior-registry.service";
 
 const port = 3000;
 
@@ -16,9 +17,12 @@ const server = app.listen(port, "0.0.0.0", async () => {
     await hydrateEnvFromDatabase();
     await apiKeyPoolService.initializeDb();
     await apiKeyPoolService.hydrateFromDatabase();
+    await behaviorRegistryService.initialize();
     telegramRuntime.initOrReload();
+    logger.info("Runtime configuration hydrated before Telegram initialization");
   } catch (err) {
-    logger.warn({ error: err instanceof Error ? err.message : String(err) }, "Database/runtime hydration warning");
+    logger.error({ error: err instanceof Error ? err.message : String(err) }, "CRITICAL_STARTUP_HYDRATION_FAILURE");
+    logger.error("Telegram runtime initialization was not attempted because authoritative startup state could not be hydrated");
   }
 
   const execConfig = getExecutionConfig();
