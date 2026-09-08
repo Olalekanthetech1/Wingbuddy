@@ -116,7 +116,9 @@ export function renderDashboardBotSimulator(): string {
     document.getElementById('simModeMeta').textContent=t.effectiveMode||'—';
     document.getElementById('simIntentMeta').textContent=t.intent||'—';
     document.getElementById('simCapabilityMeta').textContent=(t.requiredCapabilities||[]).join(', ')||'none';
-    const entries=[['Simulation',t.simulationId],['User',t.telegramUserId??'anonymous'],['Persistent mode',t.persistentMode],['Effective mode',t.effectiveMode],['Personality',t.personality],['Intent',t.intent],['Search',String(t.enableSearch)],['Thinking',t.thinkingLevel||'—'],['Provider preference',t.providerPreference],['Model candidates',(t.modelCandidates||[]).join(', ')||'none'],['History messages',t.historyMessages],['Memory facts',t.memoryFacts],['Keys',`${t.keyPool?.healthyKeys||0}/${t.keyPool?.totalKeys||0} healthy`],['Side effects','Telegram: blocked • Execution: blocked • User mutation: blocked']];
+    const healthy=t.keyPool?.healthyKeys||0;
+    const total=t.keyPool?.totalKeys||0;
+    const entries=[['Simulation',t.simulationId],['User',t.telegramUserId??'anonymous'],['Persistent mode',t.persistentMode],['Effective mode',t.effectiveMode],['Personality',t.personality],['Intent',t.intent],['Search',String(t.enableSearch)],['Thinking',t.thinkingLevel||'—'],['Provider preference',t.providerPreference],['Model candidates',(t.modelCandidates||[]).join(', ')||'none'],['History messages',t.historyMessages],['Memory facts',t.memoryFacts],['Keys',healthy+'/'+total+' healthy'],['Side effects','Telegram: blocked • Execution: blocked • User mutation: blocked']];
     document.getElementById('simTrace').innerHTML=entries.map(([k,v])=>'<div class="sim-kv"><b>'+esc(k)+'</b><span>'+esc(v)+'</span></div>').join('');
     simShowTab('response');
   };
