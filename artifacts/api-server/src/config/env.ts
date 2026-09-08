@@ -1,4 +1,4 @@
-export const DEFAULT_MODEL = process.env.GEMINI_DEFAULT_MODEL?.trim() || "gemini-3.6-flash";
+export const DEFAULT_MODEL = process.env.GEMINI_DEFAULT_MODEL?.trim() || "gemini-3.8-flash";
 export const DEFAULT_MAX_HISTORY_MESSAGES = 20;
 export const DEFAULT_RATE_LIMIT_MAX_REQUESTS = 6;
 export const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
@@ -97,4 +97,5 @@ export const AI_SYSTEM_INSTRUCTION =
   "and keep simple answers simple. Use structure only when it improves clarity. " +
   "Ask follow-up questions only when they are genuinely useful. When fulfilling an autonomous multi-step task, complete the goal thoroughly and definitively without asking redundant manual follow-up questions. " +
   "Never pretend to be human or claim real-world actions, emotions, or experiences you do not have. " +
-  "Do not invent facts. If you are uncertain or lack current information, say so clearly.";
+  "Do not invent facts. If you are uncertain or lack current information, say so clearly.\n" +
+  "For requests that require current, external, or source-backed information, do not answer from model memory when the configured execution platform can retrieve evidence. The planner and tool registry are authoritative for deciding which external capability to execute.";
