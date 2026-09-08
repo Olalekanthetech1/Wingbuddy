@@ -49,9 +49,12 @@ export const CENTRALIZED_MATH_SYMBOL_REGISTRY: Readonly<Record<string, string>> 
   "\\mp": "∓",
   "\\rightarrow": "→",
   "\\leftarrow": "←",
+  "\\longleftarrow": "⟵",
   "\\Rightarrow": "⇒",
   "\\Leftarrow": "⇐",
+  "\\iff": "⟺",
   "\\degree": "°",
+  "\\circ": "°",
   "\\partial": "∂",
   "\\nabla": "∇",
   "\\forall": "∀",
@@ -100,6 +103,12 @@ export function normalizeLatexMath(mathStr: string): string {
   if (!mathStr || typeof mathStr !== "string") return "";
 
   let s = mathStr;
+
+  s = s.replace(/\^\\?circ\s*C/g, "°C");
+  s = s.replace(/\^\\?circ\s*F/g, "°F");
+  s = s.replace(/\^\\?circ/g, "°");
+  s = s.replace(/\b(?:longrightarrow|rightarrow)\b/g, "→");
+  s = s.replace(/\b(?:longleftarrow|leftarrow)\b/g, "←");
 
   // 1. Text container macros: \text{...}, \mathrm{...}, \mathbf{...}, \mathit{...}
   s = s.replace(/\\(?:text|mathrm|mb|mathbf|mathit|mathsf|mathtt)\{([^}]+)\}/g, "$1");
@@ -166,7 +175,8 @@ export type ASTNodeType =
   | "heading"
   | "list_item"
   | "separator"
-  | "paragraph";
+  | "paragraph"
+  | "table";
 
 export interface ASTNode {
   type: ASTNodeType;
@@ -233,6 +243,12 @@ export class StructureAwareParser {
     });
 
     // E. Handle standalone/un-delimited TeX macros outside code blocks
+    text = text.replace(/\^\\?circ\s*C/g, "°C");
+    text = text.replace(/\^\\?circ\s*F/g, "°F");
+    text = text.replace(/\^\\?circ/g, "°");
+    text = text.replace(/\b(?:longrightarrow|rightarrow)\b/g, "→");
+    text = text.replace(/\b(?:longleftarrow|leftarrow)\b/g, "←");
+
     if (/\\(?:vec|frac|sigma|epsilon|Delta|cdot|text|customMacro|[a-zA-Z]+)/.test(text)) {
       text = text.replace(/\\(?:vec|hat|bar|tilde|dot|ddot|mathbf|mathbb|mathcal)\{([^}]+)\}/g, "$1");
       text = text.replace(/\\([a-zA-Z]+)\{([^}]+)\}/g, "$2");
@@ -262,6 +278,21 @@ export class StructureAwareParser {
     text = text.replace(/(^|[^_])_([^_ \n]+)_([^_]|$)/g, "$1<i>$2</i>$3");
     text = text.replace(/~~([^~\n]+)~~/g, "<s>$1</s>");
     text = text.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\)\s]+)\)/g, '<a href="$2">$1</a>');
+
+    // J. Extract Markdown Tables
+    text = text.replace(/(?:^[ \t]*\|.+\|[ \t]*$\n?){2,}/gm, (match) => {
+      // Validate it's a table by checking for the separator row (---)
+      const lines = match.trim().split("\n");
+      if (lines.length < 2) return match;
+      const separatorLine = lines[1];
+      if (!/\|[\s\-\:]+\|/.test(separatorLine)) {
+        return match;
+      }
+      const key = `XTELEGRAMTABLE${counter++}X`;
+      const node: ASTNode = { type: "table", raw: match, content: match };
+      placeholders.set(key, node);
+      return `\n\n${key}\n\n`;
+    });
 
     return { nodes: Array.from(placeholders.values()), rawTextWithTokens: text, placeholders };
   }
@@ -298,7 +329,7 @@ export class TelegramMessageFormatter {
           .replace(/>/g, "&gt;");
       }).join("");
 
-      // 3. Restore Placeholders (Display Math, Code Blocks, Inline Code)
+      // 3. Restore Placeholders (Display Math, Code Blocks, Inline Code, Tables)
       for (const [key, node] of placeholders.entries()) {
         if (node.type === "display_math") {
           text = text.replace(key, node.content);
@@ -316,6 +347,8 @@ export class TelegramMessageFormatter {
             .replace(/>/g, "&gt;");
           const formattedInline = `<code>${escapedCode}</code>`;
           text = text.replace(key, formattedInline);
+        } else if (node.type === "table") {
+          text = text.replace(key, this.formatTable(node.content));
         }
       }
 
@@ -333,6 +366,71 @@ export class TelegramMessageFormatter {
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;");
     }
+  }
+
+  /**
+   * Dynamically formats markdown tables into Telegram-safe readable lists.
+   */
+  private static formatTable(tableRaw: string): string {
+    const lines = tableRaw.trim().split("\n");
+    const headers: string[] = [];
+    const rows: string[][] = [];
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
+        const cells = trimmed
+          .slice(1, -1)
+          .split("|")
+          .map((c) => c.trim());
+
+        // Ignore separator row
+        if (cells.every((c) => /^[\s\-\:]+$/.test(c))) {
+          continue;
+        }
+
+        if (headers.length === 0) {
+          headers.push(...cells);
+        } else {
+          rows.push(cells);
+        }
+      }
+    }
+
+    if (headers.length === 0 || rows.length === 0) {
+      return tableRaw;
+    }
+
+    let result = "";
+
+    if (headers.length === 2) {
+      // 2-column format:
+      // <b>Row1Col1</b>: Row1Col2
+      for (const row of rows) {
+        if (row.length === 2) {
+          result += `<b>${row[0]}</b>: ${row[1]}\n`;
+        }
+      }
+    } else {
+      // 3+ columns:
+      // Row 1 Column 1:
+      // • Header 2: Value 2
+      // • Header 3: Value 3
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        if (row.length > 0) {
+          result += `<b>${row[0]}</b>\n`;
+          for (let j = 1; j < Math.min(row.length, headers.length); j++) {
+            result += `• ${headers[j]}: ${row[j]}\n`;
+          }
+          if (i < rows.length - 1) {
+            result += "\n";
+          }
+        }
+      }
+    }
+
+    return result.trim();
   }
 }
 

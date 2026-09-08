@@ -43,6 +43,35 @@ export class TaskService {
   };
 
   /**
+   * Deterministically derives the current active step and completion status from task steps.
+   */
+  deriveCurrentStep(steps: AgentTaskStepRecord[]): {
+    currentStep: number;
+    activeStep?: AgentTaskStepRecord;
+    isAllCompleted: boolean;
+  } {
+    if (!steps || steps.length === 0) {
+      return { currentStep: 1, isAllCompleted: false };
+    }
+    const sorted = [...steps].sort((a, b) => a.stepOrder - b.stepOrder);
+    const running = sorted.find((s) => s.status === "running");
+    if (running) {
+      return { currentStep: running.stepOrder, activeStep: running, isAllCompleted: false };
+    }
+    const pending = sorted.find((s) => s.status === "pending");
+    if (pending) {
+      return { currentStep: pending.stepOrder, activeStep: pending, isAllCompleted: false };
+    }
+    const allCompleted = sorted.every((s) => s.status === "completed" || s.status === "skipped");
+    if (allCompleted) {
+      const last = sorted[sorted.length - 1];
+      return { currentStep: last.stepOrder, activeStep: last, isAllCompleted: true };
+    }
+    const last = sorted[sorted.length - 1];
+    return { currentStep: last.stepOrder, activeStep: last, isAllCompleted: false };
+  }
+
+  /**
    * Validates and enforces allowed state transitions in the task lifecycle.
    */
   validateStatusTransition(currentStatus: TaskStatus, newStatus: TaskStatus): void {
@@ -121,7 +150,19 @@ export class TaskService {
 
     const completedAt = newStatus === "completed" ? new Date() : undefined;
 
-    logger.info({ taskId, previousStatus: currentStatus, newStatus }, "TASK_STATUS_UPDATED");
+    logger.info(
+      {
+        taskId,
+        telegramUserId: existing.telegramUserId,
+        previousTaskStatus: currentStatus,
+        newTaskStatus: newStatus,
+        previousStep: existing.currentStep,
+        newStep: existing.currentStep,
+        transition: `${currentStatus} -> ${newStatus}`,
+        result: "SUCCESS",
+      },
+      "TASK_STATUS_UPDATED",
+    );
 
     return chatDatabaseService.updateTask(taskId, {
       status: newStatus,
@@ -130,7 +171,7 @@ export class TaskService {
   }
 
   /**
-   * Advances a step in the multi-step task pipeline.
+   * Advances a step in the multi-step task pipeline using atomic PostgreSQL transactions.
    */
   async completeStep(
     taskId: number,
@@ -139,31 +180,148 @@ export class TaskService {
   ): Promise<{ task: AgentTaskRecord | null; steps: AgentTaskStepRecord[] }> {
     const steps = await chatDatabaseService.getTaskSteps(taskId);
     const targetStep = steps.find((s) => s.stepOrder === stepOrder);
-
-    if (targetStep) {
-      await chatDatabaseService.updateTaskStep(targetStep.id, {
-        status: "completed",
-        resultSummary,
-      });
-    }
-
     const nextStep = steps.find((s) => s.stepOrder === stepOrder + 1);
-    let updatedTask: AgentTaskRecord | null = null;
+
+    const stepUpdates: Array<{ stepOrder: number; status: string; resultSummary?: string }> = [];
+    if (targetStep) {
+      stepUpdates.push({ stepOrder, status: "completed", resultSummary });
+    }
 
     if (nextStep) {
-      await chatDatabaseService.updateTaskStep(nextStep.id, { status: "running" });
-      updatedTask = await chatDatabaseService.updateTask(taskId, {
-        currentStep: stepOrder + 1,
-      });
-      logger.info({ taskId, stepOrder, nextStepOrder: stepOrder + 1 }, "TASK_STEP_ADVANCED");
-    } else {
-      // All steps completed -> mark task completed
-      updatedTask = await this.updateTaskStatus(taskId, "completed");
-      logger.info({ taskId }, "TASK_ALL_STEPS_COMPLETED");
+      stepUpdates.push({ stepOrder: stepOrder + 1, status: "running" });
     }
 
-    const updatedSteps = await chatDatabaseService.getTaskSteps(taskId);
-    return { task: updatedTask, steps: updatedSteps };
+    const res = await chatDatabaseService.updateTaskAndStepsAtomic({
+      taskId,
+      stepUpdates,
+      currentStep: nextStep ? stepOrder + 1 : stepOrder,
+      taskStatus: nextStep ? "active" : "completed",
+    });
+
+    logger.info(
+      {
+        taskId,
+        telegramUserId: res.task?.telegramUserId,
+        previousTaskStatus: "active",
+        newTaskStatus: res.task?.status,
+        previousStep: stepOrder,
+        newStep: res.task?.currentStep,
+        stepId: stepOrder,
+        transition: `Step ${stepOrder} COMPLETED -> Step ${res.task?.currentStep} ${res.task?.status === "completed" ? "COMPLETED" : "ACTIVE"}`,
+        result: "SUCCESS",
+      },
+      "TASK_TRANSITION_COMPLETED",
+    );
+
+    return res;
+  }
+
+  /**
+   * Atomically updates task step statuses and task currentStep/status.
+   */
+  async updateTaskAndStepsAtomic(options: {
+    taskId: number;
+    stepUpdates: Array<{ stepOrder: number; status: string; resultSummary?: string }>;
+    taskStatus?: string;
+    currentStep?: number;
+  }): Promise<{ task: AgentTaskRecord | null; steps: AgentTaskStepRecord[] }> {
+    return chatDatabaseService.updateTaskAndStepsAtomic(options);
+  }
+
+  /**
+   * Parses model response for step progress / completion indicators and atomically persists step/task state.
+   */
+  async syncTaskProgressFromResponse(
+    taskId: number,
+    responseText: string,
+  ): Promise<{ task: AgentTaskRecord | null; steps: AgentTaskStepRecord[] }> {
+    const existingTask = await chatDatabaseService.getTaskById(taskId);
+    if (!existingTask) {
+      return { task: null, steps: [] };
+    }
+
+    const steps = await chatDatabaseService.getTaskSteps(taskId);
+    if (steps.length === 0) {
+      return { task: existingTask, steps: [] };
+    }
+
+    const stepUpdates: Array<{ stepOrder: number; status: string; resultSummary?: string }> = [];
+    let detectedTaskCompletion = false;
+
+    // Check for explicit task completion markers
+    if (
+      /\[TASK_COMPLETED\]/i.test(responseText) ||
+      /\btask\s+(?:#?\d+\s+)?(?:is\s+)?(?:completed|finished|done)\b/i.test(responseText) ||
+      /\ball\s+steps?\s+(?:for\s+task\s+#?\d+\s+)?(?:are\s+)?(?:completed|finished|done)\b/i.test(responseText)
+    ) {
+      detectedTaskCompletion = true;
+    }
+
+    // 1. Regex search for step completions or running status in text
+    for (const s of steps) {
+      const stepNum = s.stepOrder;
+      const completedPattern = new RegExp(
+        `(?:step\\s*#?${stepNum}\\b.*?\\b(?:completed|done|finished)|completed\\s+step\\s*#?${stepNum}\\b|\\[step_completed:\\s*${stepNum}\\])`,
+        "i",
+      );
+      const runningPattern = new RegExp(
+        `(?:step\\s*#?${stepNum}\\b.*?\\b(?:in progress|running|active|working on)|\\[step_running:\\s*${stepNum}\\]|\\[step_in_progress:\\s*${stepNum}\\])`,
+        "i",
+      );
+
+      if (completedPattern.test(responseText)) {
+        stepUpdates.push({ stepOrder: stepNum, status: "completed" });
+      } else if (runningPattern.test(responseText)) {
+        stepUpdates.push({ stepOrder: stepNum, status: "running" });
+      }
+    }
+
+    // 2. Fallback heuristic: If no step regex matched, but runtime performed execution for the current active step
+    if (stepUpdates.length === 0) {
+      const { currentStep } = this.deriveCurrentStep(steps);
+      const currentStepObj = steps.find((s) => s.stepOrder === currentStep);
+
+      if (currentStepObj) {
+        stepUpdates.push({ stepOrder: currentStep, status: "completed" });
+        const nextStepObj = steps.find((s) => s.stepOrder === currentStep + 1);
+        if (nextStepObj) {
+          stepUpdates.push({ stepOrder: currentStep + 1, status: "running" });
+        }
+      }
+    }
+
+    if (detectedTaskCompletion) {
+      for (const s of steps) {
+        if (!stepUpdates.some((u) => u.stepOrder === s.stepOrder)) {
+          stepUpdates.push({ stepOrder: s.stepOrder, status: "completed" });
+        }
+      }
+    }
+
+    const previousStep = existingTask.currentStep;
+    const previousStatus = existingTask.status;
+
+    const res = await chatDatabaseService.updateTaskAndStepsAtomic({
+      taskId,
+      stepUpdates,
+      taskStatus: detectedTaskCompletion ? "completed" : undefined,
+    });
+
+    logger.info(
+      {
+        taskId,
+        telegramUserId: existingTask.telegramUserId,
+        previousTaskStatus: previousStatus,
+        newTaskStatus: res.task?.status,
+        previousStep,
+        newStep: res.task?.currentStep,
+        transition: `Step ${previousStep} -> Step ${res.task?.currentStep} (${res.task?.status})`,
+        result: "SUCCESS",
+      },
+      "TASK_STEP_SYNC_COMPLETED",
+    );
+
+    return res;
   }
 
   /**

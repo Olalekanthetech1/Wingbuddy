@@ -1181,6 +1181,103 @@ export class ChatDatabaseService {
     return rows.map((r) => this.serializeTaskStep(r));
   }
 
+  /**
+   * Atomically updates task step statuses and task currentStep/status within a PostgreSQL transaction.
+   */
+  async updateTaskAndStepsAtomic(options: {
+    taskId: number;
+    stepUpdates: Array<{ stepOrder: number; status: string; resultSummary?: string }>;
+    taskStatus?: string;
+    currentStep?: number;
+  }): Promise<{ task: AgentTaskRecord | null; steps: AgentTaskStepRecord[] }> {
+    const db = getDb();
+    return db.transaction(async (tx) => {
+      const steps = await tx
+        .select()
+        .from(agentTaskStepsTable)
+        .where(eq(agentTaskStepsTable.taskId, options.taskId))
+        .orderBy(agentTaskStepsTable.stepOrder);
+
+      for (const update of options.stepUpdates) {
+        const target = steps.find((s) => s.stepOrder === update.stepOrder);
+        if (target) {
+          const setData: Record<string, unknown> = {
+            status: update.status,
+            updatedAt: new Date(),
+          };
+          if (update.resultSummary !== undefined) {
+            setData.resultSummary = update.resultSummary;
+          }
+          await tx
+            .update(agentTaskStepsTable)
+            .set(setData)
+            .where(eq(agentTaskStepsTable.id, target.id));
+        }
+      }
+
+      const updatedStepsRaw = await tx
+        .select()
+        .from(agentTaskStepsTable)
+        .where(eq(agentTaskStepsTable.taskId, options.taskId))
+        .orderBy(agentTaskStepsTable.stepOrder);
+
+      const updatedSteps = updatedStepsRaw.map((s) => this.serializeTaskStep(s));
+
+      let derivedCurrentStep = options.currentStep;
+      let derivedTaskStatus = options.taskStatus;
+
+      const runningStep = updatedSteps.find((s) => s.status === "running");
+      const pendingStep = updatedSteps.find((s) => s.status === "pending");
+      const allCompleted =
+        updatedSteps.length > 0 &&
+        updatedSteps.every((s) => s.status === "completed" || s.status === "skipped");
+
+      if (derivedCurrentStep === undefined) {
+        if (runningStep) {
+          derivedCurrentStep = runningStep.stepOrder;
+        } else if (pendingStep) {
+          derivedCurrentStep = pendingStep.stepOrder;
+        } else if (updatedSteps.length > 0) {
+          derivedCurrentStep = updatedSteps[updatedSteps.length - 1].stepOrder;
+        } else {
+          derivedCurrentStep = 1;
+        }
+      }
+
+      if (derivedTaskStatus === undefined) {
+        if (allCompleted) {
+          derivedTaskStatus = "completed";
+        } else {
+          derivedTaskStatus = "active";
+        }
+      }
+
+      const taskUpdateData: Record<string, unknown> = {
+        currentStep: derivedCurrentStep,
+        status: derivedTaskStatus,
+        updatedAt: new Date(),
+      };
+      if (derivedTaskStatus === "completed") {
+        taskUpdateData.completedAt = new Date();
+      }
+
+      const [updatedTask] = await tx
+        .update(agentTasksTable)
+        .set(taskUpdateData)
+        .where(eq(agentTasksTable.id, options.taskId))
+        .returning();
+
+      if (updatedTask) {
+        this.invalidateUserCache(updatedTask.telegramUserId);
+      }
+
+      return {
+        task: updatedTask ? this.serializeTask(updatedTask) : null,
+        steps: updatedSteps,
+      };
+    });
+  }
+
   // ==========================================
   // CONVERSATION SUMMARY PERSISTENCE
   // ==========================================

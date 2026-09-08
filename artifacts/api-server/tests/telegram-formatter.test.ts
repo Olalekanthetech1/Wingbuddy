@@ -172,4 +172,43 @@ Based on what we just covered, try answering these two questions:
     expect(result).toContain("<b>Finance</b>");
     expect(result).toContain("Investment returned $10,000 with a 5% gain.");
   });
+it("TEST 11 — Tables: formats a 2-column markdown table cleanly", () => {
+    const input = `
+Here is the data:
+| Name | Value |
+|---|---|
+| Alpha | 100 |
+| Beta | 200 |
+    `;
+    const result = formatTelegramMessage(input);
+    expect(result).toContain("<b>Alpha</b>: 100");
+    expect(result).toContain("<b>Beta</b>: 200");
+    expect(result).not.toContain("|");
+  });
+
+  it("TEST 12 — Tables: formats a 3+ column markdown table cleanly", () => {
+    const input = `
+| Material | Strength | Density |
+|---|---|---|
+| Steel | High | High |
+| Aluminum | Good | Low |
+    `;
+    const result = formatTelegramMessage(input);
+    expect(result).toContain("<b>Steel</b>");
+    expect(result).toContain("• Strength: High");
+    expect(result).toContain("• Density: High");
+    expect(result).toContain("<b>Aluminum</b>");
+    expect(result).toContain("• Strength: Good");
+    expect(result).toContain("• Density: Low");
+    expect(result).not.toContain("|");
+  });
+
+
+  it("TEST 13 — Chemistry/Physics edge cases: handles circC, longrightarrow, and standalone math without dollars", () => {
+    const input = `The process happens at 1150^circC \longrightarrow forms $E = mc^2$`;
+    const result = formatTelegramMessage(input);
+    expect(result).toBe("The process happens at 1150°C → forms E = mc²");
+    expect(result).not.toContain("^circ");
+    expect(result).not.toContain("longrightarrow");
+  });
 });

@@ -295,12 +295,19 @@ export function createTelegramBot(): TelegramBotRuntime {
     if (activeTasks.length === 0) {
       messageText += "No active tasks currently running.\nTo start a task, say e.g.:\n<i>'Start a task to write a market analysis report'</i>";
     } else {
-      messageText += activeTasks
-        .map(
-          (t) =>
-            `• <b>#${t.id}</b>: ${escapeHtml(t.title)}\n  Status: <code>${t.status.toUpperCase()}</code> | Step ${t.currentStep}`,
-        )
-        .join("\n\n");
+      const taskLines = [];
+      for (const t of activeTasks) {
+        const steps = await chatDatabaseService.getTaskSteps(t.id);
+        const derived = taskService.deriveCurrentStep(steps);
+        if (derived.currentStep !== t.currentStep) {
+          await chatDatabaseService.updateTask(t.id, { currentStep: derived.currentStep });
+          t.currentStep = derived.currentStep;
+        }
+        taskLines.push(
+          `• <b>#${t.id}</b>: ${escapeHtml(t.title)}\n  Status: <code>${t.status.toUpperCase()}</code> | Step ${t.currentStep}`,
+        );
+      }
+      messageText += taskLines.join("\n\n");
     }
 
     await ctx.reply(messageText, {
@@ -419,8 +426,7 @@ export function createTelegramBot(): TelegramBotRuntime {
       await conversations.addMessage(globalContextData.conversationId, "user", `/search ${query}`);
       await conversations.addMessage(globalContextData.conversationId, "model", reply);
 
-      const formattedReply = formatTelegramMessage(reply);
-      const chunks = splitTelegramMessage(formattedReply);
+      const chunks = splitTelegramMessage(reply).map(chunk => formatTelegramMessage(chunk));
       for (const [index, chunk] of chunks.entries()) {
         await ctx.reply(chunk, {
           parse_mode: "HTML",
@@ -480,8 +486,7 @@ export function createTelegramBot(): TelegramBotRuntime {
       await conversations.addMessage(globalContextData.conversationId, "user", `/think ${query}`);
       await conversations.addMessage(globalContextData.conversationId, "model", reply);
 
-      const formattedReply = formatTelegramMessage(reply);
-      const chunks = splitTelegramMessage(formattedReply);
+      const chunks = splitTelegramMessage(reply).map(chunk => formatTelegramMessage(chunk));
       for (const [index, chunk] of chunks.entries()) {
         await ctx.reply(chunk, {
           parse_mode: "HTML",
@@ -1119,6 +1124,17 @@ export function createTelegramBot(): TelegramBotRuntime {
           });
           return;
         }
+        if (resolved.task) {
+          const steps = await chatDatabaseService.getTaskSteps(resolved.task.id);
+          activeTaskContext = { task: resolved.task, steps };
+        }
+      } else {
+        const activeTasks = await taskService.getActiveTasksForUser(ctx.from.id);
+        if (activeTasks.length > 0) {
+          const primaryTask = activeTasks[0];
+          const steps = await chatDatabaseService.getTaskSteps(primaryTask.id);
+          activeTaskContext = { task: primaryTask, steps };
+        }
       }
 
       // 4. Systematic & Dynamic Adaptation via ExecutionPlanner:
@@ -1348,6 +1364,11 @@ export function createTelegramBot(): TelegramBotRuntime {
         { telegramUserId: ctx.from.id, chatId: ctx.chat.id },
         () => conversations.addMessage(globalContextData.conversationId, "model", reply),
       );
+
+      // Synchronize task progress atomically from model response
+      if (activeTaskContext) {
+        await taskService.syncTaskProgressFromResponse(activeTaskContext.task.id, reply);
+      }
 
       // Asynchronous passive memory acquisition (background fact extraction)
       void memoryService.processBackgroundExtraction(

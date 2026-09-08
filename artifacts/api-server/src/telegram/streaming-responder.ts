@@ -92,8 +92,8 @@ export class StreamingResponder {
     }
 
     this.latestText = fullText.trim();
-    const formattedFull = formatTelegramMessage(this.latestText);
-    const chunks = AdaptiveEngineService.computeAdaptiveMessageSplit(formattedFull);
+    const rawChunks = AdaptiveEngineService.computeAdaptiveMessageSplit(this.latestText);
+    const chunks = rawChunks.map(chunk => formatTelegramMessage(chunk));
 
     if (!this.messageId) {
       // If initial placeholder failed, send standard split messages
