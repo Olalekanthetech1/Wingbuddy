@@ -35,7 +35,8 @@ export function initOrReloadTelegramBot(): ReturnType<typeof createTelegramBot> 
   return realTelegramRuntime;
 }
 
-initOrReloadTelegramBot();
+// Deliberately do not initialize the Telegram runtime during module import.
+// The process entrypoint hydrates PostgreSQL-backed configuration first, then calls initOrReloadTelegramBot().
 
 export const telegramRuntime = {
   get bot() { return realTelegramRuntime?.bot; },
