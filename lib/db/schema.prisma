@@ -1,0 +1,58 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+/// Registered Telegram users interacting with the assistant
+model User {
+  id             Int            @id @default(autoincrement())
+  telegramUserId BigInt         @unique @map("telegram_user_id")
+  username       String?
+  firstName      String?        @map("first_name")
+  lastName       String?        @map("last_name")
+  personality    String         @default("playful")
+  mode           String         @default("general")
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @default(now()) @updatedAt @map("updated_at")
+
+  // Relationships
+  conversations  Conversation[]
+
+  @@map("users")
+}
+
+/// Active chat sessions per user and Telegram chat
+model Conversation {
+  id             Int       @id @default(autoincrement())
+  telegramUserId BigInt    @map("telegram_user_id")
+  chatId         BigInt    @map("chat_id")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  // Relationships
+  user           User?     @relation(fields: [telegramUserId], references: [telegramUserId], onDelete: Cascade)
+  messages       Message[]
+
+  @@unique([telegramUserId, chatId], map: "conversations_user_chat_idx")
+  @@index([chatId], map: "conversations_chat_id_idx")
+  @@map("conversations")
+}
+
+/// Message history storing dialog context between user and Gemini assistant
+model Message {
+  id             Int          @id @default(autoincrement())
+  conversationId Int          @map("conversation_id")
+  role           String
+  content        String       @db.Text
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  // Relationships
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt], map: "messages_conversation_created_idx")
+  @@map("messages")
+}

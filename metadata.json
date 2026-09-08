@@ -1,0 +1,6 @@
+{
+  "name": "Wingbuddy Telegram Assistant",
+  "description": "A Telegram personal AI assistant backed by Google Gemini with persistent conversation memory, personality styles, and assistant modes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

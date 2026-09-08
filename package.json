@@ -2,15 +2,24 @@
   "name": "workspace",
   "version": "0.0.0",
   "license": "MIT",
+  "workspaces": [
+    "artifacts/*",
+    "lib/*",
+    "scripts"
+  ],
   "scripts": {
-    "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; case \"$npm_config_user_agent\" in pnpm/*) ;; *) echo \"Use pnpm instead\" >&2; exit 1 ;; esac'",
-    "build": "pnpm run typecheck && pnpm -r --if-present run build",
+    "dev": "npm run dev --workspace=@workspace/api-server",
+    "build": "tsc --build && npm run build --workspace=@workspace/api-server",
+    "lint": "tsc --build",
     "typecheck:libs": "tsc --build",
-    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
+    "typecheck": "tsc --build && npm run typecheck --workspace=@workspace/api-server",
+    "test": "npm run test --workspace=@workspace/api-server"
   },
   "private": true,
   "dependencies": {
-    "@replit/connectors-sdk": "^0.4.1"
+    "@prisma/client": "^6.4.1",
+    "@replit/connectors-sdk": "^0.4.1",
+    "prisma": "^6.4.1"
   },
   "devDependencies": {
     "prettier": "^3.9.6",
