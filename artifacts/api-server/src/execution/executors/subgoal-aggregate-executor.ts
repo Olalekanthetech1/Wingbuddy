@@ -1,13 +1,16 @@
 import type { INodeExecutor, NodeExecutionParams } from "./node-executor.interface";
 import type { NodeResult } from "../../planner/types";
 import { executionPersistence } from "../persistence/execution-persistence.service";
+import { getDefaultGeminiService } from "../../gemini/gemini.service";
+import { ASSISTANT_ARCHITECTURE_FACTS } from "../../config/env";
+import { logger } from "../../lib/logger";
 
 export class SubgoalAggregateExecutor implements INodeExecutor {
   async execute(params: NodeExecutionParams): Promise<NodeResult> {
     const startTime = Date.now();
-    const { node, graphId, planRevision, resolvedInputs } = params;
+    const { node, graphId, planRevision, resolvedInputs, executionContext } = params;
 
-    // Fetch authoritative completed results from database / persistence
+    // 1. Fetch authoritative completed results from database / persistence
     const completedAttempts = await executionPersistence.getCompletedExecutionsForGraph(
       graphId,
       planRevision,
@@ -20,10 +23,50 @@ export class SubgoalAggregateExecutor implements INodeExecutor {
       }
     }
 
+    let synthesizedAnswer = "";
+    try {
+      const gemini = getDefaultGeminiService();
+      const aggregationPrompt =
+        `${ASSISTANT_ARCHITECTURE_FACTS}\n\n` +
+        `[FINAL AUTONOMOUS AGGREGATION & SYNTHESIS]\n` +
+        `Aggregation Node: ${node.id} (${node.title})\n\n` +
+        `[AUTHORITATIVE PREDECESSOR NODE OUTPUTS]\n` +
+        `${JSON.stringify(aggregated, null, 2)}\n\n` +
+        `[RESOLVED INPUT PARAMETERS]\n` +
+        `${JSON.stringify(resolvedInputs, null, 2)}\n\n` +
+        `[INSTRUCTIONS FOR FINAL ANSWER]\n` +
+        `- Synthesize the authoritative findings from preceding steps into a comprehensive, cohesive final response.\n` +
+        `- Rely exclusively on verified findings and the assistant's real architecture (Wingbuddy / Lekzy Fx Pro AI Assistant, NOT a tour/travel company).\n` +
+        `- Deliver a complete, definitive answer that fulfills the user's autonomous task.\n` +
+        `- Do NOT append follow-up questions asking whether to proceed or requiring manual continuation.`;
+
+      synthesizedAnswer = await gemini.generateReply(
+        [],
+        aggregationPrompt,
+        {
+          personalityInstruction: executionContext.userPersonality,
+          modeInstruction: executionContext.userMode,
+        },
+        {
+          thinkingLevel: "LOW",
+        },
+      );
+    } catch (geminiErr: any) {
+      logger.warn(
+        { graphId, planRevision, error: geminiErr?.message },
+        "Subgoal aggregation fallback to structured summary",
+      );
+      synthesizedAnswer = `Aggregated results for ${node.title}:\n` +
+        Object.entries(aggregated)
+          .map(([id, out]: [string, any]) => `• ${id}: ${typeof out === "string" ? out : (out?.summary || out?.conclusion || JSON.stringify(out))}`)
+          .join("\n");
+    }
+
     return {
       success: true,
       output: {
-        summary: `Aggregated results for subgoal: ${node.title}`,
+        summary: synthesizedAnswer.trim(),
+        response: synthesizedAnswer.trim(),
         nodeResults: aggregated,
         parameters: resolvedInputs,
       },

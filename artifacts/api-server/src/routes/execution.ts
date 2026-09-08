@@ -1,10 +1,93 @@
 import { Router, type Request, type Response, type IRouter } from "express";
 import { executionEngine } from "../execution/execution-engine";
-import { getExecutionConfig } from "../execution/config";
+import {
+  getExecutionConfig,
+  isExecutionEngineEnabled,
+  setExecutionEngineEnabled,
+  toggleExecutionEngine,
+} from "../execution/config";
 import { executionObservability } from "../execution/observability/execution-logger";
+import { executionPersistence } from "../execution/persistence/execution-persistence.service";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
+
+/**
+ * POST /api/execution/toggle
+ * Dynamically toggles the autonomous execution engine state (ON <-> OFF).
+ */
+router.post("/execution/toggle", (_req: Request, res: Response) => {
+  try {
+    const newState = toggleExecutionEngine();
+    logger.info({ enabled: newState }, "AUTONOMOUS_EXECUTION_TOGGLED_VIA_API");
+    return res.status(200).json({
+      success: true,
+      enabled: newState,
+      message: `Autonomous execution engine is now ${newState ? "ENABLED (ON)" : "DISABLED (OFF)"}.`,
+      config: getExecutionConfig(),
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: err.message || String(err),
+    });
+  }
+});
+
+/**
+ * POST /api/execution/set-enabled
+ * Explicitly sets autonomous execution engine enabled/disabled.
+ */
+router.post("/execution/set-enabled", (req: Request, res: Response) => {
+  try {
+    const { enabled } = req.body;
+    if (typeof enabled !== "boolean") {
+      return res.status(400).json({
+        success: false,
+        error: "Missing or invalid 'enabled' boolean in request body.",
+      });
+    }
+    setExecutionEngineEnabled(enabled);
+    logger.info({ enabled }, "AUTONOMOUS_EXECUTION_STATE_SET_VIA_API");
+    return res.status(200).json({
+      success: true,
+      enabled,
+      message: `Autonomous execution engine is now ${enabled ? "ENABLED (ON)" : "DISABLED (OFF)"}.`,
+      config: getExecutionConfig(),
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: err.message || String(err),
+    });
+  }
+});
+
+/**
+ * GET /api/execution/sessions
+ * Returns recent and active autonomous execution sessions with status and telemetry.
+ */
+router.get("/execution/sessions", async (req: Request, res: Response) => {
+  try {
+    const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
+    const sessions = await executionPersistence.listRecentSessions(limit);
+    const enabled = isExecutionEngineEnabled();
+    const metrics = executionObservability.getMetrics();
+
+    return res.status(200).json({
+      success: true,
+      enabled,
+      totalSessions: sessions.length,
+      sessions,
+      metrics,
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: err.message || String(err),
+    });
+  }
+});
 
 /**
  * POST /api/execution/start

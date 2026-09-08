@@ -716,3 +716,18 @@ export class GeminiMalformedResponseError extends GeminiError {
 }
 
 export class GeminiServiceError extends GeminiError {}
+
+let defaultGeminiServiceInstance: GeminiService | null = null;
+
+export function getDefaultGeminiService(): GeminiService {
+  if (!defaultGeminiServiceInstance) {
+    const model = process.env.GEMINI_MODEL?.trim() || "gemini-3.6-flash";
+    const timeout = Number(process.env.GEMINI_TIMEOUT_MS) || 45_000;
+    defaultGeminiServiceInstance = new GeminiService(
+      apiKeyPoolService,
+      model,
+      timeout,
+    );
+  }
+  return defaultGeminiServiceInstance;
+}

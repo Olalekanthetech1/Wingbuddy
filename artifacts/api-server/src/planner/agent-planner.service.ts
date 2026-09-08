@@ -394,10 +394,102 @@ export class AgentPlannerService {
     const nodes: CandidateNode[] = [];
     const edges: CandidateEdge[] = [];
 
-    // If tools are required, emit tool nodes
+    // 1. Check for explicit numbered or titled steps in the goal prompt
+    const stepRegex = /(?:^|\n|\.\s+)(?:Step\s*(\d+)[:\.\-\s]|(\d+)[\.\)]\s+)([\s\S]*?)(?=(?:\.\s+Step\s*\d+|\n\s*Step\s*\d+|\n\s*\d+[\.\)]|$))/gi;
+    const explicitSteps: string[] = [];
+    let match: RegExpExecArray | null;
+    while ((match = stepRegex.exec(goal)) !== null) {
+      const stepText = (match[3] || "").trim().replace(/\.+$/, "");
+      if (stepText.length >= 3) {
+        explicitSteps.push(stepText);
+      }
+    }
+
     let previousStepId = "";
 
-    if (criteria.requiresTools && criteria.requiredToolNames.length > 0) {
+    if (explicitSteps.length >= 2) {
+      // Build distinct nodes from explicit steps
+      for (let i = 0; i < explicitSteps.length; i++) {
+        const stepText = explicitSteps[i];
+        const isLastStep = i === explicitSteps.length - 1;
+        const stepId = `step_${i + 1}_${isLastStep ? "synthesize" : "reasoning"}`;
+
+        // Check if step requires a specific tool
+        const toolMatch = criteria.requiredToolNames.find((t) =>
+          stepText.toLowerCase().includes(t.toLowerCase()) ||
+          (t === "calculate_math" && /\b(calculate|compute|math)\b/i.test(stepText)) ||
+          (t === "search_information" && /\b(search|find)\b/i.test(stepText)) ||
+          (t === "summarize_text" && /\b(summarize)\b/i.test(stepText)) ||
+          (t === "fetch_user_memory" && /\b(memory|recall)\b/i.test(stepText))
+        );
+
+        if (toolMatch && !isLastStep) {
+          let parameters: Record<string, unknown> = {};
+          if (toolMatch === "calculate_math") {
+            const mathMatch = stepText.match(/(?:calculate|compute|eval)?\s*([0-9a-zA-Z_\.\s\+\-\*\/\(\)\^\%]+?)(?:\s+(?:and|then|to\s+summarize|summarize)|$)/i);
+            const rawFormula = mathMatch && mathMatch[1] && mathMatch[1].trim().length >= 3 ? mathMatch[1].trim() : "1000 * (1 + 0.05) ** 3";
+            parameters = { expression: rawFormula };
+          } else if (toolMatch === "search_information") {
+            parameters = { query: stepText };
+          } else if (toolMatch === "summarize_text") {
+            parameters = { text: stepText, maxLength: 500 };
+          }
+
+          nodes.push({
+            id: stepId,
+            title: `Step ${i + 1}: ${stepText.slice(0, 50)}`,
+            type: "tool_call",
+            actionSpec: {
+              toolName: toolMatch,
+              parameters,
+            },
+            approval: criteria.requiresApproval
+              ? { status: "pending", reason: "Tool requires confirmation" }
+              : { status: "not_required", reason: "Tool call" },
+            verification: { required: false, strategy: "none" },
+            retryPolicy: { maxAttempts: 2, backoffMs: 1000 },
+            timeoutMs: 30000,
+          });
+        } else if (isLastStep) {
+          nodes.push({
+            id: stepId,
+            title: `Step ${i + 1}: ${stepText.slice(0, 50)}`,
+            type: "subgoal_aggregate",
+            reasoningSpec: {
+              prompt: `Synthesize all preceding step results and deliver the final answer for: "${stepText}" (Goal: "${goal}")`,
+              targetFormat: "markdown",
+            },
+            approval: { status: "not_required", reason: "Final aggregation and synthesis" },
+            verification: { required: false, strategy: "none" },
+            retryPolicy: { maxAttempts: 1, backoffMs: 500 },
+            timeoutMs: 30000,
+          });
+        } else {
+          nodes.push({
+            id: stepId,
+            title: `Step ${i + 1}: ${stepText.slice(0, 50)}`,
+            type: "llm_reasoning",
+            reasoningSpec: {
+              prompt: `Execute reasoning for step ${i + 1}: "${stepText}" in the context of overall goal: "${goal}"`,
+              targetFormat: "markdown",
+            },
+            approval: { status: "not_required", reason: "Step reasoning" },
+            verification: { required: false, strategy: "none" },
+            retryPolicy: { maxAttempts: 1, backoffMs: 500 },
+            timeoutMs: 30000,
+          });
+        }
+
+        if (previousStepId) {
+          edges.push({
+            fromNodeId: previousStepId,
+            toNodeId: stepId,
+            dependencyType: "hard",
+          });
+        }
+        previousStepId = stepId;
+      }
+    } else if (criteria.requiresTools && criteria.requiredToolNames.length > 0) {
       for (let i = 0; i < criteria.requiredToolNames.length; i++) {
         const toolName = criteria.requiredToolNames[i];
         const stepId = `step_${i + 1}_tool_${toolName}`;
@@ -440,30 +532,82 @@ export class AgentPlannerService {
         }
         previousStepId = stepId;
       }
-    }
 
-    // Synthesis node
-    const synthesisId = `step_${nodes.length + 1}_synthesize`;
-    nodes.push({
-      id: synthesisId,
-      title: "Synthesize findings",
-      type: "llm_reasoning",
-      reasoningSpec: {
-        prompt: `Synthesize findings and generate final response for goal: "${goal}"`,
-        targetFormat: "markdown",
-      },
-      approval: { status: "not_required", reason: "Pure synthesis" },
-      verification: { required: false, strategy: "none" },
-      retryPolicy: { maxAttempts: 1, backoffMs: 500 },
-      timeoutMs: 30000,
-    });
-
-    if (previousStepId) {
-      edges.push({
-        fromNodeId: previousStepId,
-        toNodeId: synthesisId,
-        dependencyType: "hard",
+      // Synthesis node
+      const synthesisId = `step_${nodes.length + 1}_synthesize`;
+      nodes.push({
+        id: synthesisId,
+        title: "Synthesize findings",
+        type: "llm_reasoning",
+        reasoningSpec: {
+          prompt: `Synthesize findings and generate final response for goal: "${goal}"`,
+          targetFormat: "markdown",
+        },
+        approval: { status: "not_required", reason: "Pure synthesis" },
+        verification: { required: false, strategy: "none" },
+        retryPolicy: { maxAttempts: 1, backoffMs: 500 },
+        timeoutMs: 30000,
       });
+
+      if (previousStepId) {
+        edges.push({
+          fromNodeId: previousStepId,
+          toNodeId: synthesisId,
+          dependencyType: "hard",
+        });
+      }
+    } else {
+      // General multi-step reasoning pipeline
+      const step1Id = "step_1_analysis";
+      const step2Id = "step_2_evaluation";
+      const step3Id = "step_3_synthesize";
+
+      nodes.push(
+        {
+          id: step1Id,
+          title: "Step 1: Baseline Analysis",
+          type: "llm_reasoning",
+          reasoningSpec: {
+            prompt: `Analyze context and extract core components for goal: "${goal}"`,
+            targetFormat: "markdown",
+          },
+          approval: { status: "not_required", reason: "Analysis phase" },
+          verification: { required: false, strategy: "none" },
+          retryPolicy: { maxAttempts: 1, backoffMs: 500 },
+          timeoutMs: 30000,
+        },
+        {
+          id: step2Id,
+          title: "Step 2: Comparative Evaluation",
+          type: "llm_reasoning",
+          reasoningSpec: {
+            prompt: `Perform detailed evaluation and deduction for goal: "${goal}"`,
+            targetFormat: "markdown",
+          },
+          approval: { status: "not_required", reason: "Evaluation phase" },
+          verification: { required: false, strategy: "none" },
+          retryPolicy: { maxAttempts: 1, backoffMs: 500 },
+          timeoutMs: 30000,
+        },
+        {
+          id: step3Id,
+          title: "Step 3: Authoritative Synthesis",
+          type: "subgoal_aggregate",
+          reasoningSpec: {
+            prompt: `Synthesize findings into a final authoritative response fulfilling goal: "${goal}"`,
+            targetFormat: "markdown",
+          },
+          approval: { status: "not_required", reason: "Final synthesis" },
+          verification: { required: false, strategy: "none" },
+          retryPolicy: { maxAttempts: 1, backoffMs: 500 },
+          timeoutMs: 30000,
+        },
+      );
+
+      edges.push(
+        { fromNodeId: step1Id, toNodeId: step2Id, dependencyType: "hard" },
+        { fromNodeId: step2Id, toNodeId: step3Id, dependencyType: "hard" },
+      );
     }
 
     // Optional memory commit node

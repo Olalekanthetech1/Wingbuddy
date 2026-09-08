@@ -199,6 +199,45 @@ export class ExecutionPersistenceService {
     return null;
   }
 
+  async listRecentSessions(limit = 20): Promise<ExecutionSession[]> {
+    const results: ExecutionSession[] = [];
+    const seen = new Set<string>();
+
+    if (this.isDbAvailable()) {
+      try {
+        const pool = getPool();
+        const res = await pool.query(
+          `SELECT execution_id FROM execution_sessions
+           ORDER BY updated_at DESC LIMIT $1`,
+          [limit],
+        );
+        for (const row of res.rows) {
+          const session = await this.getExecutionSession(row.execution_id);
+          if (session) {
+            results.push(session);
+            seen.add(session.executionId);
+          }
+        }
+      } catch {
+        // Fall back to memory
+      }
+    }
+
+    // Blend with in-memory sessions
+    const inMemSessions = Array.from(this.sessions.values())
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+
+    for (const session of inMemSessions) {
+      if (!seen.has(session.executionId)) {
+        results.push(session);
+        seen.add(session.executionId);
+      }
+      if (results.length >= limit) break;
+    }
+
+    return results.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()).slice(0, limit);
+  }
+
   // --- Atomic Claiming & Distributed Leases ---
 
   async claimNodeAtomic(params: {

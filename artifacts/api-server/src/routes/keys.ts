@@ -4,6 +4,7 @@ import { GeminiService } from "../gemini/gemini.service";
 import { getConfig } from "../config/env";
 import { logger } from "../lib/logger";
 import { chatDatabaseService, db, systemSettingsTable } from "@workspace/db";
+import { isExecutionEngineEnabled } from "../execution/config";
 
 const router: IRouter = Router();
 
@@ -41,8 +42,13 @@ router.post("/keys", async (req: Request, res: Response) => {
     const added = await apiKeyPoolService.addKey(key, name);
     await syncKeysToDatabase();
 
+    const isCooldown = added.status === "cooldown";
+    const message = isCooldown
+      ? `Key (${added.name}) is valid and added to pool in temporary cooldown (${added.cooldownSecondsLeft}s left). It will automatically activate when quota resets.`
+      : "API key validated, saved to database, and added to pool successfully";
+
     res.status(201).json({
-      message: "API key validated, saved to database, and added to pool successfully",
+      message,
       key: added,
       poolSummary: apiKeyPoolService.getSummary(),
     });
@@ -116,12 +122,17 @@ router.post("/keys/test", async (req: Request, res: Response) => {
 router.get("/stats", (_req: Request, res: Response) => {
   const pool = apiKeyPoolService.getSummary();
   const config = getConfig();
+  const executionEngineEnabled = isExecutionEngineEnabled();
 
   res.json({
     timestamp: new Date().toISOString(),
     geminiModel: config.geminiModel,
     telegramBotStatus: Boolean(config.telegramBotToken?.trim()) ? "active" : "pending_token",
     databaseStatus: Boolean(process.env.DATABASE_URL?.trim()) ? "connected" : "standalone",
+    executionEngine: {
+      enabled: executionEngineEnabled,
+      status: executionEngineEnabled ? "active" : "disabled",
+    },
     keyPool: pool,
     uptimeSeconds: Math.floor(process.uptime()),
     nodeVersion: process.version,

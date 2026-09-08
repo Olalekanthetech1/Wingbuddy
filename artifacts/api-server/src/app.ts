@@ -489,15 +489,82 @@ app.get("/", (_req, res) => {
         padding: 0.15rem 0.45rem;
       }
     }
+
+    /* Execution Engine Custom Styles */
+    .toggle-wrapper {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.75rem;
+      background: #0b1329;
+      padding: 0.35rem 0.75rem;
+      border-radius: 9999px;
+      border: 1px solid var(--border);
+    }
+    .toggle-switch {
+      position: relative;
+      width: 44px;
+      height: 24px;
+      background-color: #374151;
+      border-radius: 9999px;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+    .toggle-switch.active {
+      background-color: var(--green);
+      box-shadow: 0 0 10px rgba(16, 185, 129, 0.4);
+    }
+    .toggle-knob {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 20px;
+      height: 20px;
+      background: white;
+      border-radius: 50%;
+      transition: transform 0.2s;
+    }
+    .toggle-switch.active .toggle-knob {
+      transform: translateX(20px);
+    }
+    .node-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      padding: 0.15rem 0.45rem;
+      border-radius: 0.25rem;
+      font-size: 0.75rem;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+    }
+    .node-badge-completed { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .node-badge-executing { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.4); animation: pulse 1.5s infinite; }
+    .node-badge-pending { background: #1e293b; color: #94a3b8; }
+    .node-badge-waiting { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); }
+    .node-badge-failed { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); }
+    
+    .arch-card {
+      background: #0b1329;
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      padding: 0.75rem;
+      font-size: 0.8rem;
+    }
+    .arch-card-title {
+      font-weight: 700;
+      color: #93c5fd;
+      margin-bottom: 0.25rem;
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <div class="header">
       <div>
-        <span class="badge"><span class="live-indicator"></span> Live Multi-Key Pool & Engine Console</span>
+        <span class="badge"><span class="live-indicator"></span> Autonomous Multi-Engine & Multi-Key Console</span>
         <h1>Wingbuddy Telegram Assistant</h1>
-        <p class="subtitle">Personal AI Assistant with automated multi-key pool rotation, dynamic pgvector memory, proactive reminders, and self-tuning L1 edge caching.</p>
+        <p class="subtitle">Autonomous AI Assistant with multi-step DAG execution graphs, distributed fenced leases, pgvector memory, and multi-key failover pool.</p>
       </div>
       <div style="text-align: right;">
         <span id="uptimeBadge" class="pill-tag">Connecting...</span>
@@ -507,8 +574,16 @@ app.get("/", (_req, res) => {
 
     <div id="alertBox"></div>
 
-    <!-- Status 4-Grid -->
-    <div class="grid">
+    <!-- Status 5-Grid with Live Execution Engine Status -->
+    <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
+      <div class="card">
+        <div class="card-title">⚡ Autonomous Engine</div>
+        <div class="card-value" id="execEngineGridValue">
+          <span class="status-dot status-healthy" id="execEngineDot"></span> <span id="execEngineText">ENABLED (ON)</span>
+        </div>
+        <div class="card-subtext" id="execEngineSubtext">DAG Graph Planner Active</div>
+      </div>
+
       <div class="card">
         <div class="card-title">🔑 Gemini Key Pool</div>
         <div class="card-value" id="keyPoolValue">
@@ -526,7 +601,7 @@ app.get("/", (_req, res) => {
       </div>
 
       <div class="card">
-        <div class="card-title">🧠 AI Engine</div>
+        <div class="card-title">🧠 AI Model</div>
         <div class="card-value" id="modelValue">
           <span class="status-dot status-healthy"></span> <span id="modelName">gemini-2.5-flash</span>
         </div>
@@ -539,6 +614,162 @@ app.get("/", (_req, res) => {
           <span class="status-dot status-healthy"></span> <span id="vectorStatusBadge">pgvector</span>
         </div>
         <div class="card-subtext" id="dbSubtext">Adaptive Pool Active</div>
+      </div>
+    </div>
+
+    <!-- 0. Autonomous Execution Engine Master Control Card -->
+    <div class="card" style="margin-bottom: 1.5rem; background: linear-gradient(180deg, #111e3b 0%, #111827 100%); border-color: #3b82f6;">
+      <div class="flex-between" style="border-bottom: 1px solid #1e293b; padding-bottom: 0.85rem; margin-bottom: 1rem;">
+        <div>
+          <div style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: #93c5fd; font-weight: 600;">
+            ⚡ Autonomous Execution Engine (V1)
+          </div>
+          <div style="font-size: 1.25rem; font-weight: 700; color: #ffffff; margin-top: 0.2rem; display: flex; align-items: center; gap: 0.6rem;">
+            <span>Autonomous Graph Orchestrator</span>
+            <span id="execEnginePillBadge" class="pill-tag" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4);">
+              ● ACTIVE (ON)
+            </span>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+          <div class="toggle-wrapper" onclick="toggleExecutionEngineState()" style="cursor: pointer;">
+            <span style="font-size: 0.8rem; font-weight: 600; color: #e2e8f0;">Engine Switch:</span>
+            <div id="masterToggleSwitch" class="toggle-switch active">
+              <div class="toggle-knob"></div>
+            </div>
+            <span id="masterToggleLabel" style="font-size: 0.75rem; font-weight: 700; color: #34d399;">ON</span>
+          </div>
+          <button class="btn btn-sm btn-outline" onclick="loadExecutionData()">🔄 Refresh Sessions</button>
+        </div>
+      </div>
+
+      <p style="color: var(--text-muted); font-size: 0.85rem; margin: 0 0 1rem 0;">
+        When <b>ENABLED</b>, multi-step user prompts are compiled into topological DAG execution graphs, persisted in PostgreSQL, locked via distributed fenced leases, independently verified across tools, and aggregated without requiring manual user progression.
+      </p>
+
+      <!-- Engine Telemetry & Limits Row -->
+      <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); margin-bottom: 1rem; gap: 0.5rem;">
+        <div style="background: #0b1329; padding: 0.65rem 0.75rem; border-radius: 0.5rem; border: 1px solid var(--border);">
+          <div style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase;">Max Concurrency</div>
+          <div style="font-size: 1.05rem; font-weight: 700; color: #93c5fd; margin-top: 0.2rem;" id="execMaxConcurrency">10 workers</div>
+        </div>
+        <div style="background: #0b1329; padding: 0.65rem 0.75rem; border-radius: 0.5rem; border: 1px solid var(--border);">
+          <div style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase;">Per-User Max</div>
+          <div style="font-size: 1.05rem; font-weight: 700; color: #93c5fd; margin-top: 0.2rem;" id="execMaxPerUser">3 concurrent</div>
+        </div>
+        <div style="background: #0b1329; padding: 0.65rem 0.75rem; border-radius: 0.5rem; border: 1px solid var(--border);">
+          <div style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase;">Lease TTL</div>
+          <div style="font-size: 1.05rem; font-weight: 700; color: #93c5fd; margin-top: 0.2rem;" id="execLeaseTtl">30s fenced</div>
+        </div>
+        <div style="background: #0b1329; padding: 0.65rem 0.75rem; border-radius: 0.5rem; border: 1px solid var(--border);">
+          <div style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase;">Active Leases</div>
+          <div style="font-size: 1.05rem; font-weight: 700; color: #34d399; margin-top: 0.2rem;" id="execActiveLeases">0 active</div>
+        </div>
+        <div style="background: #0b1329; padding: 0.65rem 0.75rem; border-radius: 0.5rem; border: 1px solid var(--border);">
+          <div style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase;">Total Executions</div>
+          <div style="font-size: 1.05rem; font-weight: 700; color: #f59e0b; margin-top: 0.2rem;" id="execTotalCount">0 runs</div>
+        </div>
+      </div>
+
+      <!-- Live Execution Sessions Table -->
+      <div style="margin-top: 1rem;">
+        <div class="flex-between" style="margin-bottom: 0.4rem;">
+          <span style="font-size: 0.85rem; font-weight: 600; color: #e2e8f0;">📊 Recent Autonomous Execution Sessions</span>
+          <span style="font-size: 0.75rem; color: var(--text-muted);" id="execSessionsSummary">Loading sessions...</span>
+        </div>
+
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Execution ID / Graph</th>
+                <th>Revision</th>
+                <th>Status</th>
+                <th>Nodes Breakdown</th>
+                <th>Updated</th>
+                <th style="text-align: right;">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="execSessionsTableBody">
+              <tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:1.5rem;">Loading autonomous execution sessions...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Authoritative Tool Registry Table (Collapsible) -->
+      <div style="margin-top: 1.25rem; padding-top: 0.85rem; border-top: 1px solid #1e293b;">
+        <div class="flex-between" style="cursor: pointer;" onclick="toggleToolRegistryView()">
+          <span style="font-size: 0.85rem; font-weight: 600; color: #93c5fd;">
+            🛡️ Authoritative Tool Registry & Execution Policies (<span id="toolRegistryCount">0</span> Tools)
+          </span>
+          <button class="btn btn-sm btn-outline" id="btnToggleTools">View Registry ▼</button>
+        </div>
+
+        <div id="toolRegistryContainer" style="display: none; margin-top: 0.75rem;">
+          <div class="table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Tool Name</th>
+                  <th>Execution Policy</th>
+                  <th>Description</th>
+                </tr>
+              </thead>
+              <tbody id="toolsTableBody">
+                <tr><td colspan="3" style="text-align:center;color:var(--text-muted);padding:1rem;">Loading tool registry...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 7 Architectural Pillars of Wingbuddy / Lekzy Fx Pro Assistant -->
+    <div class="card" style="margin-bottom: 1.5rem;">
+      <div class="flex-between" style="cursor: pointer;" onclick="toggleArchPillarsView()">
+        <div style="font-size: 0.95rem; font-weight: 600; color: #ffffff; display: flex; align-items: center; gap: 0.4rem;">
+          <span>🏛️ Wingbuddy & Lekzy Fx Pro Core Architecture (7 Pillars)</span>
+          <span class="pill-tag" style="background: #1e293b; color: #93c5fd;">System Overview</span>
+        </div>
+        <button class="btn btn-sm btn-outline" id="btnToggleArch">Expand Details ▼</button>
+      </div>
+
+      <div id="archPillarsContainer" style="display: none; margin-top: 1rem;">
+        <p style="color: var(--text-muted); font-size: 0.85rem; margin: 0 0 0.85rem 0;">
+          The assistant is engineered with a strict 7-pillar architecture designed for zero travel-booking hallucinations, isolated Telegram user states, and deterministic graph execution:
+        </p>
+
+        <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0.65rem;">
+          <div class="arch-card">
+            <div class="arch-card-title">1. Telegram Gateway</div>
+            <div style="color: var(--text-muted); line-height: 1.4;">Long-polling & Webhook runtime with multi-user isolation, markdown parsing, and proactive message broadcasting.</div>
+          </div>
+          <div class="arch-card">
+            <div class="arch-card-title">2. Context & Intent Engine</div>
+            <div style="color: var(--text-muted); line-height: 1.4;">Lekzy Fx Pro trading & multi-topic AI domain routing. Recalls user facts via 768-dim pgvector semantic embeddings.</div>
+          </div>
+          <div class="arch-card">
+            <div class="arch-card-title">3. DAG Planner & Compiler</div>
+            <div style="color: var(--text-muted); line-height: 1.4;">Compiles multi-step requests into directed acyclic graphs with explicit dependencies and deterministic topological order.</div>
+          </div>
+          <div class="arch-card">
+            <div class="arch-card-title">4. PostgreSQL State Store</div>
+            <div style="color: var(--text-muted); line-height: 1.4;">Drizzle ORM backend for immutable graph revisions, execution logs, reminder queues, and CDC subscriptions.</div>
+          </div>
+          <div class="arch-card">
+            <div class="arch-card-title">5. Distributed Fenced Leases</div>
+            <div style="color: var(--text-muted); line-height: 1.4;">Row-level locking with TTL fencing tokens to prevent split-brain worker races and ensure idempotency.</div>
+          </div>
+          <div class="arch-card">
+            <div class="arch-card-title">6. Authoritative Tool Policies</div>
+            <div style="color: var(--text-muted); line-height: 1.4;">Strict permission tiers: Autonomous Read, Guarded Mutation, and Checkpoint Approval for destructive operations.</div>
+          </div>
+          <div class="arch-card">
+            <div class="arch-card-title">7. Independent Aggregator</div>
+            <div style="color: var(--text-muted); line-height: 1.4;">Node outputs are independently verified and synthesized into a cohesive final outcome without monolithic LLM hallucination.</div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -843,6 +1074,8 @@ app.get("/", (_req, res) => {
     let currentMode = 'general';
     let currentSelectedUserId = '';
     let cachedUsersList = [];
+    let isExecutionEngineActive = true;
+    let cachedExecutionSessions = [];
 
     function showAlert(msg, isError = false) {
       const box = document.getElementById('alertBox');
@@ -850,6 +1083,270 @@ app.get("/", (_req, res) => {
       box.className = isError ? 'alert-error' : 'alert-success';
       box.style.display = 'block';
       setTimeout(() => { box.style.display = 'none'; }, 5000);
+    }
+
+    // Toggle Collapsible Sections
+    function toggleToolRegistryView() {
+      const container = document.getElementById('toolRegistryContainer');
+      const btn = document.getElementById('btnToggleTools');
+      if (container.style.display === 'none' || !container.style.display) {
+        container.style.display = 'block';
+        btn.textContent = 'Hide Registry ▲';
+      } else {
+        container.style.display = 'none';
+        btn.textContent = 'View Registry ▼';
+      }
+    }
+
+    function toggleArchPillarsView() {
+      const container = document.getElementById('archPillarsContainer');
+      const btn = document.getElementById('btnToggleArch');
+      if (container.style.display === 'none' || !container.style.display) {
+        container.style.display = 'block';
+        btn.textContent = 'Collapse Details ▲';
+      } else {
+        container.style.display = 'none';
+        btn.textContent = 'Expand Details ▼';
+      }
+    }
+
+    // Execution Engine Data & Toggle Operations
+    async function loadExecutionData() {
+      try {
+        const [healthRes, sessionsRes] = await Promise.all([
+          fetch('/api/execution/health'),
+          fetch('/api/execution/sessions?limit=15')
+        ]);
+
+        if (healthRes.ok) {
+          const healthData = await healthRes.json();
+          const auto = healthData.autonomousExecution || {};
+          const cfg = auto.config || {};
+          const metrics = auto.metrics || {};
+          const tools = auto.tools || [];
+
+          isExecutionEngineActive = Boolean(auto.enabled);
+          updateExecutionToggleUI(isExecutionEngineActive);
+
+          document.getElementById('execMaxConcurrency').textContent = (cfg.maxConcurrency || 10) + ' workers';
+          document.getElementById('execMaxPerUser').textContent = (cfg.maxPerUser || 3) + ' concurrent';
+          document.getElementById('execLeaseTtl').textContent = Math.round((cfg.leaseDurationMs || 30000) / 1000) + 's fenced';
+          document.getElementById('execActiveLeases').textContent = (metrics.activeLeasesCount || 0) + ' active';
+          document.getElementById('execTotalCount').textContent = (metrics.totalExecutionsStarted || 0) + ' runs';
+
+          document.getElementById('toolRegistryCount').textContent = tools.length;
+          renderToolsTable(tools);
+        }
+
+        if (sessionsRes.ok) {
+          const sessData = await sessionsRes.json();
+          cachedExecutionSessions = sessData.sessions || [];
+          renderExecutionSessions(cachedExecutionSessions);
+        }
+      } catch (err) {
+        console.error('Failed to load execution engine data', err);
+      }
+    }
+
+    function updateExecutionToggleUI(enabled) {
+      const toggleSwitch = document.getElementById('masterToggleSwitch');
+      const toggleLabel = document.getElementById('masterToggleLabel');
+      const pillBadge = document.getElementById('execEnginePillBadge');
+      const gridDot = document.getElementById('execEngineDot');
+      const gridText = document.getElementById('execEngineText');
+      const gridSubtext = document.getElementById('execEngineSubtext');
+
+      if (enabled) {
+        toggleSwitch.className = 'toggle-switch active';
+        toggleLabel.textContent = 'ON';
+        toggleLabel.style.color = '#34d399';
+        pillBadge.textContent = '● ACTIVE (ON)';
+        pillBadge.style.background = 'rgba(16, 185, 129, 0.2)';
+        pillBadge.style.color = '#34d399';
+        pillBadge.style.borderColor = 'rgba(16, 185, 129, 0.4)';
+
+        gridDot.className = 'status-dot status-healthy';
+        gridText.textContent = 'ENABLED (ON)';
+        gridSubtext.textContent = 'DAG Graph Planner Active';
+      } else {
+        toggleSwitch.className = 'toggle-switch';
+        toggleLabel.textContent = 'OFF';
+        toggleLabel.style.color = '#9ca3af';
+        pillBadge.textContent = '⏸️ DISABLED (OFF)';
+        pillBadge.style.background = 'rgba(239, 68, 68, 0.15)';
+        pillBadge.style.color = '#f87171';
+        pillBadge.style.borderColor = 'rgba(239, 68, 68, 0.3)';
+
+        gridDot.className = 'status-dot status-cooldown';
+        gridText.textContent = 'DISABLED (OFF)';
+        gridSubtext.textContent = 'Conversational Pass-through';
+      }
+    }
+
+    async function toggleExecutionEngineState() {
+      try {
+        const res = await fetch('/api/execution/toggle', { method: 'POST' });
+        const data = await res.json();
+        if (res.ok) {
+          isExecutionEngineActive = Boolean(data.enabled);
+          updateExecutionToggleUI(isExecutionEngineActive);
+          showAlert(data.message || 'Execution engine state updated');
+          loadExecutionData();
+          loadStats();
+        } else {
+          showAlert('Failed to toggle execution engine: ' + (data.error || 'Server error'), true);
+        }
+      } catch (err) {
+        showAlert('Network error while toggling execution engine', true);
+      }
+    }
+
+    function renderExecutionSessions(sessions) {
+      const tbody = document.getElementById('execSessionsTableBody');
+      const summary = document.getElementById('execSessionsSummary');
+
+      if (!sessions || sessions.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:1.5rem;">No recent autonomous executions recorded yet. Execute a task to view DAG nodes!</td></tr>';
+        summary.textContent = '0 total sessions recorded';
+        return;
+      }
+
+      summary.textContent = sessions.length + ' active/recent session(s)';
+
+      tbody.innerHTML = sessions.map(s => {
+        let statusBadge = '';
+        if (s.status === 'completed') {
+          statusBadge = '<span class="node-badge node-badge-completed">✅ COMPLETED</span>';
+        } else if (s.status === 'executing') {
+          statusBadge = '<span class="node-badge node-badge-executing">⚡ EXECUTING</span>';
+        } else if (s.status === 'paused_for_approval') {
+          statusBadge = '<span class="node-badge node-badge-waiting">⚠️ WAITING APPROVAL</span>';
+        } else if (s.status === 'failed') {
+          statusBadge = '<span class="node-badge node-badge-failed">❌ FAILED</span>';
+        } else if (s.status === 'cancelled') {
+          statusBadge = '<span class="node-badge node-badge-pending">⏸️ CANCELLED</span>';
+        } else {
+          statusBadge = '<span class="node-badge node-badge-pending">' + escapeHtml(s.status.toUpperCase()) + '</span>';
+        }
+
+        const completedNodes = (s.completedNodes || []).map(n => '<span class="node-badge node-badge-completed">' + escapeHtml(n) + '</span>').join(' ');
+        const currentNodes = (s.currentNodes || []).map(n => '<span class="node-badge node-badge-executing">' + escapeHtml(n) + '</span>').join(' ');
+        const waitingNodes = (s.waitingApprovalNodes || []).map(n => '<span class="node-badge node-badge-waiting">' + escapeHtml(n) + '</span>').join(' ');
+        const failedNodes = (s.failedNodes || []).map(n => '<span class="node-badge node-badge-failed">' + escapeHtml(n) + '</span>').join(' ');
+
+        const nodeBreakdown = [completedNodes, currentNodes, waitingNodes, failedNodes].filter(Boolean).join(' ') || '<span style="color:var(--text-muted);font-size:0.75rem;">None</span>';
+
+        const updatedTime = new Date(s.updatedAt || s.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+        let actions = '';
+        if (s.status === 'paused_for_approval' && (s.waitingApprovalNodes || []).length > 0) {
+          const waitingNodeId = s.waitingApprovalNodes[0];
+          actions += '<button class="btn btn-sm btn-success" style="margin-right:0.25rem;" onclick="submitNodeApproval(\\'' + escapeAttr(s.graphId) + '\\', ' + s.planRevision + ', \\'' + escapeAttr(waitingNodeId) + '\\', true)">Approve</button>';
+          actions += '<button class="btn btn-sm btn-danger" style="margin-right:0.25rem;" onclick="submitNodeApproval(\\'' + escapeAttr(s.graphId) + '\\', ' + s.planRevision + ', \\'' + escapeAttr(waitingNodeId) + '\\', false)">Deny</button>';
+        } else if (s.status === 'executing') {
+          actions += '<button class="btn btn-sm btn-outline" style="margin-right:0.25rem;" onclick="pauseExecutionSession(\\'' + escapeAttr(s.graphId) + '\\', ' + s.planRevision + ')">Pause</button>';
+          actions += '<button class="btn btn-sm btn-danger" onclick="cancelExecutionSession(\\'' + escapeAttr(s.graphId) + '\\', ' + s.planRevision + ')">Cancel</button>';
+        } else if (s.status === 'paused') {
+          actions += '<button class="btn btn-sm btn-success" onclick="resumeExecutionSession(\\'' + escapeAttr(s.graphId) + '\\', ' + s.planRevision + ')">Resume</button>';
+        }
+
+        return '<tr>' +
+          '<td><div style="font-weight:600;font-family:monospace;font-size:0.8rem;color:#93c5fd;">' + escapeHtml(s.graphId) + '</div><div style="font-size:0.72rem;color:var(--text-muted);">Exec: ' + escapeHtml(s.executionId.slice(0, 16)) + '...</div></td>' +
+          '<td><span class="code-badge">r' + s.planRevision + '</span></td>' +
+          '<td>' + statusBadge + '</td>' +
+          '<td><div style="display:flex;gap:0.25rem;flex-wrap:wrap;max-width:260px;">' + nodeBreakdown + '</div></td>' +
+          '<td style="font-size:0.75rem;color:var(--text-muted);">' + updatedTime + '</td>' +
+          '<td style="text-align:right;">' + (actions || '<span style="color:var(--text-muted);font-size:0.75rem;">--</span>') + '</td>' +
+        '</tr>';
+      }).join('');
+    }
+
+    function renderToolsTable(tools) {
+      const tbody = document.getElementById('toolsTableBody');
+      if (!tools || tools.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:var(--text-muted);padding:1rem;">No tools registered in Authoritative ToolRegistry.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = tools.map(t => {
+        const policy = t.policy || {};
+        let policyBadge = '<span class="pill-tag" style="background:#1e293b;color:#93c5fd;">Autonomous Read</span>';
+        if (policy.isDestructive) {
+          policyBadge = '<span class="pill-tag" style="background:rgba(239,68,68,0.2);color:#f87171;">Destructive Action</span>';
+        } else if (policy.requiresApproval) {
+          policyBadge = '<span class="pill-tag" style="background:rgba(245,158,11,0.2);color:#fbbf24;">Approval Required</span>';
+        } else if (policy.isMutating) {
+          policyBadge = '<span class="pill-tag" style="background:rgba(59,130,246,0.2);color:#60a5fa;">Guarded Mutation</span>';
+        }
+
+        return '<tr>' +
+          '<td><span class="code-badge" style="font-weight:700;">' + escapeHtml(t.name) + '</span></td>' +
+          '<td>' + policyBadge + '</td>' +
+          '<td style="color:var(--text-muted);font-size:0.8rem;">' + escapeHtml(policy.description || 'System capability integration node') + '</td>' +
+        '</tr>';
+      }).join('');
+    }
+
+    async function submitNodeApproval(graphId, planRevision, nodeId, approved) {
+      try {
+        const res = await fetch('/api/execution/approval', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ graphId, planRevision, nodeId, approved, telegramUserId: currentSelectedUserId || 1 })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showAlert(approved ? '✅ Node ' + nodeId + ' approved! Continuing DAG...' : '⚠️ Node ' + nodeId + ' denied.');
+          loadExecutionData();
+        } else {
+          showAlert('Approval submission failed: ' + (data.error || 'Server error'), true);
+        }
+      } catch (err) {
+        showAlert('Network error during approval submission', true);
+      }
+    }
+
+    async function pauseExecutionSession(graphId, planRevision) {
+      try {
+        const res = await fetch('/api/execution/pause', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ graphId, planRevision, reason: 'Paused via dashboard console' })
+        });
+        if (res.ok) {
+          showAlert('Execution session paused');
+          loadExecutionData();
+        }
+      } catch (e) {}
+    }
+
+    async function resumeExecutionSession(graphId, planRevision) {
+      try {
+        const res = await fetch('/api/execution/resume', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ graphId, planRevision, telegramUserId: currentSelectedUserId || 1 })
+        });
+        if (res.ok) {
+          showAlert('Execution session resumed');
+          loadExecutionData();
+        }
+      } catch (e) {}
+    }
+
+    async function cancelExecutionSession(graphId, planRevision) {
+      if (!confirm('Cancel this active execution graph?')) return;
+      try {
+        const res = await fetch('/api/execution/cancel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ graphId, planRevision, reason: 'Cancelled via dashboard console' })
+        });
+        if (res.ok) {
+          showAlert('Execution session cancelled');
+          loadExecutionData();
+        }
+      } catch (e) {}
     }
 
     // 0. Telegram Users Loader & Context Switcher
@@ -1054,7 +1551,7 @@ app.get("/", (_req, res) => {
         });
         const data = await res.json();
         if (res.ok) {
-          showAlert('✅ Key validated & added to pool successfully (' + data.key.name + ')');
+          showAlert(data.message || ('✅ Key validated & added to pool successfully (' + data.key.name + ')'));
           keyInput.value = '';
           nameInput.value = '';
           loadKeys();
@@ -1600,9 +2097,11 @@ app.get("/", (_req, res) => {
     loadKeys();
     loadEnvVars();
     loadTelemetry();
+    loadExecutionData();
 
     setInterval(loadStats, 4000);
     setInterval(loadTelemetry, 5000);
+    setInterval(loadExecutionData, 5000);
     setInterval(loadUsers, 10000); // Auto-detect new Telegram users in real time
   </script>
 </body>

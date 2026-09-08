@@ -2,12 +2,32 @@ import type { ExecutionEngineConfig } from "./types";
 
 /**
  * Execution Engine V1 Configuration
- * Production Status: ENABLED (defaults to true; disable with EXECUTION_ENGINE_ENABLED=false).
+ * Production Status: ENABLED (defaults to true; toggleable via dashboard or EXECUTION_ENGINE_ENABLED=false).
  */
 
-export function getExecutionConfig(): ExecutionEngineConfig {
+let runtimeExecutionEngineOverride: boolean | null = null;
+
+export function isExecutionEngineEnabled(): boolean {
+  if (runtimeExecutionEngineOverride !== null) {
+    return runtimeExecutionEngineOverride;
+  }
   const envVal = process.env.EXECUTION_ENGINE_ENABLED;
-  const enabled = envVal === undefined || envVal === "" || envVal === "true" || envVal === "1";
+  return envVal === undefined || envVal === "" || envVal === "true" || envVal === "1";
+}
+
+export function setExecutionEngineEnabled(enabled: boolean): boolean {
+  runtimeExecutionEngineOverride = enabled;
+  process.env.EXECUTION_ENGINE_ENABLED = enabled ? "true" : "false";
+  return enabled;
+}
+
+export function toggleExecutionEngine(): boolean {
+  const current = isExecutionEngineEnabled();
+  return setExecutionEngineEnabled(!current);
+}
+
+export function getExecutionConfig(): ExecutionEngineConfig {
+  const enabled = isExecutionEngineEnabled();
   const maxConcurrency = Math.max(1, Math.min(50, Number(process.env.EXECUTION_MAX_CONCURRENCY) || 10));
   const maxPerUser = Math.max(1, Math.min(20, Number(process.env.EXECUTION_MAX_PER_USER) || 3));
   const maxPerGraph = Math.max(1, Math.min(20, Number(process.env.EXECUTION_MAX_PER_GRAPH) || 5));
@@ -29,3 +49,4 @@ export function getExecutionConfig(): ExecutionEngineConfig {
     maxRetries,
   };
 }
+

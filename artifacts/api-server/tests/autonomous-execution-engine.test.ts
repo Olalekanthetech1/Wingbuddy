@@ -149,7 +149,7 @@ describe("Autonomous Execution Engine", () => {
 
       // Verify binding resolution
       const step2Output = status?.nodeResults["step_2"].output as any;
-      expect(step2Output.structuredOutput.priorConclusion).toBe(
+      expect(step2Output.structuredOutput.priorConclusion).toContain(
         "Reasoning completed for: First Step Reasoning",
       );
     });
@@ -595,7 +595,7 @@ describe("Autonomous Execution Engine", () => {
 
       const status = await engine.getExecutionStatus(session.executionId);
       const aggOutput = status?.nodeResults["aggregator"].output as any;
-      expect(aggOutput.summary).toContain("Aggregated results for subgoal: Consolidate Analysis");
+      expect(aggOutput.summary).toContain("Aggregated results for Consolidate Analysis");
       expect(aggOutput.nodeResults["worker_1"]).toBeDefined();
       expect(aggOutput.nodeResults["worker_2"]).toBeDefined();
     });

@@ -74,4 +74,23 @@ describe("ApiKeyPoolService", () => {
     expect(pool.getSummary().keys[0].status).toBe("healthy");
     expect(pool.getSummary().healthyKeys).toBe(1);
   });
+
+  it("successfully adds a key in cooldown status when the key receives a 429 quota error", async () => {
+    const pool = new ApiKeyPoolService();
+    // Mock testRawKey to simulate a 429 quota response from Gemini
+    vi.spyOn(pool, "testRawKey").mockResolvedValue({
+      valid: true,
+      isRateLimited: true,
+      retryDelaySeconds: 40,
+      latencyMs: 120,
+      notice: "Key is authenticated with Gemini, but currently in rate-limit quota cooldown (~40s).",
+    });
+
+    const added = await pool.addKey("AIzaSyNewKeyInCooldown1234567890", "Key 4 (Rate Limited)");
+
+    expect(added.status).toBe("cooldown");
+    expect(added.cooldownSecondsLeft).toBeGreaterThan(0);
+    expect(pool.getSummary().totalKeys).toBe(1);
+    expect(pool.getSummary().inCooldownKeys).toBe(1);
+  });
 });

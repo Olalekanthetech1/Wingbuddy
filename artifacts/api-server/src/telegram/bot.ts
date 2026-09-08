@@ -1402,7 +1402,7 @@ export function createTelegramBot(): TelegramBotRuntime {
               },
             });
 
-            if (session.status === "WAITING_APPROVAL") {
+            if (session.status === "waiting_approval" || (session.status as string) === "WAITING_APPROVAL") {
               const pendingApproval = await executionPersistence.getPendingApprovalForGraph(planResult.graph.graphId, 1);
               if (pendingApproval) {
                 await ctx.reply(
@@ -1416,23 +1416,51 @@ export function createTelegramBot(): TelegramBotRuntime {
               }
             }
 
-            if (session.status === "COMPLETED") {
-              const outputState = session.state?.outputs || {};
-              const nodeResults = session.state?.nodeResults || {};
+            if (session.status === "completed" || (session.status as string) === "COMPLETED") {
+              const completedAttempts = await executionPersistence.getCompletedExecutionsForGraph(
+                planResult.graph.graphId,
+                1,
+              );
+
+              const nodeResults: Record<string, any> = {};
+              for (const att of completedAttempts) {
+                if (att.result) {
+                  nodeResults[att.nodeId] = att.result;
+                }
+              }
 
               let finalAnswer = "";
-              if (outputState.final_summary?.output) {
-                const o = outputState.final_summary.output;
-                finalAnswer = typeof o === "string" ? o : (o.summary || o.response || JSON.stringify(o, null, 2));
-              } else if (outputState.response?.output) {
-                const o = outputState.response.output;
-                finalAnswer = typeof o === "string" ? o : (o.response || o.summary || JSON.stringify(o, null, 2));
-              } else {
-                const completedKeys = Object.keys(nodeResults).reverse();
-                for (const k of completedKeys) {
-                  const res = nodeResults[k];
+              const graphNodeIds = Object.keys(planResult.graph.nodes);
+              const reverseNodeIds = [...graphNodeIds].reverse();
+
+              for (const nodeId of reverseNodeIds) {
+                const res = nodeResults[nodeId];
+                if (res?.output) {
+                  const out = res.output;
+                  if (typeof out === "string") {
+                    finalAnswer = out;
+                    break;
+                  } else if (out.response && typeof out.response === "string") {
+                    finalAnswer = out.response;
+                    break;
+                  } else if (out.summary && typeof out.summary === "string") {
+                    finalAnswer = out.summary;
+                    break;
+                  } else if (out.formatted && typeof out.formatted === "string") {
+                    finalAnswer = out.formatted;
+                    break;
+                  } else if (out.conclusion && typeof out.conclusion === "string") {
+                    finalAnswer = out.conclusion;
+                    break;
+                  }
+                }
+              }
+
+              if (!finalAnswer) {
+                for (const nodeId of reverseNodeIds) {
+                  const res = nodeResults[nodeId];
                   if (res?.output) {
-                    finalAnswer = typeof res.output === "string" ? res.output : (res.output.summary || res.output.formatted || res.output.response || JSON.stringify(res.output, null, 2));
+                    finalAnswer = typeof res.output === "string" ? res.output : JSON.stringify(res.output, null, 2);
                     break;
                   }
                 }
@@ -1452,7 +1480,18 @@ export function createTelegramBot(): TelegramBotRuntime {
               await conversations.addMessage(globalContextData.conversationId, "model", finalAnswer);
 
               if (activeTaskContext) {
-                await taskService.syncTaskProgressFromResponse(activeTaskContext.task.id, finalAnswer);
+                const stepCount = activeTaskContext.steps.length;
+                const stepUpdates = activeTaskContext.steps.map((s) => ({
+                  stepOrder: s.stepOrder,
+                  status: "completed",
+                  resultSummary: `Completed in autonomous plan ${planResult.graph.graphId}`,
+                }));
+                await taskService.updateTaskAndStepsAtomic({
+                  taskId: activeTaskContext.task.id,
+                  stepUpdates,
+                  taskStatus: "completed",
+                  currentStep: stepCount,
+                });
               }
 
               return;

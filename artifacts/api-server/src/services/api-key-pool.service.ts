@@ -217,30 +217,35 @@ export class ApiKeyPoolService {
 
     const id = `key-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     const keyName = name?.trim() || `Key ${this.keys.size + 1}`;
+    const isRateLimited = Boolean(testResult.isRateLimited);
+    const cooldownDuration = (testResult.retryDelaySeconds || 45) * 1000;
 
     const managed: ManagedKey = {
       id,
       name: keyName,
       key: clean,
-      status: "healthy",
-      totalSuccess: 1, // 1 from test
-      totalErrors: 0,
+      status: isRateLimited ? "cooldown" : "healthy",
+      cooldownUntil: isRateLimited ? Date.now() + cooldownDuration : undefined,
+      totalSuccess: isRateLimited ? 0 : 1,
+      totalErrors: isRateLimited ? 1 : 0,
+      lastError: isRateLimited ? testResult.notice || "Rate limit quota exhausted on test" : undefined,
       source: "dashboard",
       createdAt: new Date().toISOString(),
       avgLatencyMs: testResult.latencyMs,
     };
 
     this.keys.set(id, managed);
-    logger.info({ id, name: keyName, latencyMs: testResult.latencyMs }, "Added new Gemini API key to pool");
+    logger.info({ id, name: keyName, status: managed.status, isRateLimited }, "Added Gemini API key to pool");
 
     return {
       id: managed.id,
       name: managed.name,
       maskedKey: this.mask(managed.key),
       status: managed.status,
-      cooldownSecondsLeft: 0,
+      cooldownSecondsLeft: isRateLimited ? Math.ceil(cooldownDuration / 1000) : 0,
       totalSuccess: managed.totalSuccess,
       totalErrors: managed.totalErrors,
+      lastError: managed.lastError,
       source: managed.source,
       createdAt: managed.createdAt,
       avgLatencyMs: managed.avgLatencyMs,
@@ -283,7 +288,14 @@ export class ApiKeyPoolService {
     };
   }
 
-  public async testRawKey(rawKey: string): Promise<{ valid: boolean; latencyMs: number; error?: string }> {
+  public async testRawKey(rawKey: string): Promise<{
+    valid: boolean;
+    latencyMs: number;
+    error?: string;
+    isRateLimited?: boolean;
+    retryDelaySeconds?: number;
+    notice?: string;
+  }> {
     const start = Date.now();
     try {
       const client = new GoogleGenAI({ apiKey: rawKey.trim() });
@@ -302,6 +314,34 @@ export class ApiKeyPoolService {
     } catch (err) {
       const latencyMs = Date.now() - start;
       const errorMsg = err instanceof Error ? err.message : String(err);
+
+      const isQuotaOr429 =
+        errorMsg.includes("429") ||
+        errorMsg.includes("RESOURCE_EXHAUSTED") ||
+        errorMsg.includes("quota") ||
+        errorMsg.includes("rate limit") ||
+        errorMsg.includes("ResourceExhausted") ||
+        errorMsg.includes("exceeded your current quota");
+
+      if (isQuotaOr429) {
+        let retrySeconds = 45;
+        const match = errorMsg.match(/retry(?:Delay| in)[^\d]*(\d+(?:\.\d+)?)/i);
+        if (match && match[1]) {
+          const parsed = parseFloat(match[1]);
+          if (!isNaN(parsed) && parsed > 0) {
+            retrySeconds = Math.ceil(parsed);
+          }
+        }
+
+        return {
+          valid: true,
+          isRateLimited: true,
+          retryDelaySeconds: retrySeconds,
+          latencyMs,
+          notice: `Key is authenticated with Gemini, but currently in rate-limit quota cooldown (~${retrySeconds}s).`,
+        };
+      }
+
       return { valid: false, latencyMs, error: errorMsg };
     }
   }
