@@ -1,7 +1,10 @@
 import { memoryService } from "./memory.service";
 import { taskService } from "./task.service";
 import { instructionResolutionService } from "./instruction-resolution.service";
-import { conversationIntelligenceService } from "./conversation-intelligence.service";
+import {
+  conversationIntelligenceService,
+  type ConversationSemanticState,
+} from "./conversation-intelligence.service";
 import { chatDatabaseService, type AgentTaskRecord, type AgentTaskStepRecord } from "@workspace/db";
 import { logger } from "../lib/logger";
 
@@ -28,6 +31,7 @@ export class ContextManagerService {
     effectiveModeInstruction: string;
     activeTask?: { task: AgentTaskRecord; steps: AgentTaskStepRecord[] } | null;
     history?: Array<{ role: string; content: string }>;
+    semanticState?: ConversationSemanticState | null;
     maxCharBudget?: number;
   }): Promise<AssembledContext> {
     const telegramUserId = Number(options.telegramUserId);
@@ -65,6 +69,9 @@ export class ContextManagerService {
 
     const continuity = conversationIntelligenceService.resolve(options.userMessage, rawHistory);
     const continuityInstruction = conversationIntelligenceService.buildContextInstruction(continuity);
+    const semanticInstruction = options.semanticState
+      ? conversationIntelligenceService.buildSemanticContextInstruction(options.semanticState)
+      : "";
 
     const calculateLength = (hist: Array<{ role: string; content: string }>, sysPromptLength: number) => {
       const histLength = hist.reduce((sum, h) => sum + h.content.length, 0);
@@ -83,6 +90,9 @@ export class ContextManagerService {
     let fullSystemPrompt = resolution.effectiveSystemPrompt + conversationSummary;
     if (continuityInstruction) {
       fullSystemPrompt += `\n\n${continuityInstruction}`;
+    }
+    if (semanticInstruction) {
+      fullSystemPrompt += `\n\n${semanticInstruction}`;
     }
 
     let currentLength = calculateLength(rawHistory, fullSystemPrompt.length);
@@ -118,6 +128,10 @@ export class ContextManagerService {
         continuityFollowUp: continuity.isFollowUp,
         continuityConfidence: continuity.confidence,
         continuityReferenceType: continuity.referenceType,
+        semanticFollowUp: options.semanticState?.isFollowUp ?? false,
+        semanticOperation: options.semanticState?.operation,
+        semanticConfidence: options.semanticState?.confidence,
+        semanticUnresolvedReference: Boolean(options.semanticState?.unresolvedReference),
       },
       "CONTEXT_ASSEMBLED_WITH_PRECEDENCE",
     );
