@@ -8,6 +8,7 @@ import { createTelegramBot } from "./telegram/bot";
 import { telegramWorkerQueue } from "./services/worker-queue.service";
 import { safeErrorMetadata } from "./utils/safe-error";
 import { renderDashboardHtml } from "./dashboard-ui";
+import { renderDashboardModelControls } from "./dashboard-model-controls";
 
 const app: Express = express();
 
@@ -141,7 +142,9 @@ app.get("/health", healthHandler);
 app.use("/api", router);
 
 const serveDashboard = (_req: Request, res: Response): void => {
-  res.type("html").send(renderDashboardHtml());
+  const html = renderDashboardHtml();
+  const enhanced = html.replace("</body>", `${renderDashboardModelControls()}</body>`);
+  res.type("html").send(enhanced);
 };
 
 app.get("/", serveDashboard);
