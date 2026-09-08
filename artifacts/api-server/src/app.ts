@@ -20,8 +20,18 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 let realTelegramRuntime: ReturnType<typeof createTelegramBot> | null = null;
+let runtimeHydrationReady = false;
+
+export function setRuntimeHydrationReady(ready: boolean): void {
+  runtimeHydrationReady = ready;
+}
+
+export function isRuntimeHydrationReady(): boolean {
+  return runtimeHydrationReady;
+}
 
 export function initOrReloadTelegramBot(): ReturnType<typeof createTelegramBot> | null {
+  if (!runtimeHydrationReady) return realTelegramRuntime;
   try {
     if (process.env.TELEGRAM_BOT_TOKEN?.trim() && (process.env.GEMINI_API_KEY?.trim() || apiKeyPoolService.getSummary().totalKeys > 0)) {
       if (realTelegramRuntime) realTelegramRuntime.stop().catch(() => {});
@@ -30,19 +40,17 @@ export function initOrReloadTelegramBot(): ReturnType<typeof createTelegramBot> 
       return realTelegramRuntime;
     }
   } catch (error) {
-    logger.warn({ error: error instanceof Error ? error.message : String(error) }, "Telegram bot deferred initialization: configure TELEGRAM_BOT_TOKEN and a managed Gemini API key");
+    logger.warn({ error: error instanceof Error ? error.message : String(error) }, "Telegram bot deferred initialization failed");
   }
   return realTelegramRuntime;
 }
 
-// Telegram is initialized only after the process entrypoint hydrates authoritative state.
-
 export const telegramRuntime = {
   get bot() { return realTelegramRuntime?.bot; },
   async start() {
+    if (!runtimeHydrationReady) return;
     if (!realTelegramRuntime) initOrReloadTelegramBot();
     if (realTelegramRuntime) await realTelegramRuntime.start();
-    else logger.warn("Telegram bot token or managed Gemini API key not configured; waiting for runtime configuration");
   },
   async stop() { if (realTelegramRuntime) await realTelegramRuntime.stop(); },
   initOrReload: initOrReloadTelegramBot,
@@ -60,12 +68,14 @@ const handleTelegramWebhook = (req: Request, res: Response): void => {
     res.status(400).json({ error: "Invalid Telegram update payload" });
     return;
   }
+  if (!runtimeHydrationReady || !realTelegramRuntime) {
+    logger.warn({ updateId: update.update_id }, "Telegram webhook received before runtime readiness; update not processed");
+    res.status(503).json({ ok: false, error: "Runtime initializing" });
+    return;
+  }
   res.status(200).json({ ok: true });
-  if (!realTelegramRuntime) initOrReloadTelegramBot();
-  if (realTelegramRuntime) {
-    try { telegramWorkerQueue.enqueue(update); }
-    catch (err) { logger.error({ error: safeErrorMetadata(err), updateId: update.update_id }, "Failed to enqueue Telegram update"); }
-  } else logger.warn({ updateId: update.update_id }, "Webhook received before Telegram runtime was initialized");
+  try { telegramWorkerQueue.enqueue(update); }
+  catch (err) { logger.error({ error: safeErrorMetadata(err), updateId: update.update_id }, "Failed to enqueue Telegram update"); }
 };
 app.post("/api/telegram/webhook", handleTelegramWebhook);
 app.post("/telegram/webhook", handleTelegramWebhook);
@@ -79,7 +89,7 @@ app.get("/api/dashboard/runtime", (_req: Request, res: Response) => {
   const unique = (items: string[]): string[] => [...new Set(items)];
   const primaryModel = process.env.GEMINI_MODEL?.trim() || process.env.GEMINI_DEFAULT_MODEL?.trim() || "";
   const modelPool = unique([primaryModel, ...split("GEMINI_MODEL_POOL"), ...split("GEMINI_MODEL_FALLBACKS")]);
-  res.json({ controlPlane: "postgresql-authoritative", timestamp: new Date().toISOString(), primaryModel, modelPool, fastModel: process.env.GEMINI_MODEL_FAST?.trim() || "", reasoningModel: process.env.GEMINI_MODEL_REASONING?.trim() || "", extractionModel: process.env.GEMINI_MODEL_EXTRACTION?.trim() || "", fallbackModels: split("GEMINI_MODEL_FALLBACKS"), embeddingModel: process.env.GEMINI_EMBEDDING_MODEL?.trim() || "", webResearchProvider: process.env.TAVILY_API_KEY?.trim() ? "Tavily" : "", webResearchConfigured: Boolean(process.env.TAVILY_API_KEY?.trim()), executionEngineEnabled: String(process.env.EXECUTION_ENGINE_ENABLED ?? "").toLowerCase() === "true", telegramRuntimeActive: Boolean(realTelegramRuntime), keyPool: apiKeyPoolService.getSummary() });
+  res.json({ controlPlane: "postgresql-authoritative", timestamp: new Date().toISOString(), runtimeHydrationReady, primaryModel, modelPool, fastModel: process.env.GEMINI_MODEL_FAST?.trim() || "", reasoningModel: process.env.GEMINI_MODEL_REASONING?.trim() || "", extractionModel: process.env.GEMINI_MODEL_EXTRACTION?.trim() || "", fallbackModels: split("GEMINI_MODEL_FALLBACKS"), embeddingModel: process.env.GEMINI_EMBEDDING_MODEL?.trim() || "", webResearchProvider: process.env.TAVILY_API_KEY?.trim() ? "Tavily" : "", webResearchConfigured: Boolean(process.env.TAVILY_API_KEY?.trim()), executionEngineEnabled: String(process.env.EXECUTION_ENGINE_ENABLED ?? "").toLowerCase() === "true", telegramRuntimeActive: Boolean(realTelegramRuntime), keyPool: apiKeyPoolService.getSummary() });
 });
 
 app.get("/health", healthHandler);
