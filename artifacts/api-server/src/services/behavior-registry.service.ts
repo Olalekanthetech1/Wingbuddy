@@ -1,7 +1,7 @@
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../lib/logger";
-import { MODES, type ModeKey, type ModeProfile } from "../config/mode";
+import { MODES, type ModeProfile } from "../config/mode";
 import { PERSONALITIES, type PersonalityKey, type PersonalityProfile } from "../config/personality";
 
 const TABLE = "assistant_behavior_registry";
@@ -10,6 +10,7 @@ export interface BehaviorRecord { kind: BehaviorKind; key: string; label: string
 
 class BehaviorRegistryService {
   private initialized = false;
+  private defaults: Record<BehaviorKind, string | null> = { mode: "auto", personality: "playful" };
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
@@ -35,7 +36,7 @@ class BehaviorRegistryService {
     for (const [key, profile] of Object.entries(PERSONALITIES)) {
       await db.execute(sql`
         INSERT INTO ${sql.raw(TABLE)} (kind,key,label,description,config,enabled,is_default)
-        VALUES ('personality',${key},${profile.label},${profile.description},${JSON.stringify(profile)},TRUE,${key === "balanced"})
+        VALUES ('personality',${key},${profile.label},${profile.description},${JSON.stringify(profile)},TRUE,${key === "playful"})
         ON CONFLICT (kind,key) DO NOTHING
       `);
     }
@@ -50,20 +51,19 @@ class BehaviorRegistryService {
   }
 
   async hydrateRuntime(): Promise<void> {
-    const result = await db.execute(sql`SELECT kind,key,config,enabled FROM ${sql.raw(TABLE)} WHERE enabled = TRUE`);
+    const result = await db.execute(sql`SELECT kind,key,config,enabled,is_default FROM ${sql.raw(TABLE)} WHERE enabled = TRUE`);
     for (const row of result.rows as Array<Record<string, unknown>>) {
       const kind = String(row.kind);
       const key = String(row.key);
       const config = typeof row.config === "string" ? JSON.parse(row.config) : row.config;
       if (!config) continue;
-      if (kind === "personality" && key in PERSONALITIES) {
-        PERSONALITIES[key as PersonalityKey] = config as PersonalityProfile;
-      }
-      if (kind === "mode") {
-        (MODES as Record<string, ModeProfile>)[key] = config as ModeProfile;
-      }
+      if (kind === "personality" && key in PERSONALITIES) PERSONALITIES[key as PersonalityKey] = config as PersonalityProfile;
+      if (kind === "mode") (MODES as Record<string, ModeProfile>)[key] = config as ModeProfile;
+      if ((kind === "personality" || kind === "mode") && Boolean(row.is_default)) this.defaults[kind] = key;
     }
   }
+
+  getDefault(kind: BehaviorKind): string | null { return this.defaults[kind]; }
 
   async list(kind?: BehaviorKind): Promise<BehaviorRecord[]> {
     await this.initialize();
@@ -77,16 +77,15 @@ class BehaviorRegistryService {
     await this.initialize();
     const current = (await this.list(kind)).find((item) => item.key === key);
     if (!current) throw new Error(`Unknown ${kind}: ${key}`);
-    if (patch.enabled === false) throw new Error("Built-in behavior profiles cannot be disabled; disable access by changing defaults or removing the assignment instead.");
+    const allowed = kind === "personality"
+      ? ["label", "description", "instruction"]
+      : ["displayName", "label", "description", "systemBehavior", "instruction", "preferredResponseStyle", "formattingProfile", "reasoningProfile", "researchPolicy", "codingPolicy", "tutoringPolicy"];
+    const safePatch = Object.fromEntries(Object.entries(patch).filter(([name]) => allowed.includes(name)));
     const currentConfig = typeof current.config === "string" ? JSON.parse(current.config) : { ...(current.config as Record<string, unknown>) };
-    const nextConfig = { ...(currentConfig as Record<string, unknown>), ...patch };
-    const label = String(patch.label ?? current.label);
-    const description = String(patch.description ?? current.description);
-    await db.execute(sql`
-      UPDATE ${sql.raw(TABLE)}
-      SET label=${label}, description=${description}, config=${JSON.stringify(nextConfig)}, updated_at=NOW()
-      WHERE kind=${kind} AND key=${key}
-    `);
+    const nextConfig = { ...(currentConfig as Record<string, unknown>), ...safePatch };
+    const label = String(safePatch.label ?? safePatch.displayName ?? current.label);
+    const description = String(safePatch.description ?? current.description);
+    await db.execute(sql`UPDATE ${sql.raw(TABLE)} SET label=${label}, description=${description}, config=${JSON.stringify(nextConfig)}, updated_at=NOW() WHERE kind=${kind} AND key=${key}`);
     await this.hydrateRuntime();
     const updated = (await this.list(kind)).find((item) => item.key === key);
     if (!updated) throw new Error("Behavior update could not be verified");
@@ -99,9 +98,10 @@ class BehaviorRegistryService {
     const exists = (await this.list(kind)).some((item) => item.key === key);
     if (!exists) throw new Error(`Unknown ${kind}: ${key}`);
     await db.transaction(async (tx) => {
-      await tx.execute(sql`UPDATE ${sql.raw(TABLE)} SET is_default=FALSE WHERE kind=${kind}`);
+      await tx.execute(sql`UPDATE ${sql.raw(TABLE)} SET is_default=FALSE, updated_at=NOW() WHERE kind=${kind}`);
       await tx.execute(sql`UPDATE ${sql.raw(TABLE)} SET is_default=TRUE, updated_at=NOW() WHERE kind=${kind} AND key=${key}`);
     });
+    this.defaults[kind] = key;
     await this.hydrateRuntime();
   }
 }
