@@ -235,7 +235,7 @@ router.post("/env", (req: Request, res: Response) => {
 });
 
 // POST /api/env/test - Dynamic connection test endpoint for credentials
-router.post("/api/env/test", async (req: Request, res: Response) => {
+router.post("/env/test", async (req: Request, res: Response) => {
   const { key, value } = req.body;
   if (!key || typeof key !== "string") {
     res.status(400).json({ error: "Missing 'key' parameter" });
@@ -322,7 +322,7 @@ router.post("/api/env/test", async (req: Request, res: Response) => {
 });
 
 // DELETE /api/env/:key - Delete a custom or optional variable
-router.delete("/api/env/:key", (req: Request, res: Response) => {
+router.delete("/env/:key", (req: Request, res: Response) => {
   const { key } = req.params;
   if (!key) {
     res.status(400).json({ error: "Missing key" });

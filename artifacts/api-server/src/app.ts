@@ -454,6 +454,24 @@ app.get("/", (_req, res) => {
         grid-template-columns: 1fr;
         gap: 0.5rem;
       }
+
+      /* Clean Responsive Horizontal Tables */
+      .table-container {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        background: #0f172a;
+        border: 1px solid var(--border);
+        border-radius: 0.5rem;
+        margin-bottom: 0.5rem;
+      }
+      .data-table {
+        width: 100%;
+        min-width: 620px;
+        border-collapse: collapse;
+      }
+      .data-table th, .data-table td {
+        white-space: nowrap;
+      }
     }
 
     @media (max-width: 480px) {
@@ -631,8 +649,8 @@ app.get("/", (_req, res) => {
             <tr>
               <th>Variable Name</th>
               <th>Category</th>
-              <th>Value / Secret Preview</th>
               <th>Status</th>
+              <th style="min-width: 220px;">Value / Secret Token</th>
               <th style="text-align:right;">Actions</th>
             </tr>
           </thead>
@@ -969,8 +987,8 @@ app.get("/", (_req, res) => {
           '<td>' + (k.totalSuccess || 0) + ' reqs' + (k.totalErrors > 0 ? ' <span style="color:var(--amber);font-size:0.75rem;">(' + k.totalErrors + ' err)</span>' : '') + '</td>' +
           '<td>' + (k.avgLatencyMs ? (k.avgLatencyMs + 'ms') : '--') + '</td>' +
           '<td style="text-align:right;">' +
-            '<button class="btn btn-sm btn-outline" style="margin-right:0.3rem;" onclick="toggleKey(\\'' + k.id + '\\')">' + toggleBtnText + '</button>' +
-            '<button class="btn btn-sm btn-danger" onclick="deleteKey(\\'' + k.id + '\\')">🗑️</button>' +
+            '<button class="btn btn-sm btn-outline" style="margin-right:0.3rem;" data-id="' + k.id + '" onclick="toggleKey(this.dataset.id)">' + toggleBtnText + '</button>' +
+            '<button class="btn btn-sm btn-danger" data-id="' + k.id + '" onclick="deleteKey(this.dataset.id)">🗑️</button>' +
           '</td>' +
         '</tr>';
       }).join('');
@@ -1238,7 +1256,7 @@ app.get("/", (_req, res) => {
               '<td><span class="pill-tag">' + escapeHtml(m.category) + '</span></td>' +
               '<td>' + escapeHtml(m.content) + '</td>' +
               '<td style="text-align:right;">' +
-                '<button class="btn btn-sm btn-danger" onclick="deleteMemory(\\'' + escapeHtml(m.key) + '\\')">🗑️</button>' +
+                '<button class="btn btn-sm btn-danger" data-key="' + escapeAttr(m.key) + '" onclick="deleteMemory(this.dataset.key)">🗑️</button>' +
               '</td>' +
             '</tr>';
           }).join('');
@@ -1432,14 +1450,14 @@ app.get("/", (_req, res) => {
         return '<tr>' +
           '<td><div class="code-badge" style="font-weight:700;">' + escapeHtml(v.key) + '</div><div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.2rem;">' + escapeHtml(v.description || '') + '</div></td>' +
           '<td><span class="pill-tag">' + escapeHtml(v.category) + '</span></td>' +
+          '<td>' + isSetBadge + '</td>' +
           '<td>' +
-            '<div style="display:flex;align-items:center;gap:0.4rem;">' +
-              '<input type="' + (isUnmasked ? 'text' : 'password') + '" id="env_input_' + safeKeyAttr + '" class="input" style="font-family:monospace;font-size:0.8rem;padding:0.35rem 0.5rem;width:100%;min-width:140px;box-sizing:border-box;" value="' + safeValAttr + '" />' +
-              (v.isSensitive ? '<button class="btn btn-sm btn-outline" style="padding:0.25rem 0.4rem;" data-key="' + safeKeyAttr + '" onclick="toggleEnvMask(this.dataset.key)">' + maskIcon + '</button>' : '') +
+            '<div style="display:flex;align-items:center;gap:0.4rem;width:100%;min-width:220px;">' +
+              '<input type="' + (isUnmasked ? 'text' : 'password') + '" id="env_input_' + safeKeyAttr + '" class="input" style="font-family:monospace;font-size:0.8rem;padding:0.4rem 0.6rem;width:100%;flex:1;min-width:0;box-sizing:border-box;" value="' + safeValAttr + '" />' +
+              (v.isSensitive ? '<button class="btn btn-sm btn-outline" style="padding:0.35rem 0.5rem;" data-key="' + safeKeyAttr + '" onclick="toggleEnvMask(this.dataset.key)">' + maskIcon + '</button>' : '') +
             '</div>' +
           '</td>' +
-          '<td>' + isSetBadge + '</td>' +
-          '<td style="text-align:right;white-space:nowrap;">' +
+          '<td style="text-align:right;">' +
             testBtn +
             '<button class="btn btn-sm" style="margin-right:0.35rem;" data-key="' + safeKeyAttr + '" onclick="saveEnvVar(this.dataset.key)">💾 Save</button>' +
             deleteBtn +

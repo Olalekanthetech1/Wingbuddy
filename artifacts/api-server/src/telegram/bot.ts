@@ -1299,12 +1299,22 @@ export function createTelegramBot(): TelegramBotRuntime {
 
   // Wire up the asynchronous worker queue handler
   telegramWorkerQueue.setUpdateHandler(async (update) => {
+    if (!bot.isInited()) {
+      await bot.init();
+    }
     await bot.handleUpdate(update);
   });
 
   return {
     bot,
     async start() {
+      if (!bot.isInited()) {
+        try {
+          await bot.init();
+        } catch (err) {
+          logger.warn({ error: safeErrorMetadata(err) }, "Failed to initialize bot during start()");
+        }
+      }
       reminderScheduler.start(bot);
       if (config.usePolling) {
         await bot.api.deleteWebhook();
