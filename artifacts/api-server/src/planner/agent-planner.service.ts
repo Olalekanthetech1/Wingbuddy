@@ -6,6 +6,7 @@ import type {
   CandidateNode,
   CompilerContext,
   ExecutionGraph,
+  InputBinding,
 } from "./types";
 import { PlannerCompiler } from "./planner-compiler";
 import { PlanPersistenceService, planPersistenceService } from "./plan-persistence.service";
@@ -84,7 +85,6 @@ export class AgentPlannerService {
         candidate = await this.generateDynamicCandidate(request, registry, autonomyDecision.executionReasons);
       } catch (error) {
         logger.error({ requestId: request.requestId, graphId, error: error instanceof Error ? error.message : String(error) }, "DYNAMIC_PLAN_GENERATION_FAILED");
-        // Preserve conversational availability without pretending that durable execution occurred.
         return {
           success: false,
           errorCode: "PLAN_GENERATION_FAILED",
@@ -94,6 +94,8 @@ export class AgentPlannerService {
         };
       }
     }
+
+    candidate = this.normalizeCandidateForExecution(candidate, registry, request);
 
     const toolTypes = Array.from(new Set((candidate.nodes || []).map((node) => node.actionSpec?.toolName).filter(Boolean) as string[]));
     const effectivePolicy = AdaptiveEngineService.computeAdaptiveExecutionPolicy({
@@ -194,6 +196,7 @@ export class AgentPlannerService {
     }
 
     candidate.graphId = graphId;
+    candidate = this.normalizeCandidateForExecution(candidate, registry, request);
     const toolTypes = Array.from(new Set(candidate.nodes.map((node) => node.actionSpec?.toolName).filter(Boolean) as string[]));
     const effectivePolicy = AdaptiveEngineService.computeAdaptiveExecutionPolicy({
       goal: candidate.goal,
@@ -250,33 +253,34 @@ export class AgentPlannerService {
         graphId: previousGraph.graphId,
         revision: previousGraph.planRevision,
         goal: previousGraph.goal,
-        failedNodeId: request.goal.match(/Recovery reason:/i) ? undefined : undefined,
         nodes: Object.values(previousGraph.nodes).map((node) => ({ id: node.id, title: node.title, type: node.type, toolName: node.actionSpec?.toolName })),
       } : null,
     };
 
     const prompt = [
       "You are the autonomous execution planner for Wingbuddy.",
-      "Generate a minimal, complete execution graph for the user's goal.",
+      "Generate the smallest complete execution graph for the user's goal.",
       "Return ONLY one JSON object matching the CandidatePlan shape; no markdown and no commentary.",
       "",
       "CandidatePlan shape:",
       '{"goal":"...","strategy":"...","nodes":[{"id":"n1","title":"...","type":"llm_reasoning|tool_call|memory_write|user_checkpoint|subgoal_aggregate","actionSpec":{"toolName":"REGISTERED_TOOL","parameters":{}},"reasoningSpec":{"prompt":"...","targetFormat":"markdown"},"memorySpec":{"key":"...","content":"...","category":"..."},"inputBindings":{},"approval":{"status":"not_required|pending","reason":"..."},"verification":{"required":false,"strategy":"none"},"dependsOn":[]}],"edges":[{"fromNodeId":"n1","toNodeId":"n2","dependencyType":"hard"}]}',
       "",
-      "Planner rules:",
-      "- Use only the registered tools supplied below. Never invent tool names.",
-      "- Create tool_call nodes for real external/durable actions; do not describe an action in an llm_reasoning node.",
+      "Planner invariants:",
+      "- A node with actionSpec MUST have type tool_call. Never put actionSpec on llm_reasoning.",
+      "- A tool_call node executes exactly one registered external/durable tool action.",
+      "- An llm_reasoning node is a pure transformation over supplied context and prior node outputs; it has no actionSpec.",
+      "- If a tool result must be synthesized, create a separate downstream llm_reasoning node and bind its inputs to the tool node output using {source:{type:\"node_output\",nodeId:<toolNodeId>,path:\"output\"}}.",
+      "- Never invent tool names; use only registered tools supplied below.",
       "- Use the fewest nodes that completely fulfill the goal; do not add generic analysis/evaluation steps merely to make the graph longer.",
-      "- Use inputBindings when one node genuinely depends on another node's output.",
       "- Do not fabricate missing dates, times, recipients, accounts, identifiers, or other material action parameters.",
-      "- When required action information is genuinely missing, do not invent it. A user_checkpoint may request explicit confirmation only when the graph can otherwise proceed safely; otherwise omit the side-effecting action and state the missing input in the final reasoning node.",
+      "- When required action information is genuinely missing, do not invent it. Use a user_checkpoint only when a safe, meaningful clarification is required for execution.",
       "- Registry security policy is authoritative. Never downgrade approval, capability, retry, or timeout requirements.",
-      "- Read-only informational requests should normally use search_information when external factual retrieval is actually needed, then a synthesis node if necessary.",
-      "- Durable task creation should use create_task with explicit title, goal and ordered steps when the user actually asks for persistent task state.",
-      "- Reminder scheduling should use create_reminder only when a valid future dueAt can be established from the user's request; otherwise do not guess.",
-      "- A final response/synthesis node should summarize verified tool outputs and must never claim an action succeeded without a successful tool result.",
+      "- For current/broad/multi-source information, prefer the registered live web search capability when it is available; do not substitute model memory for missing evidence.",
+      "- Durable task creation should use create_task with explicit title, goal and ordered steps when persistent task state is requested.",
+      "- Reminder scheduling should use create_reminder only when a valid future dueAt can be established; never guess.",
+      "- A final reasoning/synthesis node may claim success only from successful upstream tool results.",
       "",
-      `Execution reasons from the autonomy decision: ${JSON.stringify(reasons)}`,
+      `Execution reasons: ${JSON.stringify(reasons)}`,
       `Runtime context: ${JSON.stringify(context)}`,
       `Registered tools: ${JSON.stringify(tools)}`,
       "",
@@ -290,6 +294,100 @@ export class AgentPlannerService {
     if (!Array.isArray(parsed.nodes) || parsed.nodes.length === 0) throw new Error("Dynamic planner returned an empty plan.");
 
     return parsed;
+  }
+
+  /**
+   * Structural safety pass over model output.
+   * It never invents a tool. It only repairs shape violations that are
+   * mechanically unambiguous from the candidate graph itself.
+   */
+  private normalizeCandidateForExecution(candidate: CandidatePlan, registry: ToolRegistry, request: PlannerRequest): CandidatePlan {
+    const nodes = Array.isArray(candidate.nodes) ? candidate.nodes.map((node) => ({ ...node })) : [];
+    const normalizedNodes: CandidateNode[] = [];
+    const extraEdges = Array.isArray(candidate.edges) ? [...candidate.edges] : [];
+
+    for (const node of nodes) {
+      if (node.type === "llm_reasoning" && node.actionSpec?.toolName) {
+        const toolName = node.actionSpec.toolName.trim();
+        if (!registry.get(toolName)) {
+          normalizedNodes.push(node);
+          continue;
+        }
+
+        const toolNodeId = `${node.id || "node"}_tool`;
+        const reasoningNodeId = node.id || `${toolNodeId}_synthesis`;
+        const malformedOrDerivedBindings = Object.keys(node.inputBindings || {});
+
+        normalizedNodes.push({
+          ...node,
+          id: toolNodeId,
+          type: "tool_call",
+          title: `${node.title} — execute tool`,
+          actionSpec: node.actionSpec,
+          reasoningSpec: undefined,
+          inputBindings: undefined,
+        });
+
+        const shouldKeepReasoning = Boolean(node.reasoningSpec?.prompt?.trim());
+        if (shouldKeepReasoning) {
+          const reasoningBindings: Record<string, InputBinding> = {};
+          for (const parameterName of malformedOrDerivedBindings) {
+            reasoningBindings[parameterName] = {
+              source: {
+                type: "node_output",
+                nodeId: toolNodeId,
+                path: "output",
+              },
+            };
+          }
+          normalizedNodes.push({
+            ...node,
+            id: reasoningNodeId,
+            type: "llm_reasoning",
+            actionSpec: undefined,
+            inputBindings: reasoningBindings,
+            dependsOn: [toolNodeId],
+            reasoningSpec: node.reasoningSpec,
+          });
+          extraEdges.push({ fromNodeId: toolNodeId, toNodeId: reasoningNodeId, dependencyType: "hard" });
+        }
+
+        logger.warn({ requestId: request.requestId, originalNodeId: node.id, toolNodeId, repairedHybridNode: true }, "PLANNER_CANDIDATE_SHAPE_REPAIRED");
+        continue;
+      }
+
+      if (node.inputBindings) {
+        const validBindings: Record<string, InputBinding> = {};
+        for (const [key, binding] of Object.entries(node.inputBindings)) {
+          if (!binding?.source || typeof binding.source !== "object" || typeof (binding.source as any).type !== "string") {
+            continue;
+          }
+          const source = binding.source as any;
+          if (source.type === "node_output" && typeof source.nodeId === "string" && source.nodeId.trim()) {
+            validBindings[key] = {
+              source: {
+                type: "node_output",
+                nodeId: source.nodeId,
+                path: typeof source.path === "string" && source.path.trim() ? source.path : "output",
+              },
+            };
+          } else if (source.type === "literal" || source.type === "context") {
+            validBindings[key] = binding;
+          }
+        }
+        node.inputBindings = validBindings;
+      }
+
+      normalizedNodes.push(node);
+    }
+
+    const result: CandidatePlan = {
+      ...candidate,
+      goal: candidate.goal || request.goal,
+      nodes: normalizedNodes,
+      edges: extraEdges,
+    };
+    return result;
   }
 
   private parseCandidate(raw: string): CandidatePlan {
