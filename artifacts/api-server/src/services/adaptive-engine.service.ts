@@ -2,6 +2,7 @@ import { apiKeyPoolService } from "./api-key-pool.service";
 import type { ModeKey } from "../config/mode";
 import type { Message } from "@workspace/db";
 import { StructureAwareParser } from "../utils/telegram-formatter";
+import { MAX_GRAPH_NODES, MAX_GRAPH_EDGES, MAX_TOOL_CALLS, MAX_PLAN_REVISIONS, MAX_EXECUTION_DURATION_MS, type EffectiveExecutionPolicy } from "../planner/types";
 
 export interface AdaptiveHistoryOptions {
   mode?: ModeKey | string;
@@ -9,6 +10,16 @@ export interface AdaptiveHistoryOptions {
   memoriesCount?: number;
   semanticRecallCount?: number;
   availableMessages?: Array<{ role: string; content: string } | Message>;
+}
+
+
+export interface AdaptiveExecutionPolicyOptions {
+  goal: string;
+  subgoalCount?: number;
+  mode?: string;
+  enableSearch?: boolean;
+  toolTypes?: string[];
+  isDeepReasoning?: boolean;
 }
 
 export interface AdaptiveTimeoutOptions {
@@ -563,5 +574,73 @@ export class AdaptiveEngineService {
 
     return chunks;
   }
-}
 
+  // =========================================================================
+  // 7. ADAPTIVE EXECUTION POLICY (Resource Budgets)
+  // =========================================================================
+  /**
+   * Calculates an effective operating budget for autonomous graph execution.
+   * This is an adaptive operating limit bounded by absolute safety ceilings.
+   */
+  static computeAdaptiveExecutionPolicy(options: AdaptiveExecutionPolicyOptions): EffectiveExecutionPolicy {
+    let baseNodes = 3;
+    let baseEdges = 3;
+    let baseTools = 1;
+    let baseRevisions = 1;
+    let baseDurationMs = 60_000;
+
+    const goalLen = options.goal.length;
+    const isComplex = goalLen > 300 || (options.subgoalCount && options.subgoalCount > 2);
+    const modeStr = String(options.mode || "general");
+    
+    if (modeStr === "deep_research" || modeStr === "architect") {
+      baseNodes += 8;
+      baseEdges += 12;
+      baseTools += 6;
+      baseRevisions += 2;
+      baseDurationMs += 120_000;
+    } else if (isComplex) {
+      baseNodes += 5;
+      baseEdges += 8;
+      baseTools += 4;
+      baseRevisions += 1;
+      baseDurationMs += 60_000;
+    }
+
+    if (options.enableSearch) {
+      baseNodes += 3;
+      baseEdges += 3;
+      baseTools += 2;
+      baseDurationMs += 45_000;
+    }
+
+    if (options.isDeepReasoning) {
+      baseNodes += 5;
+      baseEdges += 5;
+      baseDurationMs += 60_000;
+    }
+
+    if (options.subgoalCount) {
+      baseNodes += Math.max(0, options.subgoalCount * 2);
+      baseEdges += Math.max(0, options.subgoalCount * 3);
+      baseTools += Math.max(0, options.subgoalCount);
+    }
+
+    if (options.toolTypes) {
+      for (const t of options.toolTypes) {
+        if (t === "code_execution" || t === "generate_video") {
+          baseDurationMs += 120_000;
+        }
+      }
+    }
+
+    return {
+      maxNodes: Math.min(MAX_GRAPH_NODES, baseNodes),
+      maxEdges: Math.min(MAX_GRAPH_EDGES, baseEdges),
+      maxToolCalls: Math.min(MAX_TOOL_CALLS, baseTools),
+      maxPlanRevisions: Math.min(MAX_PLAN_REVISIONS, baseRevisions),
+      maxExecutionDurationMs: Math.min(MAX_EXECUTION_DURATION_MS, baseDurationMs),
+    };
+  }
+
+}

@@ -1,4 +1,6 @@
 import { AdaptiveEngineService } from "./adaptive-engine.service";
+import { db } from "@workspace/db";
+import { sql } from "drizzle-orm";
 
 interface Bucket {
   count: number;
@@ -7,61 +9,81 @@ interface Bucket {
 }
 
 export class RateLimitService {
-  private readonly buckets = new Map<number, Bucket>();
-
   constructor(
     private readonly maxRequests?: number,
     private readonly windowMs?: number,
   ) {}
 
+  async initializeDb() {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS rate_limits (
+        user_id BIGINT PRIMARY KEY,
+        count INTEGER NOT NULL,
+        reset_at BIGINT NOT NULL,
+        allocated_max INTEGER NOT NULL
+      );
+    `);
+  }
+
   /**
    * Consumes a rate limit token using dynamic, adaptive capacity.
-   * If custom limits were not explicitly pinned, capacity dynamically scales
-   * with the number of healthy keys in the pool and key health status.
    */
-  consume(userId: number, now = Date.now()): boolean {
+  async consumeAsync(userId: number, now = Date.now()): Promise<boolean> {
     const adaptive = AdaptiveEngineService.computeAdaptiveRateLimit();
     const effectiveMax = this.maxRequests ?? adaptive.maxRequests;
     const effectiveWindow = this.windowMs ?? adaptive.windowMs;
+    const resetAtNew = now + effectiveWindow;
 
-    const current = this.buckets.get(userId);
-    if (!current || current.resetAt <= now) {
-      this.buckets.set(userId, {
-        count: 1,
-        resetAt: now + effectiveWindow,
-        allocatedMax: effectiveMax,
-      });
-      return true;
+    // Atomic upsert with Postgres
+    const res = await db.execute(sql`
+      INSERT INTO rate_limits (user_id, count, reset_at, allocated_max)
+      VALUES (${userId}, 1, ${resetAtNew}, ${effectiveMax})
+      ON CONFLICT (user_id) DO UPDATE SET
+        count = CASE 
+                  WHEN rate_limits.reset_at <= ${now} THEN 1
+                  ELSE rate_limits.count + 1
+                END,
+        reset_at = CASE 
+                     WHEN rate_limits.reset_at <= ${now} THEN ${resetAtNew}
+                     ELSE rate_limits.reset_at
+                   END,
+        allocated_max = ${effectiveMax}
+      RETURNING count, reset_at, allocated_max;
+    `);
+
+    const row = res.rows[0];
+    const dynamicLimit = this.maxRequests ?? Math.max(row.allocated_max, adaptive.maxRequests);
+
+    if (row.count > dynamicLimit) {
+      return false; // Rate limited
     }
-
-    // Dynamic adjustment: if key pool expanded or contracted mid-window, use current adaptive max
-    const dynamicLimit = this.maxRequests ?? Math.max(current.allocatedMax, adaptive.maxRequests);
-
-    if (current.count >= dynamicLimit) return false;
-    current.count += 1;
     return true;
   }
 
-  getQuotaStatus(userId: number, now = Date.now()): {
+  async getQuotaStatus(userId: number, now = Date.now()): Promise<{
     remaining: number;
     max: number;
     resetInMs: number;
-  } {
+  }> {
     const adaptive = AdaptiveEngineService.computeAdaptiveRateLimit();
     const effectiveMax = this.maxRequests ?? adaptive.maxRequests;
-    const effectiveWindow = this.windowMs ?? adaptive.windowMs;
-
-    const current = this.buckets.get(userId);
-    if (!current || current.resetAt <= now) {
+    
+    const res = await db.execute(sql`SELECT * FROM rate_limits WHERE user_id = ${userId}`);
+    if (res.rows.length === 0) {
       return { remaining: effectiveMax, max: effectiveMax, resetInMs: 0 };
     }
-
-    const remaining = Math.max(0, effectiveMax - current.count);
-    const resetInMs = Math.max(0, current.resetAt - now);
+    
+    const row = res.rows[0];
+    if (row.reset_at <= now) {
+      return { remaining: effectiveMax, max: effectiveMax, resetInMs: 0 };
+    }
+    
+    const remaining = Math.max(0, effectiveMax - row.count);
+    const resetInMs = Math.max(0, row.reset_at - now);
     return { remaining, max: effectiveMax, resetInMs };
   }
 
-  clear(userId: number): void {
-    this.buckets.delete(userId);
+  async clear(userId: number): Promise<void> {
+    await db.execute(sql`DELETE FROM rate_limits WHERE user_id = ${userId}`);
   }
 }

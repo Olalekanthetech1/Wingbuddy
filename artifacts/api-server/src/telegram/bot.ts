@@ -532,7 +532,7 @@ export function createTelegramBot(): TelegramBotRuntime {
       return;
     }
 
-    if (!rateLimiter.consume(ctx.from.id)) {
+    if (!await rateLimiter.consumeAsync(ctx.from.id)) {
       await ctx.reply("You’re sending requests a little too quickly. Please wait a moment and try again.");
       return;
     }
@@ -595,7 +595,7 @@ export function createTelegramBot(): TelegramBotRuntime {
       return;
     }
 
-    if (!rateLimiter.consume(ctx.from.id)) {
+    if (!await rateLimiter.consumeAsync(ctx.from.id)) {
       await ctx.reply("You’re sending requests a little too quickly. Please wait a moment and try again.");
       return;
     }
@@ -1015,7 +1015,7 @@ export function createTelegramBot(): TelegramBotRuntime {
     if (!(await requireAuthorized(ctx))) return;
     if (!ctx.from || !ctx.chat) return;
 
-    if (!rateLimiter.consume(ctx.from.id)) {
+    if (!await rateLimiter.consumeAsync(ctx.from.id)) {
       logger.warn(
         { stage: "rate_limiting", telegramUserId: ctx.from.id },
         "Telegram message rejected by rate limiter",
@@ -1692,6 +1692,7 @@ export function createTelegramBot(): TelegramBotRuntime {
   return {
     bot,
     async start() {
+    await rateLimiter.initializeDb();
       if (!bot.isInited()) {
         try {
           await bot.init();

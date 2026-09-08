@@ -592,5 +592,28 @@ describe("Agent Planner & Execution Graph Contracts", () => {
       expect(replannedGraph.planRevision).toBe(2);
       expect(replannedGraph.parentRevisionId).toBe("plan_activity_analysis_001:r1");
     });
+
+    it("rejects plan revision exceeding MAX_PLAN_REVISIONS", () => {
+      const graph = createValidBaseGraph();
+      graph.planRevision = 10;
+      graph.revisionId = `${graph.graphId}:r10`;
+
+      const result = GraphValidator.validate(graph);
+      expect(result.valid).toBe(false);
+      expect(result.errors.some((e) => e.code === "PLAN_REVISION_LIMIT_EXCEEDED")).toBe(true);
+    });
+
+    it("rejects graph edge count exceeding MAX_GRAPH_EDGES", () => {
+      const graph = createValidBaseGraph();
+      // Create excessive edges
+      graph.edges = [];
+      for (let i = 0; i < 160; i++) {
+        graph.edges.push({ fromNodeId: "step_fetch_data", toNodeId: "step_analyze" });
+      }
+
+      const result = GraphValidator.validate(graph);
+      expect(result.valid).toBe(false);
+      expect(result.errors.some((e) => e.code === "GRAPH_EDGES_EXCEEDED")).toBe(true);
+    });
   });
 });

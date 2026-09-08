@@ -7,9 +7,12 @@ import type {
 import {
   CURRENT_GRAPH_SCHEMA_VERSION,
   MAX_GRAPH_NODES,
+  MAX_GRAPH_EDGES,
   MAX_NODE_RETRIES,
   MIN_NODE_TIMEOUT_MS,
   MAX_NODE_TIMEOUT_MS,
+  MAX_TOOL_CALLS,
+  MAX_PLAN_REVISIONS,
 } from "./types";
 import { ToolRegistry, type ToolSecurityPolicy } from "../tools/tool-registry";
 
@@ -54,11 +57,40 @@ export class GraphValidator {
         code: "INVALID_PLAN_REVISION",
         message: `Plan revision must be an integer >= 1 (got: ${graph.planRevision}).`,
       });
+    } else if (graph.planRevision > MAX_PLAN_REVISIONS) {
+      errors.push({
+        severity: "error",
+        code: "PLAN_REVISION_LIMIT_EXCEEDED",
+        message: `Plan revision (${graph.planRevision}) exceeds maximum allowed limit of ${MAX_PLAN_REVISIONS}.`,
+      });
     }
 
     // 2. Graph Size Bounds
     const nodeKeys = Object.keys(graph.nodes || {});
     const totalNodes = nodeKeys.length;
+    const totalEdges = (graph.edges || []).length;
+
+    if (totalEdges > MAX_GRAPH_EDGES) {
+      errors.push({
+        severity: "error",
+        code: "GRAPH_EDGES_EXCEEDED",
+        message: `Graph edge count (${totalEdges}) exceeds maximum limit of ${MAX_GRAPH_EDGES}.`,
+      });
+    }
+
+    let toolCallCount = 0;
+    for (const node of Object.values(graph.nodes || {})) {
+      if (node && node.type === "tool_call") {
+        toolCallCount++;
+      }
+    }
+    if (toolCallCount > MAX_TOOL_CALLS) {
+      errors.push({
+        severity: "error",
+        code: "TOOL_CALL_LIMIT_EXCEEDED",
+        message: `Graph tool call count (${toolCallCount}) exceeds maximum limit of ${MAX_TOOL_CALLS}.`,
+      });
+    }
 
     if (totalNodes === 0) {
       errors.push({
@@ -78,7 +110,7 @@ export class GraphValidator {
       errors.push({
         severity: "error",
         code: "GRAPH_SIZE_EXCEEDED",
-        message: `Graph node count (${totalNodes}) exceeds maximum limit of ${MAX_GRAPH_NODES}.`,
+        message: `Graph node count (${totalNodes}) exceeds effective budget of ${MAX_GRAPH_NODES}.`, 
       });
     }
 

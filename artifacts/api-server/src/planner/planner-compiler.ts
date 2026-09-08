@@ -262,39 +262,34 @@ export class PlannerCompiler {
         });
       }
 
-      // 3e. Bounded Retries & Timeouts
-      const maxAttempts = cNode.retryPolicy?.maxAttempts ?? 1;
-      const backoffMs = cNode.retryPolicy?.backoffMs ?? 1000;
+      // 3e. Policy-Driven Retries & Timeouts (Strips LLM Authority)
+      let effectiveMaxAttempts = 1;
+      let effectiveTimeoutMs = 30000;
+      let backoffMs = 1000;
 
-      if (typeof maxAttempts !== "number" || maxAttempts < 0 || maxAttempts > MAX_NODE_RETRIES) {
-        diagnostics.push({
-          severity: "error",
-          code: "INVALID_RETRY_POLICY",
-          message: `Node "${canonicalId}" maxAttempts (${maxAttempts}) exceeds limit of ${MAX_NODE_RETRIES}.`,
-          nodeId: canonicalId,
-        });
+      if (cNode.type === "tool_call" && cNode.actionSpec?.toolName && context.toolRegistry) {
+        const policy = context.toolRegistry.getPolicy(cNode.actionSpec.toolName);
+        if (policy.destructive) {
+          effectiveMaxAttempts = 0; // Never automatically retry destructive operations
+        } else if (policy.confirmationRequired) {
+          effectiveMaxAttempts = 0; // Never retry operations needing human confirmation
+        } else {
+          // Idempotent/read-only tools
+          effectiveMaxAttempts = Math.min(3, MAX_NODE_RETRIES);
+        }
+        // Tool-specific timeout if any (fallback to 60s for external tools)
+        effectiveTimeoutMs = 60000;
+      } else if (cNode.type === "llm_reasoning") {
+        effectiveMaxAttempts = 2; // Reasoning can be retried a bit more safely
+        effectiveTimeoutMs = 120000;
       }
 
       const retryPolicy: NodeRetryPolicy = {
-        maxAttempts: Math.min(Math.max(0, maxAttempts), MAX_NODE_RETRIES),
+        maxAttempts: Math.min(effectiveMaxAttempts, MAX_NODE_RETRIES),
         backoffMs: Math.max(100, backoffMs),
       };
 
-      const rawTimeout = cNode.timeoutMs ?? 30000;
-      if (
-        typeof rawTimeout !== "number" ||
-        rawTimeout < MIN_NODE_TIMEOUT_MS ||
-        rawTimeout > MAX_NODE_TIMEOUT_MS
-      ) {
-        diagnostics.push({
-          severity: "error",
-          code: "INVALID_TIMEOUT",
-          message: `Node "${canonicalId}" timeout (${rawTimeout}) must be between ${MIN_NODE_TIMEOUT_MS}ms and ${MAX_NODE_TIMEOUT_MS}ms.`,
-          nodeId: canonicalId,
-        });
-      }
-
-      const timeoutMs = Math.min(Math.max(MIN_NODE_TIMEOUT_MS, rawTimeout), MAX_NODE_TIMEOUT_MS);
+      const timeoutMs = Math.min(Math.max(MIN_NODE_TIMEOUT_MS, effectiveTimeoutMs), MAX_NODE_TIMEOUT_MS);
 
       compiledNodes[canonicalId] = {
         id: canonicalId,
@@ -402,6 +397,7 @@ export class PlannerCompiler {
       status: requiresApproval ? "paused_for_approval" : "ready",
       nodes: compiledNodes,
       edges: compiledEdges,
+      effectivePolicy: context.effectivePolicy,
       metadata: {
         model: context.plannerModel || "gemini-3.8-flash",
         derivedStepCount,

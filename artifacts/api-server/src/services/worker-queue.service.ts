@@ -26,6 +26,7 @@ export interface QueueMetrics {
 export class TelegramWorkerQueueService {
   private readonly userQueues: Map<string, QueueTask[]> = new Map();
   private readonly processingUsers: Set<string> = new Set();
+  private readonly processedUpdates: Map<number, { taskId: string; status: 'queued' | 'processing' | 'completed' | 'failed'; timestamp: number }> = new Map();
   private activeWorkers = 0;
   private enqueuedTotal = 0;
   private completedTotal = 0;
@@ -72,7 +73,17 @@ export class TelegramWorkerQueueService {
       throw new Error("Worker queue is stopping");
     }
 
-    const taskId = `task_${update.update_id}_${Date.now()}`;
+    // Check idempotency by update_id
+    const existing = this.processedUpdates.get(update.update_id);
+    if (existing && (existing.status === 'queued' || existing.status === 'processing' || existing.status === 'completed')) {
+      logger.info({ updateId: update.update_id, existingTaskId: existing.taskId, status: existing.status }, "Duplicate Telegram update delivery deduplicated idempotently");
+      return {
+        taskId: existing.taskId,
+        queueLength: this.getPendingCount(),
+      };
+    }
+
+    const taskId = `task_${update.update_id}`;
     const userOrChatKey = this.extractRoutingKey(update);
 
     const task: QueueTask = {
@@ -83,6 +94,12 @@ export class TelegramWorkerQueueService {
       chatId: this.extractChatId(update),
       retries: 0,
     };
+
+    this.processedUpdates.set(update.update_id, {
+      taskId,
+      status: 'queued',
+      timestamp: Date.now(),
+    });
 
     if (!this.userQueues.has(userOrChatKey)) {
       this.userQueues.set(userOrChatKey, []);
@@ -153,6 +170,11 @@ export class TelegramWorkerQueueService {
 
   private async executeTask(userKey: string, task: QueueTask): Promise<void> {
     const start = Date.now();
+    this.processedUpdates.set(task.update.update_id, {
+      taskId: task.id,
+      status: 'processing',
+      timestamp: start,
+    });
     try {
       if (this.handler) {
         await this.handler(task.update);
@@ -160,6 +182,12 @@ export class TelegramWorkerQueueService {
       this.completedTotal += 1;
       const duration = Date.now() - start;
       this.totalProcessingTimeMs += duration;
+
+      this.processedUpdates.set(task.update.update_id, {
+        taskId: task.id,
+        status: 'completed',
+        timestamp: Date.now(),
+      });
 
       logger.debug(
         {
@@ -173,6 +201,11 @@ export class TelegramWorkerQueueService {
       );
     } catch (error) {
       this.failedTotal += 1;
+      this.processedUpdates.set(task.update.update_id, {
+        taskId: task.id,
+        status: 'failed',
+        timestamp: Date.now(),
+      });
       logger.error(
         {
           taskId: task.id,

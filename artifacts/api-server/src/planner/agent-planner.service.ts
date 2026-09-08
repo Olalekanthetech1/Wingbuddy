@@ -13,6 +13,7 @@ import { PlannerCompiler } from "./planner-compiler";
 import { PlanPersistenceService, planPersistenceService } from "./plan-persistence.service";
 import { ToolRegistry } from "../tools/tool-registry";
 import { getProductionToolRegistry } from "../tools/production-tools";
+import { AdaptiveEngineService } from "../services/adaptive-engine.service";
 import { logger } from "../lib/logger";
 
 export interface PlanStructuralCriteria {
@@ -88,6 +89,13 @@ export class AgentPlannerService {
     );
 
     // 2. Compile Candidate Plan through Deterministic Planner Compiler
+    const effectivePolicy = AdaptiveEngineService.computeAdaptiveExecutionPolicy({
+      goal: request.goal,
+      subgoalCount: candidate.nodes?.length || 0,
+      mode: request.context?.mode,
+      toolTypes: Array.from(new Set(candidate.nodes?.map(n => n.actionSpec?.toolName).filter(Boolean) as string[]))
+    });
+
     const compilerContext: CompilerContext = {
       telegramUserId: request.telegramUserId,
       requestId: request.requestId,
@@ -97,7 +105,8 @@ export class AgentPlannerService {
       toolRegistry: registry,
       userCapabilities: request.context?.capabilities || [],
       plannerModel: request.plannerModel || "gemini-3.8-flash",
-    };
+    effectivePolicy
+  };
 
     const compilationResult = PlannerCompiler.compile(candidate, compilerContext);
 
@@ -237,6 +246,13 @@ export class AgentPlannerService {
       );
     }
 
+    const effectivePolicy = AdaptiveEngineService.computeAdaptiveExecutionPolicy({
+      goal: candidate.goal,
+      subgoalCount: candidate.nodes?.length || 0,
+      mode: request.context?.mode,
+      toolTypes: Array.from(new Set(candidate.nodes?.map(n => n.actionSpec?.toolName).filter(Boolean) as string[]))
+    });
+
     const compilerContext: CompilerContext = {
       telegramUserId: replanRequest.telegramUserId,
       requestId: replanRequest.requestId,
@@ -247,6 +263,7 @@ export class AgentPlannerService {
       toolRegistry: registry,
       userCapabilities: replanRequest.context?.capabilities || [],
       plannerModel: replanRequest.plannerModel || "gemini-3.8-flash",
+  effectivePolicy
     };
 
     const compilationResult = PlannerCompiler.compile(candidate, compilerContext);

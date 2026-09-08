@@ -139,10 +139,14 @@ export async function ensureDatabaseSchema(pgPool?: pg.Pool): Promise<void> {
       metadata_json TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      completed_at TIMESTAMPTZ
+      completed_at TIMESTAMPTZ,
+      deadline_at TIMESTAMPTZ
     );
     CREATE INDEX IF NOT EXISTS agent_tasks_user_status_idx ON agent_tasks(telegram_user_id, status);
     CREATE INDEX IF NOT EXISTS agent_tasks_user_updated_idx ON agent_tasks(telegram_user_id, updated_at);
+
+    -- Ensure upgraded columns exist for agent_tasks
+    ALTER TABLE agent_tasks ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ;
 
     CREATE TABLE IF NOT EXISTS agent_task_steps (
       id SERIAL PRIMARY KEY,
@@ -232,11 +236,15 @@ export async function ensureDatabaseSchema(pgPool?: pg.Pool): Promise<void> {
       error_json TEXT,
       started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      completed_at TIMESTAMPTZ
+      completed_at TIMESTAMPTZ,
+      deadline_at TIMESTAMPTZ
     );
     CREATE INDEX IF NOT EXISTS execution_sessions_graph_rev_idx ON execution_sessions(graph_id, plan_revision);
     CREATE INDEX IF NOT EXISTS execution_sessions_status_idx ON execution_sessions(status);
     CREATE INDEX IF NOT EXISTS execution_sessions_user_idx ON execution_sessions(telegram_user_id);
+
+    -- Ensure upgraded columns exist for execution_sessions
+    ALTER TABLE execution_sessions ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ;
 
     CREATE TABLE IF NOT EXISTS node_executions (
       id SERIAL PRIMARY KEY,
@@ -253,11 +261,15 @@ export async function ensureDatabaseSchema(pgPool?: pg.Pool): Promise<void> {
       error_message TEXT,
       is_retryable BOOLEAN NOT NULL DEFAULT FALSE,
       started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      completed_at TIMESTAMPTZ
+      completed_at TIMESTAMPTZ,
+      deadline_at TIMESTAMPTZ
     );
     CREATE INDEX IF NOT EXISTS node_executions_graph_node_idx ON node_executions(graph_id, plan_revision, node_id);
     CREATE INDEX IF NOT EXISTS node_executions_idempotency_idx ON node_executions(idempotency_key);
     CREATE INDEX IF NOT EXISTS node_executions_status_idx ON node_executions(status);
+
+    -- Ensure upgraded columns exist for node_executions
+    ALTER TABLE node_executions ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ;
 
     CREATE TABLE IF NOT EXISTS execution_leases (
       id SERIAL PRIMARY KEY,

@@ -24,6 +24,8 @@ import { GraphValidator } from "../planner/graph-validator";
 import { ToolRegistry } from "../tools/tool-registry";
 import { getProductionToolRegistry } from "../tools/production-tools";
 import { executionPersistence } from "./persistence/execution-persistence.service";
+import { PersistenceError } from "./persistence/errors";
+import { logger } from "../lib/logger";
 import { concurrencyController } from "./concurrency/concurrency-controller";
 import { readyNodeResolver, type NodeResolutionState } from "./scheduler/ready-node-resolver";
 import { bindingResolver } from "./bindings/binding-resolver";
@@ -188,16 +190,26 @@ export class ExecutionEngine {
     }
 
     // 6. Check/Acquire Execution Session (duplicate request idempotency)
-    const existingSession = await executionPersistence.getSessionForGraph(
-      request.graphId,
-      request.planRevision,
-    );
+    let existingSession: ExecutionSession | null = null;
+    try {
+      existingSession = await executionPersistence.getSessionForGraph(
+        request.graphId,
+        request.planRevision,
+      );
+    } catch (err) {
+      if (err instanceof PersistenceError) {
+        throw new Error(`Cannot start execution: Authoritative session state unavailable. DB Error: ${err.message}`);
+      }
+      throw err;
+    }
 
     if (existingSession) {
       return existingSession;
     }
 
     const executionId = `exec_${request.graphId}_r${request.planRevision}_${Date.now()}`;
+    const deadlineMs = graph.effectivePolicy?.maxExecutionDurationMs ?? 600000;
+    const deadlineAt = new Date(Date.now() + deadlineMs).toISOString();
     const session: ExecutionSession = {
       executionId,
       requestId: request.requestId,
@@ -213,9 +225,17 @@ export class ExecutionEngine {
       waitingApprovalNodes: [],
       startedAt: timestamp,
       updatedAt: timestamp,
+      deadlineAt,
     };
 
-    await executionPersistence.saveExecutionSession(session);
+    try {
+      await executionPersistence.saveExecutionSession(session);
+    } catch (err) {
+      if (err instanceof PersistenceError) {
+        throw new Error(`Cannot start execution: Failed to persist authoritative session. DB Error: ${err.message}`);
+      }
+      throw err;
+    }
     const abortController = new AbortController();
     this.abortControllers.set(executionId, abortController);
 
@@ -249,10 +269,27 @@ export class ExecutionEngine {
     const config = getExecutionConfig();
 
     // Populate state from completed historical records
-    const historicalAttempts = await executionPersistence.getCompletedExecutionsForGraph(
-      graph.graphId,
-      graph.planRevision,
-    );
+    let historicalAttempts: NodeExecutionAttempt[] = [];
+    try {
+      historicalAttempts = await executionPersistence.getCompletedExecutionsForGraph(
+        graph.graphId,
+        graph.planRevision,
+      );
+    } catch (err) {
+      if (err instanceof PersistenceError) {
+        logger.error({ err, executionId: session.executionId }, "EXECUTION_ABORTED_PERSISTENCE_FAILURE");
+        session.status = "failed";
+        session.error = {
+          code: "PERSISTENCE_UNAVAILABLE",
+          message: `Execution aborted: Authoritative state could not be verified. ${err.message}`,
+          retryable: true,
+          category: "system",
+        };
+        await executionPersistence.saveExecutionSession(session, false).catch(() => {});
+        return;
+      }
+      throw err;
+    }
 
     const completedResults: Record<string, NodeResult> = {};
     const state: NodeResolutionState = {
@@ -270,131 +307,166 @@ export class ExecutionEngine {
     }
 
     while (!signal.aborted) {
-      // 1. Check Stale Worker Leases
-      await leaseRecoveryService.recoverStaleLeases();
+      try {
+        // 1. Check Stale Worker Leases
+        await leaseRecoveryService.recoverStaleLeases();
 
-      // 2. Resolve Ready Nodes
-      const resolution = readyNodeResolver.resolveReadyNodes(graph, state);
-
-      // Handle newly skipped nodes
-      for (const skippedId of resolution.newlySkippedNodeIds) {
-        state.skippedNodeIds.add(skippedId);
-      }
-
-      // Check Terminal Conditions
-      if (resolution.isTerminal && state.runningNodeIds.size === 0) {
-        const finalStatus = resolution.terminalStatus || "completed";
-        session.status = finalStatus;
-        session.completedNodes = Array.from(state.completedNodeIds);
-        session.failedNodes = Array.from(state.failedNodeIds);
-        session.waitingApprovalNodes = Array.from(state.waitingApprovalNodeIds);
-        session.updatedAt = new Date().toISOString();
-        if (finalStatus === "completed" || finalStatus === "failed") {
-          session.completedAt = new Date().toISOString();
-        }
-        if (finalStatus === "failed" && !session.error) {
+        
+        // 1.5 Check Execution Deadline
+        if (session.deadlineAt && new Date(session.deadlineAt).getTime() <= Date.now()) {
+          session.status = "failed";
           session.error = {
-            code: "GRAPH_EXECUTION_FAILED",
-            message: `Execution failed for node(s): ${Array.from(state.failedNodeIds).join(", ")}.`,
+            code: "EXECUTION_DEADLINE_EXCEEDED",
+            message: `Execution exceeded its hard deadline of ${session.deadlineAt}.`,
             retryable: false,
-            category: "tool",
+            category: "timeout",
           };
+          session.completedNodes = Array.from(state.completedNodeIds);
+          session.failedNodes = Array.from(state.failedNodeIds);
+          session.updatedAt = new Date().toISOString();
+          session.completedAt = session.updatedAt;
+          await executionPersistence.saveExecutionSession(session);
+          return; // Abort
         }
 
-        await executionPersistence.saveExecutionSession(session);
-        await taskServiceSync.syncGraphStatusToTask(session.taskId, finalStatus);
+        // 2. Resolve Ready Nodes
+        const resolution = readyNodeResolver.resolveReadyNodes(graph, state);
 
-        executionObservability.logEvent({
-          event: finalStatus === "completed" ? "GRAPH_COMPLETED" : finalStatus === "failed" ? "GRAPH_FAILED" : "EXECUTION_PAUSED",
-          timestamp: new Date().toISOString(),
-          requestId: session.requestId,
-          taskId: session.taskId,
-          graphId: graph.graphId,
-          revisionId: graph.revisionId,
-          executionId: session.executionId,
-        });
-
-        break;
-      }
-
-      if (resolution.readyNodes.length === 0 && state.runningNodeIds.size === 0) {
-        // No ready nodes and none running: terminal
-        break;
-      }
-
-      // 3. Dispatch ready nodes within concurrency limits
-      const dispatchPromises: Promise<void>[] = [];
-
-      for (const node of resolution.readyNodes) {
-        const toolName = node.type === "tool_call" ? node.actionSpec?.toolName : undefined;
-
-        // Check concurrency capacity
-        const capacity = concurrencyController.canExecute({
-          telegramUserId: context.telegramUserId,
-          graphId: graph.graphId,
-          toolName,
-        });
-
-        if (!capacity.allowed) {
-          // Will be picked up on next scheduler loop iteration
-          continue;
+        // Handle newly skipped nodes
+        for (const skippedId of resolution.newlySkippedNodeIds) {
+          state.skippedNodeIds.add(skippedId);
         }
 
-        // Check/Claim Atomic Lease
-        const claimResult = await executionPersistence.claimNodeAtomic({
-          executionId: session.executionId,
-          graphId: graph.graphId,
-          planRevision: graph.planRevision,
-          nodeId: node.id,
-          workerId: `worker_${process.pid || 1}`,
-          attempt: 1,
-          leaseDurationMs: config.leaseDurationMs,
-        });
+        // Check Terminal Conditions
+        if (resolution.isTerminal && state.runningNodeIds.size === 0) {
+          const finalStatus = resolution.terminalStatus || "completed";
+          session.status = finalStatus;
+          session.completedNodes = Array.from(state.completedNodeIds);
+          session.failedNodes = Array.from(state.failedNodeIds);
+          session.waitingApprovalNodes = Array.from(state.waitingApprovalNodeIds);
+          session.updatedAt = new Date().toISOString();
+          if (finalStatus === "completed" || finalStatus === "failed") {
+            session.completedAt = new Date().toISOString();
+          }
+          if (finalStatus === "failed" && !session.error) {
+            session.error = {
+              code: "GRAPH_EXECUTION_FAILED",
+              message: `Execution failed for node(s): ${Array.from(state.failedNodeIds).join(", ")}.`,
+              retryable: false,
+              category: "tool",
+            };
+          }
 
-        if (!claimResult.claimed) {
-          // Claimed by another worker
-          continue;
-        }
+          await executionPersistence.saveExecutionSession(session);
+          await taskServiceSync.syncGraphStatusToTask(session.taskId, finalStatus);
 
-        // Claimed: mark running and acquire concurrency slot
-        state.runningNodeIds.add(node.id);
-        concurrencyController.acquireSlot({
-          telegramUserId: context.telegramUserId,
-          graphId: graph.graphId,
-          toolName,
-        });
+          executionObservability.logEvent({
+            event: finalStatus === "completed" ? "GRAPH_COMPLETED" : finalStatus === "failed" ? "GRAPH_FAILED" : "EXECUTION_PAUSED",
+            timestamp: new Date().toISOString(),
+            requestId: session.requestId,
+            taskId: session.taskId,
+            graphId: graph.graphId,
+            revisionId: graph.revisionId,
+            executionId: session.executionId,
+          });
 
-        executionObservability.logEvent({
-          event: "NODE_CLAIMED",
-          timestamp: new Date().toISOString(),
-          requestId: session.requestId,
-          taskId: session.taskId,
-          graphId: graph.graphId,
-          nodeId: node.id,
-          executionId: session.executionId,
-        });
-
-        // Dispatch node execution asynchronously
-        dispatchPromises.push(
-          this.executeNode(node, graph, session, context, completedResults, state, signal).finally(() => {
-            state.runningNodeIds.delete(node.id);
-            concurrencyController.releaseSlot({
-              telegramUserId: context.telegramUserId,
-              graphId: graph.graphId,
-              toolName,
-            });
-          }),
-        );
-      }
-
-      if (dispatchPromises.length > 0) {
-        // Await current concurrent batch before re-evaluating DAG state
-        await Promise.all(dispatchPromises);
-      } else {
-        // If nothing was dispatched and nothing is running, break to prevent infinite loop
-        if (state.runningNodeIds.size === 0) {
           break;
         }
+
+        if (resolution.readyNodes.length === 0 && state.runningNodeIds.size === 0) {
+          // No ready nodes and none running: terminal
+          break;
+        }
+
+        // 3. Dispatch ready nodes within concurrency limits
+        const dispatchPromises: Promise<void>[] = [];
+
+        for (const node of resolution.readyNodes) {
+          const toolName = node.type === "tool_call" ? node.actionSpec?.toolName : undefined;
+
+          // Check concurrency capacity
+          const capacity = concurrencyController.canExecute({
+            telegramUserId: context.telegramUserId,
+            graphId: graph.graphId,
+            toolName,
+          });
+
+          if (!capacity.allowed) {
+            // Will be picked up on next scheduler loop iteration
+            continue;
+          }
+
+          // Check/Claim Atomic Lease
+          const claimResult = await executionPersistence.claimNodeAtomic({
+            executionId: session.executionId,
+            graphId: graph.graphId,
+            planRevision: graph.planRevision,
+            nodeId: node.id,
+            workerId: `worker_${process.pid || 1}`,
+            attempt: 1,
+            leaseDurationMs: config.leaseDurationMs,
+          });
+
+          if (!claimResult.claimed) {
+            // Claimed by another worker
+            continue;
+          }
+
+          // Claimed: mark running and acquire concurrency slot
+          state.runningNodeIds.add(node.id);
+          concurrencyController.acquireSlot({
+            telegramUserId: context.telegramUserId,
+            graphId: graph.graphId,
+            toolName,
+          });
+
+          executionObservability.logEvent({
+            event: "NODE_CLAIMED",
+            timestamp: new Date().toISOString(),
+            requestId: session.requestId,
+            taskId: session.taskId,
+            graphId: graph.graphId,
+            nodeId: node.id,
+            executionId: session.executionId,
+          });
+
+          // Dispatch node execution asynchronously
+          dispatchPromises.push(
+            this.executeNode(node, graph, session, context, completedResults, state, signal).finally(() => {
+              state.runningNodeIds.delete(node.id);
+              concurrencyController.releaseSlot({
+                telegramUserId: context.telegramUserId,
+                graphId: graph.graphId,
+                toolName,
+              });
+            }),
+          );
+        }
+
+        if (dispatchPromises.length > 0) {
+          // Await current concurrent batch before re-evaluating DAG state
+          await Promise.all(dispatchPromises);
+        } else {
+          // If nothing was dispatched and nothing is running, break to prevent infinite loop
+          if (state.runningNodeIds.size === 0) {
+            break;
+          }
+        }
+      } catch (err) {
+        if (err instanceof PersistenceError) {
+          logger.error({ err, executionId: session.executionId }, "EXECUTION_HALTED_PERSISTENCE_FAILURE");
+          session.status = "failed";
+          session.error = {
+            code: "PERSISTENCE_UNAVAILABLE",
+            message: `Execution halted: Authoritative state could not be verified. ${err.message}`,
+            retryable: true,
+            category: "system",
+          };
+          // Try one last-ditch save (will likely fail, but that's okay)
+          await executionPersistence.saveExecutionSession(session, false).catch(() => {});
+          return;
+        }
+        throw err;
       }
     }
 

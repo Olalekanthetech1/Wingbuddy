@@ -109,4 +109,36 @@ describe("TelegramWorkerQueueService", () => {
     expect(metrics.failedTotal).toBe(1);
     expect(metrics.completedTotal).toBe(1);
   });
+
+  it("ensures strict idempotency: duplicate deliveries of the same update_id return identical taskId and execute exactly once", async () => {
+    const queue = new TelegramWorkerQueueService();
+    let executions = 0;
+
+    queue.setUpdateHandler(async () => {
+      executions++;
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    const update: Update = {
+      update_id: 5005,
+      message: {
+        message_id: 1,
+        date: Math.floor(Date.now() / 1000),
+        chat: { id: 500, type: "private" },
+        from: { id: 500, is_bot: false, first_name: "Idempotent" },
+        text: "Test idempotency",
+      },
+    };
+
+    const res1 = queue.enqueue(update);
+    const res2 = queue.enqueue(update); // Duplicate delivery
+
+    expect(res1.taskId).toBe(res2.taskId);
+    expect(res1.taskId).toBe("task_5005");
+
+    await queue.drain(1000);
+
+    expect(executions).toBe(1);
+    expect(queue.getMetrics().completedTotal).toBe(1);
+  });
 });

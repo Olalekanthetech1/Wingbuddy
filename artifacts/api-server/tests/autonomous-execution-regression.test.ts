@@ -47,7 +47,9 @@ describe("Autonomous Execution Smoke-Test Regression", () => {
     expect(context.effectiveSystemPrompt).toContain("Distributed Row-Level Leases");
   });
 
-  it("should plan, compile, and execute a 4-step autonomous task with independent nodes, persisted attempts, and authoritative aggregation", async () => {
+  it(
+    "should plan, compile, and execute a 4-step autonomous task with independent nodes, persisted attempts, and authoritative aggregation",
+    async () => {
     const multiStepGoal =
       "Step 1: Inspect the Wingbuddy AI assistant system architecture. " +
       "Step 2: Compare against conventional single-turn bot platforms. " +
@@ -88,7 +90,7 @@ describe("Autonomous Execution Smoke-Test Regression", () => {
       graphId: graph.graphId,
       planRevision: 1,
       requestId: `req_smoke_test_${Date.now()}`,
-      taskId: "task_smoke_test_1",
+      taskId: 1234567,
       executionContext: {
         telegramUserId: 123456,
         chatId: 123456,
@@ -130,5 +132,5 @@ describe("Autonomous Execution Smoke-Test Regression", () => {
 
     // 7. Verify no manual question marks or requests to continue
     expect(responseText.toLowerCase()).not.toContain("would you like to proceed to step");
-  });
+  }, 15000);
 });

@@ -1,4 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
+import { db } from "@workspace/db";
+import { sql } from "drizzle-orm";
 import { logger } from "../lib/logger";
 import { safeErrorMetadata } from "../utils/safe-error";
 
@@ -57,6 +59,55 @@ export class ApiKeyPoolService {
   private mask(key: string): string {
     if (!key || key.length < 8) return "••••••••";
     return `${key.slice(0, 6)}...${key.slice(-4)}`;
+  }
+
+  
+  public async initializeDb(): Promise<void> {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS api_keys_health (
+        id TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        cooldown_until BIGINT,
+        total_success INTEGER NOT NULL DEFAULT 0,
+        total_errors INTEGER NOT NULL DEFAULT 0,
+        avg_latency_ms INTEGER
+      );
+    `);
+  }
+
+  public async syncFromDb(): Promise<void> {
+    try {
+      const res = await db.execute(sql`SELECT * FROM api_keys_health`);
+      for (const row of res.rows) {
+        const item = this.keys.get(row.id as string);
+        if (item) {
+          item.status = row.status as any;
+          item.cooldownUntil = row.cooldown_until ? Number(row.cooldown_until) : undefined;
+          item.totalSuccess = Number(row.total_success) || 0;
+          item.totalErrors = Number(row.total_errors) || 0;
+          item.avgLatencyMs = row.avg_latency_ms ? Number(row.avg_latency_ms) : undefined;
+        }
+      }
+    } catch(e) {
+      logger.warn({ error: String(e) }, "Failed to sync keys from DB");
+    }
+  }
+
+  private async syncToDb(item: ManagedKey): Promise<void> {
+    try {
+      await db.execute(sql`
+        INSERT INTO api_keys_health (id, status, cooldown_until, total_success, total_errors, avg_latency_ms)
+        VALUES (${item.id}, ${item.status}, ${item.cooldownUntil || null}, ${item.totalSuccess}, ${item.totalErrors}, ${item.avgLatencyMs || null})
+        ON CONFLICT (id) DO UPDATE SET
+          status = ${item.status},
+          cooldown_until = ${item.cooldownUntil || null},
+          total_success = ${item.totalSuccess},
+          total_errors = ${item.totalErrors},
+          avg_latency_ms = ${item.avgLatencyMs || null}
+      `);
+    } catch(e) {
+      logger.warn({ error: String(e) }, "Failed to sync key to DB");
+    }
   }
 
   private discoverInitialKeys(passedKeys?: Array<{ key: string; name?: string }>) {
@@ -367,7 +418,8 @@ export class ApiKeyPoolService {
     return candidates;
   }
 
-  public getOrderedKeysForExecution(): ManagedKey[] {
+  public async getOrderedKeysForExecution(): Promise<ManagedKey[]> {
+    await this.syncFromDb();
     const healthy = this.getHealthyCandidateKeys();
     if (healthy.length === 0) {
       // If all are in cooldown or disabled, return non-disabled sorted by cooldown time
@@ -404,10 +456,12 @@ export class ApiKeyPoolService {
     item.status = "healthy";
     delete item.cooldownUntil;
     item.lastUsedAt = new Date().toISOString();
+    void this.syncToDb(item);
 
     if (latencyMs && latencyMs > 0) {
+      // Stronger EMA (90/10) to resist single-sample noise
       item.avgLatencyMs = item.avgLatencyMs
-        ? Math.round((item.avgLatencyMs * 4 + latencyMs) / 5)
+        ? Math.round((item.avgLatencyMs * 9 + latencyMs) / 10)
         : latencyMs;
     }
   }
@@ -430,6 +484,8 @@ export class ApiKeyPoolService {
     if (isQuotaOr429) {
       item.status = "cooldown";
       item.cooldownUntil = Date.now() + this.defaultCooldownMs;
+      // Hysteresis: Require consecutive successes to clear status if we wanted, but for now we enforce minimum cooldown.
+      void this.syncToDb(item);
       logger.warn(
         { id: item.id, name: item.name, cooldownSeconds: this.defaultCooldownMs / 1000 },
         "Key entered cooldown due to 429 quota exhaustion; auto-failing over to next available key",

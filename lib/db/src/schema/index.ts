@@ -108,6 +108,7 @@ export const agentTasksTable = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
+    deadlineAt: timestamp("deadline_at", { withTimezone: true }),
   },
   (table) => [
     index("agent_tasks_user_status_idx").on(table.telegramUserId, table.status),
@@ -232,6 +233,7 @@ export const executionSessionsTable = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
+    deadlineAt: timestamp("deadline_at", { withTimezone: true }),
   },
   (table) => [
     uniqueIndex("execution_sessions_execution_id_idx").on(table.executionId),
@@ -259,6 +261,7 @@ export const nodeExecutionsTable = pgTable(
     isRetryable: boolean("is_retryable").default(false).notNull(),
     startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
+    deadlineAt: timestamp("deadline_at", { withTimezone: true }),
   },
   (table) => [
     uniqueIndex("node_executions_idempotency_idx").on(table.idempotencyKey),

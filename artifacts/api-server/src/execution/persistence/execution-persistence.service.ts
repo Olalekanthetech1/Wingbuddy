@@ -1,5 +1,6 @@
 import { getPool } from "@workspace/db";
 import { logger } from "../../lib/logger";
+import { PersistenceError } from "./errors";
 import type {
   ExecutionSession,
   NodeExecutionAttempt,
@@ -34,7 +35,7 @@ export class ExecutionPersistenceService {
 
   // --- Execution Sessions ---
 
-  async saveExecutionSession(session: ExecutionSession): Promise<void> {
+  async saveExecutionSession(session: ExecutionSession, mustBeAuthoritative = true): Promise<void> {
     this.sessions.set(session.executionId, JSON.parse(JSON.stringify(session)));
 
     if (this.isDbAvailable()) {
@@ -49,14 +50,15 @@ export class ExecutionPersistenceService {
         await pool.query(
           `INSERT INTO execution_sessions (
             execution_id, request_id, task_id, graph_id, plan_revision, revision_id,
-            telegram_user_id, status, current_nodes_json, error_json, started_at, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            telegram_user_id, status, current_nodes_json, error_json, started_at, updated_at, deadline_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
           ON CONFLICT (execution_id) DO UPDATE SET
             status = $8,
             current_nodes_json = $9,
             error_json = $10,
             updated_at = $12,
-            completed_at = CASE WHEN $8 IN ('completed', 'failed', 'cancelled') THEN NOW() ELSE execution_sessions.completed_at END`,
+            completed_at = CASE WHEN $8 IN ('completed', 'failed', 'cancelled') THEN NOW() ELSE execution_sessions.completed_at END,
+            deadline_at = $13`,
           [
             session.executionId,
             session.requestId,
@@ -70,15 +72,21 @@ export class ExecutionPersistenceService {
             session.error ? JSON.stringify(session.error) : null,
             new Date(session.startedAt),
             new Date(session.updatedAt),
+            session.deadlineAt ? new Date(session.deadlineAt) : null,
           ],
         );
       } catch (err) {
+        if (mustBeAuthoritative) {
+          throw new PersistenceError(`Failed to save authoritative execution session: ${session.executionId}`, err);
+        }
         logger.warn({ err: String(err) }, "EXECUTION_SESSION_DB_SAVE_FALLBACK");
       }
+    } else if (mustBeAuthoritative) {
+      throw new PersistenceError("Database unavailable for authoritative execution session save.");
     }
   }
 
-  async getExecutionSession(executionId: string): Promise<ExecutionSession | null> {
+  async getExecutionSession(executionId: string, mustBeAuthoritative = true): Promise<ExecutionSession | null> {
     if (this.isDbAvailable()) {
       try {
         const pool = getPool();
@@ -132,11 +140,16 @@ export class ExecutionPersistenceService {
             startedAt: new Date(row.started_at).toISOString(),
             updatedAt: new Date(row.updated_at).toISOString(),
             completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : inMem?.completedAt,
+            deadlineAt: row.deadline_at ? new Date(row.deadline_at).toISOString() : inMem?.deadlineAt,
           };
         }
-      } catch {
-        // Fall back to memory
+      } catch (err) {
+        if (mustBeAuthoritative) {
+          throw new PersistenceError(`Failed to fetch authoritative execution session: ${executionId}`, err);
+        }
       }
+    } else if (mustBeAuthoritative) {
+      throw new PersistenceError("Database unavailable for authoritative execution session fetch.");
     }
     return this.sessions.get(executionId) || null;
   }
@@ -248,7 +261,7 @@ export class ExecutionPersistenceService {
     workerId: string;
     attempt: number;
     leaseDurationMs: number;
-  }): Promise<{ claimed: boolean; lease?: ExecutionLease; reason?: string }> {
+  }, mustBeAuthoritative = true): Promise<{ claimed: boolean; lease?: ExecutionLease; reason?: string }> {
     const leaseKey = `${params.graphId}:r${params.planRevision}:${params.nodeId}`;
     const now = Date.now();
     const expiresAt = new Date(now + params.leaseDurationMs);
@@ -311,8 +324,13 @@ export class ExecutionPersistenceService {
           client.release();
         }
       } catch (err) {
+        if (mustBeAuthoritative) {
+          throw new PersistenceError(`Failed to claim authoritative node lease: ${leaseKey}`, err);
+        }
         logger.warn({ err: String(err) }, "LEASE_DB_CLAIM_FALLBACK");
       }
+    } else if (mustBeAuthoritative) {
+      throw new PersistenceError("Database unavailable for authoritative node lease claim.");
     }
 
     // In-memory fallback
@@ -438,7 +456,7 @@ export class ExecutionPersistenceService {
 
   // --- Node Execution Records & Idempotency ---
 
-  async recordNodeExecution(attempt: NodeExecutionAttempt): Promise<void> {
+  async recordNodeExecution(attempt: NodeExecutionAttempt, mustBeAuthoritative = true): Promise<void> {
     this.nodeExecutions.set(attempt.idempotencyKey, JSON.parse(JSON.stringify(attempt)));
 
     if (this.isDbAvailable()) {
@@ -475,12 +493,17 @@ export class ExecutionPersistenceService {
           ],
         );
       } catch (err) {
+        if (mustBeAuthoritative) {
+          throw new PersistenceError(`Failed to record authoritative node execution: ${attempt.idempotencyKey}`, err);
+        }
         logger.warn({ err: String(err) }, "NODE_EXECUTION_DB_SAVE_FALLBACK");
       }
+    } else if (mustBeAuthoritative) {
+      throw new PersistenceError("Database unavailable for authoritative node execution record.");
     }
   }
 
-  async getNodeExecution(idempotencyKey: string): Promise<NodeExecutionAttempt | null> {
+  async getNodeExecution(idempotencyKey: string, mustBeAuthoritative = true): Promise<NodeExecutionAttempt | null> {
     if (this.isDbAvailable()) {
       try {
         const pool = getPool();
@@ -513,9 +536,13 @@ export class ExecutionPersistenceService {
             completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : undefined,
           };
         }
-      } catch {
-        // Fallback
+      } catch (err) {
+        if (mustBeAuthoritative) {
+          throw new PersistenceError(`Failed to fetch authoritative node execution: ${idempotencyKey}`, err);
+        }
       }
+    } else if (mustBeAuthoritative) {
+      throw new PersistenceError("Database unavailable for authoritative node execution fetch.");
     }
     return this.nodeExecutions.get(idempotencyKey) || null;
   }
@@ -523,6 +550,7 @@ export class ExecutionPersistenceService {
   async getCompletedExecutionsForGraph(
     graphId: string,
     planRevision: number,
+    mustBeAuthoritative = true,
   ): Promise<NodeExecutionAttempt[]> {
     const results: NodeExecutionAttempt[] = [];
     if (this.isDbAvailable()) {
@@ -550,10 +578,14 @@ export class ExecutionPersistenceService {
             completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : undefined,
           });
         }
-        if (results.length > 0) return results;
-      } catch {
-        // Fallback
+        return results;
+      } catch (err) {
+        if (mustBeAuthoritative) {
+          throw new PersistenceError(`Failed to fetch authoritative completed executions for graph: ${graphId}`, err);
+        }
       }
+    } else if (mustBeAuthoritative) {
+      throw new PersistenceError("Database unavailable for authoritative completed executions fetch.");
     }
 
     for (const execution of this.nodeExecutions.values()) {

@@ -168,7 +168,7 @@ export class GeminiService {
       });
     }
 
-    const candidateKeys = this.pool.getOrderedKeysForExecution();
+    const candidateKeys = await this.pool.getOrderedKeysForExecution();
     let lastError: unknown;
 
     for (const keyInfo of candidateKeys) {
@@ -261,7 +261,7 @@ export class GeminiService {
       );
     }
 
-    const candidateKeys = this.pool.getOrderedKeysForExecution();
+    const candidateKeys = await this.pool.getOrderedKeysForExecution();
     let lastError: unknown;
 
     for (const keyInfo of candidateKeys) {

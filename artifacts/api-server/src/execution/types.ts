@@ -60,6 +60,7 @@ export interface ExecutionSession {
   startedAt: string;
   updatedAt: string;
   completedAt?: string;
+  deadlineAt?: string;
 }
 
 export interface NodeExecutionAttempt {
@@ -76,6 +77,7 @@ export interface NodeExecutionAttempt {
   isRetryable: boolean;
   startedAt: string;
   completedAt?: string;
+  deadlineAt?: string;
 }
 
 export interface ExecutionLease {
@@ -149,6 +151,7 @@ export interface ExecutionStatusResponse {
   startedAt: string;
   updatedAt: string;
   completedAt?: string;
+  deadlineAt?: string;
   failure?: ExecutionError;
   nodeResults: Record<string, NodeResult>;
 }

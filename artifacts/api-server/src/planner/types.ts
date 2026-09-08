@@ -7,9 +7,13 @@ import type { ToolRegistry, ToolSecurityPolicy } from "../tools/tool-registry";
 
 export const CURRENT_GRAPH_SCHEMA_VERSION = 1;
 export const MAX_GRAPH_NODES = 50;
+export const MAX_GRAPH_EDGES = 150;
 export const MAX_NODE_RETRIES = 5;
 export const MIN_NODE_TIMEOUT_MS = 100;
 export const MAX_NODE_TIMEOUT_MS = 300_000; // 5 minutes
+export const MAX_TOOL_CALLS = 30;
+export const MAX_PLAN_REVISIONS = 5;
+export const MAX_EXECUTION_DURATION_MS = 600_000; // 10 minutes
 
 export type GraphStatus =
   | "draft"
@@ -200,6 +204,14 @@ export interface GraphMetadata {
   updatedAt: string;
 }
 
+export interface EffectiveExecutionPolicy {
+  maxNodes: number;
+  maxEdges: number;
+  maxToolCalls: number;
+  maxPlanRevisions: number;
+  maxExecutionDurationMs: number;
+}
+
 export interface ExecutionGraph {
   schemaVersion: number;
   graphId: string;
@@ -213,6 +225,7 @@ export interface ExecutionGraph {
   edges: GraphEdge[];
   cancellation?: GraphCancellationSignal;
   metadata: GraphMetadata;
+  effectivePolicy?: EffectiveExecutionPolicy;
 }
 
 /**
@@ -307,6 +320,7 @@ export interface CompilerContext {
   userCapabilities?: string[];
   plannerModel?: string;
   timestamp?: string;
+  effectivePolicy?: EffectiveExecutionPolicy;
 }
 
 export interface CompilationResult {
