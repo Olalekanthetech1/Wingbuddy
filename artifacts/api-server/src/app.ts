@@ -11,6 +11,7 @@ import { renderDashboardHtml } from "./dashboard-ui";
 import { renderDashboardModelControls } from "./dashboard-model-controls";
 import { renderDashboardControlPlane } from "./dashboard-control-plane";
 import { renderDashboardBotSimulator } from "./dashboard-bot-simulator";
+import { renderDashboardBehaviorControls } from "./dashboard-behavior-controls";
 import { apiKeyPoolService } from "./services/api-key-pool.service";
 
 const app: Express = express();
@@ -22,13 +23,8 @@ app.use(express.urlencoded({ extended: true }));
 let realTelegramRuntime: ReturnType<typeof createTelegramBot> | null = null;
 let runtimeHydrationReady = false;
 
-export function setRuntimeHydrationReady(ready: boolean): void {
-  runtimeHydrationReady = ready;
-}
-
-export function isRuntimeHydrationReady(): boolean {
-  return runtimeHydrationReady;
-}
+export function setRuntimeHydrationReady(ready: boolean): void { runtimeHydrationReady = ready; }
+export function isRuntimeHydrationReady(): boolean { return runtimeHydrationReady; }
 
 export function initOrReloadTelegramBot(): ReturnType<typeof createTelegramBot> | null {
   if (!runtimeHydrationReady) return realTelegramRuntime;
@@ -79,10 +75,7 @@ const handleTelegramWebhook = (req: Request, res: Response): void => {
 };
 app.post("/api/telegram/webhook", handleTelegramWebhook);
 app.post("/telegram/webhook", handleTelegramWebhook);
-
-app.get("/api/telegram/queue-metrics", (_req: Request, res: Response) => {
-  res.json({ status: "ok", workerQueue: telegramWorkerQueue.getMetrics() });
-});
+app.get("/api/telegram/queue-metrics", (_req: Request, res: Response) => res.json({ status: "ok", workerQueue: telegramWorkerQueue.getMetrics() }));
 
 app.get("/api/dashboard/runtime", (_req: Request, res: Response) => {
   const split = (name: string): string[] => (process.env[name] || "").split(",").map((value) => value.trim()).filter(Boolean);
@@ -97,7 +90,7 @@ app.use("/api", router);
 
 const serveDashboard = (_req: Request, res: Response): void => {
   const html = renderDashboardHtml();
-  const enhanced = html.replace("</body>", `${renderDashboardModelControls()}${renderDashboardControlPlane()}${renderDashboardBotSimulator()}</body>`);
+  const enhanced = html.replace("</body>", `${renderDashboardModelControls()}${renderDashboardControlPlane()}${renderDashboardBotSimulator()}${renderDashboardBehaviorControls()}</body>`);
   res.type("html").send(enhanced);
 };
 app.get("/", serveDashboard);
