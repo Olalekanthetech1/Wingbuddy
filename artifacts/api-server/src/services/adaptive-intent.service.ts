@@ -139,7 +139,7 @@ export class AdaptiveIntentService {
         const candidateRaw = match[1].trim();
         const canonicalMode = resolveMode(candidateRaw);
         if (canonicalMode) {
-          let cleanedPrompt = trimmed
+          let cleanedPrompt: string | undefined = trimmed
             .replace(match[0], "")
             .replace(/^[\s,;.]*(and|then|please|also|for me)[\s,;.]*/i, "")
             .trim();
@@ -219,7 +219,7 @@ export class AdaptiveIntentService {
     for (const matcher of semanticMatchers) {
       for (const pattern of matcher.patterns) {
         if (pattern.test(trimmed)) {
-          let cleaned = trimmed
+          let cleaned: string | undefined = trimmed
             .replace(pattern, "")
             .replace(/^[\s,;.]*(and|then|please|also|for me)[\s,;.]*/i, "")
             .trim();

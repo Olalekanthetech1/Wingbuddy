@@ -54,7 +54,8 @@ router.post("/keys", async (req: Request, res: Response) => {
 
 // DELETE /api/keys/:id - Remove a key
 router.delete("/keys/:id", async (req: Request, res: Response) => {
-  const { id } = req.params;
+  const rawId = req.params.id;
+  const id = Array.isArray(rawId) ? rawId[0] : rawId;
   const removed = apiKeyPoolService.removeKey(id);
   if (!removed) {
     res.status(404).json({ error: "Key not found" });
@@ -66,7 +67,8 @@ router.delete("/keys/:id", async (req: Request, res: Response) => {
 
 // PATCH /api/keys/:id/toggle - Enable/disable a key
 router.patch("/keys/:id/toggle", (req: Request, res: Response) => {
-  const { id } = req.params;
+  const rawId = req.params.id;
+  const id = Array.isArray(rawId) ? rawId[0] : rawId;
   const updated = apiKeyPoolService.toggleKey(id);
   if (!updated) {
     res.status(404).json({ error: "Key not found" });
@@ -158,7 +160,7 @@ router.post("/chat/test", async (req: Request, res: Response) => {
       {
         personalityInstruction: personality ? `Personality: ${personality}` : undefined,
         modeInstruction: mode ? `Mode: ${mode}` : undefined,
-        memoryContext: memoryContext || undefined,
+        memoryInstruction: memoryContext || undefined,
       },
       { enableSearch: Boolean(enableSearch) },
     );

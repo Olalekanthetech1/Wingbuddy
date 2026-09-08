@@ -176,6 +176,142 @@ export const systemSettingsTable = pgTable("system_settings", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+export const executionGraphsTable = pgTable(
+  "execution_graphs",
+  {
+    id: serial("id").primaryKey(),
+    graphId: text("graph_id").notNull(),
+    telegramUserId: bigint("telegram_user_id", { mode: "number" }).notNull(),
+    latestRevision: integer("latest_revision").default(1).notNull(),
+    status: text("status").default("ready").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("execution_graphs_graph_id_idx").on(table.graphId),
+    index("execution_graphs_user_idx").on(table.telegramUserId),
+    index("execution_graphs_status_idx").on(table.status),
+  ],
+);
+
+export const graphRevisionsTable = pgTable(
+  "graph_revisions",
+  {
+    id: serial("id").primaryKey(),
+    graphId: text("graph_id").notNull(),
+    planRevision: integer("plan_revision").notNull(),
+    revisionId: text("revision_id").notNull(),
+    parentRevisionId: text("parent_revision_id"),
+    telegramUserId: bigint("telegram_user_id", { mode: "number" }).notNull(),
+    goal: text("goal").notNull(),
+    status: text("status").default("ready").notNull(),
+    graphJson: text("graph_json").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("graph_revisions_revision_id_idx").on(table.revisionId),
+    index("graph_revisions_graph_rev_idx").on(table.graphId, table.planRevision),
+    index("graph_revisions_user_idx").on(table.telegramUserId),
+  ],
+);
+
+export const executionSessionsTable = pgTable(
+  "execution_sessions",
+  {
+    id: serial("id").primaryKey(),
+    executionId: text("execution_id").notNull(),
+    requestId: text("request_id").notNull(),
+    taskId: integer("task_id"),
+    graphId: text("graph_id").notNull(),
+    planRevision: integer("plan_revision").notNull(),
+    revisionId: text("revision_id").notNull(),
+    telegramUserId: bigint("telegram_user_id", { mode: "number" }).notNull(),
+    status: text("status").default("ready").notNull(),
+    currentNodesJson: text("current_nodes_json"),
+    errorJson: text("error_json"),
+    startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("execution_sessions_execution_id_idx").on(table.executionId),
+    index("execution_sessions_graph_rev_idx").on(table.graphId, table.planRevision),
+    index("execution_sessions_status_idx").on(table.status),
+    index("execution_sessions_user_idx").on(table.telegramUserId),
+  ],
+);
+
+export const nodeExecutionsTable = pgTable(
+  "node_executions",
+  {
+    id: serial("id").primaryKey(),
+    executionId: text("execution_id").notNull(),
+    graphId: text("graph_id").notNull(),
+    planRevision: integer("plan_revision").notNull(),
+    nodeId: text("node_id").notNull(),
+    attempt: integer("attempt").default(1).notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    status: text("status").notNull(),
+    workerId: text("worker_id"),
+    resultJson: text("result_json"),
+    errorCode: text("error_code"),
+    errorMessage: text("error_message"),
+    isRetryable: boolean("is_retryable").default(false).notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("node_executions_idempotency_idx").on(table.idempotencyKey),
+    index("node_executions_graph_node_idx").on(table.graphId, table.planRevision, table.nodeId),
+    index("node_executions_status_idx").on(table.status),
+  ],
+);
+
+export const executionLeasesTable = pgTable(
+  "execution_leases",
+  {
+    id: serial("id").primaryKey(),
+    leaseKey: text("lease_key").notNull(),
+    executionId: text("execution_id").notNull(),
+    graphId: text("graph_id").notNull(),
+    planRevision: integer("plan_revision").notNull(),
+    nodeId: text("node_id").notNull(),
+    workerId: text("worker_id").notNull(),
+    attempt: integer("attempt").default(1).notNull(),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }).defaultNow().notNull(),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("execution_leases_lease_key_idx").on(table.leaseKey),
+    index("execution_leases_expires_idx").on(table.leaseExpiresAt),
+    index("execution_leases_graph_node_idx").on(table.graphId, table.planRevision, table.nodeId),
+  ],
+);
+
+export const executionApprovalsTable = pgTable(
+  "execution_approvals",
+  {
+    id: serial("id").primaryKey(),
+    approvalId: text("approval_id").notNull(),
+    telegramUserId: bigint("telegram_user_id", { mode: "number" }).notNull(),
+    graphId: text("graph_id").notNull(),
+    planRevision: integer("plan_revision").notNull(),
+    nodeId: text("node_id").notNull(),
+    status: text("status").default("pending").notNull(),
+    reason: text("reason").notNull(),
+    requestedAt: timestamp("requested_at", { withTimezone: true }).defaultNow().notNull(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    resolvedByUserId: bigint("resolved_by_user_id", { mode: "number" }),
+  },
+  (table) => [
+    uniqueIndex("execution_approvals_approval_id_idx").on(table.approvalId),
+    index("execution_approvals_user_idx").on(table.telegramUserId),
+    index("execution_approvals_graph_node_idx").on(table.graphId, table.planRevision, table.nodeId),
+    index("execution_approvals_status_idx").on(table.status),
+  ],
+);
+
 export type User = typeof usersTable.$inferSelect;
 export type Conversation = typeof conversationsTable.$inferSelect;
 export type Message = typeof messagesTable.$inferSelect;
@@ -185,4 +321,10 @@ export type AgentTaskStep = typeof agentTaskStepsTable.$inferSelect;
 export type ConversationSummary = typeof conversationSummariesTable.$inferSelect;
 export type Reminder = typeof remindersTable.$inferSelect;
 export type SystemSetting = typeof systemSettingsTable.$inferSelect;
+export type ExecutionGraphRecord = typeof executionGraphsTable.$inferSelect;
+export type GraphRevisionRecord = typeof graphRevisionsTable.$inferSelect;
+export type ExecutionSessionRecord = typeof executionSessionsTable.$inferSelect;
+export type NodeExecutionRecord = typeof nodeExecutionsTable.$inferSelect;
+export type ExecutionLeaseRecord = typeof executionLeasesTable.$inferSelect;
+export type ExecutionApprovalRecord = typeof executionApprovalsTable.$inferSelect;
 

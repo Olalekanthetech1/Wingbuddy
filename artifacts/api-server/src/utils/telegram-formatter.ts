@@ -42,16 +42,25 @@ export const CENTRALIZED_MATH_SYMBOL_REGISTRY: Readonly<Record<string, string>> 
   "\\ge": "≥",
   "\\geq": "≥",
   "\\neq": "≠",
+  "\\ne": "≠",
   "\\approx": "≈",
+  "\\sim": "~",
+  "\\equiv": "≡",
   "\\times": "×",
   "\\cdot": "·",
+  "\\bullet": "•",
+  "\\div": "÷",
   "\\pm": "±",
   "\\mp": "∓",
   "\\rightarrow": "→",
+  "\\to": "→",
+  "\\longrightarrow": "→",
   "\\leftarrow": "←",
   "\\longleftarrow": "⟵",
   "\\Rightarrow": "⇒",
   "\\Leftarrow": "⇐",
+  "\\leftrightarrow": "↔",
+  "\\Leftrightarrow": "⇔",
   "\\iff": "⟺",
   "\\degree": "°",
   "\\circ": "°",
@@ -66,6 +75,45 @@ export const CENTRALIZED_MATH_SYMBOL_REGISTRY: Readonly<Record<string, string>> 
   "\\cup": "∪",
   "\\cap": "∩",
   "\\sqrt": "√",
+  "\\sum": "∑",
+  "\\prod": "∏",
+  "\\int": "∫",
+  "\\ll": "≪",
+  "\\gg": "≫",
+});
+
+const GREEK_BARE_MAP: Readonly<Record<string, string>> = Object.freeze({
+  alpha: "α",
+  beta: "β",
+  gamma: "γ",
+  delta: "δ",
+  Delta: "Δ",
+  epsilon: "ε",
+  varepsilon: "ε",
+  zeta: "ζ",
+  eta: "η",
+  theta: "θ",
+  Theta: "Θ",
+  iota: "ι",
+  kappa: "κ",
+  lambda: "λ",
+  Lambda: "Λ",
+  mu: "μ",
+  nu: "ν",
+  xi: "ξ",
+  pi: "π",
+  Pi: "Π",
+  rho: "ρ",
+  sigma: "σ",
+  Sigma: "Σ",
+  tau: "τ",
+  upsilon: "υ",
+  phi: "φ",
+  Phi: "Φ",
+  chi: "χ",
+  psi: "ψ",
+  omega: "ω",
+  Omega: "Ω",
 });
 
 const SUB_MAP: Readonly<Record<string, string>> = Object.freeze({
@@ -104,30 +152,21 @@ export function normalizeLatexMath(mathStr: string): string {
 
   let s = mathStr;
 
+  // 1. Escaped symbols & Degree & temperature macros
+  s = s.replace(/\\([%&#$])/g, "$1");
   s = s.replace(/\^\\?circ\s*C/g, "°C");
   s = s.replace(/\^\\?circ\s*F/g, "°F");
   s = s.replace(/\^\\?circ/g, "°");
-  s = s.replace(/\b(?:longrightarrow|rightarrow)\b/g, "→");
-  s = s.replace(/\b(?:longleftarrow|leftarrow)\b/g, "←");
+  s = s.replace(/\\?(?:longrightarrow|rightarrow)\b/g, "→");
+  s = s.replace(/\\?(?:longleftarrow|leftarrow)\b/g, "←");
 
-  // 1. Text container macros: \text{...}, \mathrm{...}, \mathbf{...}, \mathit{...}
+  // 2. Text container macros: \text{...}, \mathrm{...}, \mathbf{...}, \mathit{...}
   s = s.replace(/\\(?:text|mathrm|mb|mathbf|mathit|mathsf|mathtt)\{([^}]+)\}/g, "$1");
 
-  // 2. Accent & Vector macros: \vec{x}, \hat{x}, \bar{x}, \tilde{x}, \mathbb{R} -> x, R
+  // 3. Accent & Vector macros: \vec{x}, \hat{x}, \bar{x}, \tilde{x}, \mathbb{R} -> x, R
   s = s.replace(/\\(?:vec|hat|bar|tilde|dot|ddot|mathbf|mathbb|mathcal)\{([^}]+)\}/g, "$1");
 
-  // 3. Centralized Symbol Registry Replacement (handle both with and without backslashes)
-  for (const [tex, unicode] of Object.entries(CENTRALIZED_MATH_SYMBOL_REGISTRY)) {
-    // Match \symbol or bare symbol (if it's a known greek letter/math command)
-    const command = tex.startsWith("\\") ? tex.slice(1) : tex;
-    const regex = new RegExp("\\\\?" + command.replace("\\", "\\\\") + "(?![a-zA-Z])", "g");
-    s = s.replace(regex, unicode);
-  }
-
-  // 4. Space normalization after Greek/Math symbols e.g. "Δ L" -> "ΔL"
-  s = s.replace(/([Δσεαβγλμπθω])\s+([a-zA-Z0-9])/g, "$1$2");
-
-  // 5. Fractions: \frac{num}{den}
+  // 4. Fractions: \frac{num}{den} - must run before single-arg macro strip
   let prev = "";
   let guardCount = 0;
   while (prev !== s && guardCount++ < 5) {
@@ -139,27 +178,53 @@ export function normalizeLatexMath(mathStr: string): string {
       const denHasOps = /[\+\-\=\*\/<>]/.test(cleanDen);
       const formattedNum = numHasOps ? `(${cleanNum})` : cleanNum;
       const formattedDen = denHasOps ? `(${cleanDen})` : cleanDen;
-      return `${formattedNum}/${formattedDen}`;
+      const sep = (cleanNum.includes(" ") || cleanDen.includes(" ")) ? " / " : "/";
+      return `${formattedNum}${sep}${formattedDen}`;
     });
   }
 
-  // 6. Subscripts: _0 -> ₀, _{0} -> ₀, _1 -> ₁
-  s = s.replace(/_\{?([0-9\+\-\=\(\)a-z]+)\}?/gi, (_m, subText) => {
-    const converted = convertSubscript(subText);
-    return converted !== subText ? converted : `_${subText}`;
+  // 5. Centralized Symbol Registry Replacement (Strictly require backslash to prevent mutating English words)
+  for (const [tex, unicode] of Object.entries(CENTRALIZED_MATH_SYMBOL_REGISTRY)) {
+    const command = tex.startsWith("\\") ? tex.slice(1) : tex;
+    // Must be preceded by a backslash and followed by a non-letter
+    const regex = new RegExp(`\\\\${command}(?![a-zA-Z])`, "g");
+    s = s.replace(regex, unicode);
+  }
+
+  // 6. Bare Greek letters: only full words on word boundaries (never substring of an English word)
+  for (const [name, unicode] of Object.entries(GREEK_BARE_MAP)) {
+    const regex = new RegExp(`\\b${name}\\b`, "g");
+    s = s.replace(regex, unicode);
+  }
+
+  // 7. Space normalization after Greek/Math symbols e.g. "Δ L" -> "ΔL"
+  s = s.replace(/([Δσεαβγλμπθω])\s+([a-zA-Z0-9])/g, "$1$2");
+
+  // 8. Subscripts:
+  // a) Braced subscripts: _{0} -> ₀, _{i+1} -> ᵢ₊₁
+  s = s.replace(/_\{([0-9\+\-\=\(\)a-zA-Z]+)\}/g, (_m, subText) => {
+    return convertSubscript(subText);
+  });
+  // b) Unbraced subscripts: alphanumeric and sign (never punctuation like closing parens)
+  s = s.replace(/_([\+\-]?[0-9a-zA-Z]+)/g, (_m, subText) => {
+    return convertSubscript(subText);
   });
 
-  // 7. Superscripts: ^2 -> ², ^{2} -> ², ^n -> ⁿ
-  s = s.replace(/\^\{?([0-9\+\-\=\(\)a-z]+)\}?/gi, (_m, superText) => {
-    const converted = convertSuperscript(superText);
-    return converted !== superText ? converted : `^${superText}`;
+  // 9. Superscripts:
+  // a) Braced superscripts: ^{2} -> ², ^{(n)} -> ⁽ⁿ⁾
+  s = s.replace(/\^\{([0-9\+\-\=\(\)a-zA-Z]+)\}/g, (_m, superText) => {
+    return convertSuperscript(superText);
+  });
+  // b) Unbraced superscripts: alphanumeric and sign (e.g. 10^-5 -> 10⁻⁵)
+  s = s.replace(/\^([\+\-]?[0-9a-zA-Z]+)/g, (_m, superText) => {
+    return convertSuperscript(superText);
   });
 
-  // 8. Graceful Degradation for Unknown Macros: e.g. \customCmd{val} -> val, \unknownCmd -> unknownCmd
+  // 10. Graceful Degradation for Unknown Macros: e.g. \customCmd{val} -> val, \unknownCmd -> unknownCmd
   s = s.replace(/\\([a-zA-Z]+)\{([^}]+)\}/g, "$2"); // Extract argument of unknown macro with arg
   s = s.replace(/\\([a-zA-Z]+)/g, "$1"); // Strip backslash from zero-arg unknown macro
 
-  // 9. Clean up LaTeX spacing commands
+  // 11. Clean up LaTeX spacing commands
   s = s.replace(/\\(?:\s+|,|;|!)/g, " ");
   s = s.replace(/\s+/g, " ").trim();
 
@@ -231,20 +296,25 @@ export class StructureAwareParser {
     });
 
     text = text.replace(/\$([^\$\n]+?)\$/g, (fullMatch, mathContent) => {
-      const mathTerms = /\b(?:sigma|epsilon|Delta|text|frac|alpha|beta|gamma|lambda|theta|omega|pi)\b/i;
-      // Fast bailout for obvious currency overlaps (e.g. "5 and she gave me ")
-      if (/\s/.test(mathContent) && /^[\d\.,\s\w]+$/.test(mathContent) && !/[a-zA-Z]\s*=\s*/.test(mathContent)) {
-          // It's mostly text/numbers with spaces and no math operators
-          // AND it doesn't contain common math keywords
-          if (!/[\\_^+\-*\/<>]/.test(mathContent) && !mathTerms.test(mathContent)) {
-              return fullMatch;
+      const mathTerms = /\b(?:sigma|epsilon|Delta|text|frac|alpha|beta|gamma|lambda|theta|omega|pi|sqrt|sin|cos|tan|log|ln|lim|exp)\b/i;
+      // Fast bailout for obvious currency overlaps (e.g. "$5 and she gave me $10")
+      if (/\s/.test(mathContent) && !/[\\=_^+\-*\/<>|±×÷·≠≤≥√∑∏∫∂∇∈∉⊂⊆∪∩~≈%]/.test(mathContent) && !/[α-ωΑ-ΩΔσε]/.test(mathContent)) {
+        if (!mathTerms.test(mathContent) && !/[a-zA-Z\p{L}]\s*=\s*/u.test(mathContent)) {
+          // Multiple words without operators or math terms -> treat as currency
+          if (/\b(?:and|or|for|to|with|from|than|then|is|was|are|were)\b/i.test(mathContent)) {
+            return fullMatch;
           }
+        }
       }
 
-      const hasMath = /[\\=_^+\-*\/<>]/.test(mathContent) || 
+      const hasMath = 
+        mathContent.includes("\\") ||
+        /[\\=_^+\-*\/<>|±×÷·≠≤≥√∑∏∫∂∇∈∉⊂⊆∪∩~≈%]/.test(mathContent) ||
+        /[α-ωΑ-ΩΔσε]/.test(mathContent) ||
+        /[₀-₉⁰-⁹]/.test(mathContent) ||
         mathTerms.test(mathContent) ||
-        /[a-zA-Z]\s*=\s*/.test(mathContent) ||
-        /^[A-Za-z0-9]+$/.test(mathContent.trim()); // Single variables ($F$, $A$) or numbers
+        /[a-zA-Z\p{L}]\s*=\s*/u.test(mathContent) ||
+        /^[\p{L}\p{N}\p{M}\.,%_\^\+\-]+$/u.test(mathContent.trim()); // Single numbers, decimals, percentages, variables, Greek letters
 
       if (hasMath) {
         return normalizeLatexMath(mathContent);
@@ -256,37 +326,60 @@ export class StructureAwareParser {
     text = text.replace(/\^\\?circ\s*C/g, "°C");
     text = text.replace(/\^\\?circ\s*F/g, "°F");
     text = text.replace(/\^\\?circ/g, "°");
-    text = text.replace(/\b(?:longrightarrow|rightarrow)\b/g, "→");
-    text = text.replace(/\b(?:longleftarrow|leftarrow)\b/g, "←");
+    text = text.replace(/\\?(?:longrightarrow|rightarrow)\b/g, "→");
+    text = text.replace(/\\?(?:longleftarrow|leftarrow)\b/g, "←");
 
     // Standalone subscripts / superscripts outside of math blocks (must not swallow punctuation)
     // 1. With braces
-    text = text.replace(/_\{([^\}]+)\}/g, (_m, subText) => {
+    text = text.replace(/_\{([0-9\+\-\=\(\)a-zA-Z]+)\}/g, (_m, subText) => {
       return convertSubscript(subText);
     });
-    // 2. Without braces (limit to alphanumeric and sign)
-    text = text.replace(/_([\+\-]?[a-zA-Z0-9]+)/g, (fullMatch, subText) => {
-      const converted = convertSubscript(subText);
-      return converted !== subText ? converted : fullMatch;
+    // 2. Without braces (limit to alphanumeric and sign, e.g. L_0 -> L₀; NEVER swallow closing parenthesis or periods)
+    text = text.replace(/_([\+\-]?[0-9a-zA-Z]+)/g, (_m, subText) => {
+      return convertSubscript(subText);
     });
 
     // 1. With braces
-    text = text.replace(/\^\{([^\}]+)\}/g, (_m, superText) => {
+    text = text.replace(/\^\{([0-9\+\-\=\(\)a-zA-Z]+)\}/g, (_m, superText) => {
       return convertSuperscript(superText);
     });
-    // 2. Without braces (limit to alphanumeric and sign)
-    text = text.replace(/\^([\+\-]?[a-zA-Z0-9]+)/g, (fullMatch, superText) => {
-      const converted = convertSuperscript(superText);
-      return converted !== superText ? converted : fullMatch;
+    // 2. Without braces (limit to alphanumeric and sign, e.g. 10^-5 -> 10⁻⁵)
+    text = text.replace(/\^([\+\-]?[0-9a-zA-Z]+)/g, (_m, superText) => {
+      return convertSuperscript(superText);
     });
 
-    if (/\\(?:vec|frac|sigma|epsilon|Delta|cdot|text|customMacro|[a-zA-Z]+)/.test(text)) {
+    if (/\\(?:vec|frac|sigma|epsilon|Delta|cdot|div|times|text|customMacro|[a-zA-Z]+)/.test(text)) {
+      // Fractions: \frac{num}{den} - must run before single-arg macro strip
+      let prevFrac = "";
+      let fracGuard = 0;
+      while (prevFrac !== text && fracGuard++ < 5) {
+        prevFrac = text;
+        text = text.replace(/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, (_m, num, den) => {
+          const cleanNum = normalizeLatexMath(num).trim();
+          const cleanDen = normalizeLatexMath(den).trim();
+          const numHasOps = /[\+\-\=\*\/<>]/.test(cleanNum);
+          const denHasOps = /[\+\-\=\*\/<>]/.test(cleanDen);
+          const formattedNum = numHasOps ? `(${cleanNum})` : cleanNum;
+          const formattedDen = denHasOps ? `(${cleanDen})` : cleanDen;
+          const sep = (cleanNum.includes(" ") || cleanDen.includes(" ")) ? " / " : "/";
+          return `${formattedNum}${sep}${formattedDen}`;
+        });
+      }
+
+      text = text.replace(/\\(?:text|mathrm|mb|mathbf|mathit|mathsf|mathtt)\{([^}]+)\}/g, "$1");
       text = text.replace(/\\(?:vec|hat|bar|tilde|dot|ddot|mathbf|mathbb|mathcal)\{([^}]+)\}/g, "$1");
-      text = text.replace(/\\([a-zA-Z]+)\{([^}]+)\}/g, "$2");
+
       for (const [tex, unicode] of Object.entries(CENTRALIZED_MATH_SYMBOL_REGISTRY)) {
-        const regex = new RegExp(tex.replace("\\", "\\\\") + "(?![a-zA-Z])", "g");
+        const command = tex.startsWith("\\") ? tex.slice(1) : tex;
+        const regex = new RegExp(`\\\\${command}(?![a-zA-Z])`, "g");
         text = text.replace(regex, unicode);
       }
+
+      // Space normalization after Greek/Math symbols e.g. "Δ L" -> "ΔL"
+      text = text.replace(/([Δσεαβγλμπθω])\s+([a-zA-Z0-9])/g, "$1$2");
+
+      text = text.replace(/\\([a-zA-Z]+)\{([^}]+)\}/g, "$2");
+      text = text.replace(/\\([a-zA-Z]+)/g, "$1");
     }
 
     // F. Remove horizontal line separators (---, ***, ___)

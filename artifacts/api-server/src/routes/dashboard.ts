@@ -197,7 +197,7 @@ router.post("/dashboard/memories", async (req: Request, res: Response) => {
       return;
     }
 
-    const targetUserId = BigInt(userId);
+    const targetUserId = Number(userId);
 
     // Ensure user record exists in database
     await db
@@ -213,14 +213,18 @@ router.post("/dashboard/memories", async (req: Request, res: Response) => {
     // Compute embedding dynamically if available
     let embeddingVector: number[] | undefined;
     try {
-      const gemini = new GeminiService();
-      embeddingVector = await gemini.generateEmbedding(`${key}: ${content}`);
+      const config = getConfig();
+      const gemini = new GeminiService(apiKeyPoolService, config.geminiModel, config.geminiTimeoutMs);
+      const vec = await gemini.embedText(`${key}: ${content}`);
+      if (vec.length > 0) {
+        embeddingVector = vec;
+      }
     } catch {
       // Embedding optional if offline
     }
 
     const saved = await chatDatabaseService.saveMemory({
-      telegramUserId: Number(targetUserId),
+      telegramUserId: targetUserId,
       key: String(key).trim(),
       content: String(content).trim(),
       category: category ? String(category).trim() : "general",
@@ -236,14 +240,15 @@ router.post("/dashboard/memories", async (req: Request, res: Response) => {
 
 router.delete("/dashboard/memories/:key", async (req: Request, res: Response) => {
   try {
-    const { key } = req.params;
+    const rawKey = req.params.key;
+    const key = Array.isArray(rawKey) ? rawKey[0] : rawKey;
     const { userId } = req.query;
     if (!userId) {
       res.status(400).json({ error: "Missing required 'userId'" });
       return;
     }
 
-    const targetUserId = BigInt(String(userId));
+    const targetUserId = Number(String(userId));
 
     const deleted = await chatDatabaseService.deleteMemory(targetUserId, key);
     if (deleted) {
@@ -269,7 +274,7 @@ router.get("/dashboard/reminders", async (req: Request, res: Response) => {
     let allReminders;
     if (userId && String(userId) !== "all") {
       allReminders = await query
-        .where(eq(remindersTable.telegramUserId, BigInt(String(userId))))
+        .where(eq(remindersTable.telegramUserId, Number(String(userId))))
         .orderBy(desc(remindersTable.createdAt))
         .limit(50);
     } else {
@@ -337,7 +342,9 @@ router.post("/dashboard/reminders", async (req: Request, res: Response) => {
 
 router.patch("/dashboard/reminders/:id/complete", async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id, 10);
+    const rawId = req.params.id;
+    const idStr = Array.isArray(rawId) ? rawId[0] : rawId;
+    const id = parseInt(idStr, 10);
     const completed = await reminderService.completeReminder(id);
     if (completed) {
       res.json({ message: "Reminder marked as completed" });
@@ -352,7 +359,9 @@ router.patch("/dashboard/reminders/:id/complete", async (req: Request, res: Resp
 
 router.patch("/dashboard/reminders/:id/snooze", async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id, 10);
+    const rawId = req.params.id;
+    const idStr = Array.isArray(rawId) ? rawId[0] : rawId;
+    const id = parseInt(idStr, 10);
     const minutes = req.body.minutes ? parseInt(req.body.minutes, 10) : 10;
     const snoozed = await reminderService.snoozeReminder(id, minutes);
     if (snoozed) {
@@ -368,7 +377,9 @@ router.patch("/dashboard/reminders/:id/snooze", async (req: Request, res: Respon
 
 router.delete("/dashboard/reminders/:id", async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id, 10);
+    const rawId = req.params.id;
+    const idStr = Array.isArray(rawId) ? rawId[0] : rawId;
+    const id = parseInt(idStr, 10);
     await db.delete(remindersTable).where(eq(remindersTable.id, id));
     cdcService.dispatchReminderEvent({
       action: "DELETE",
@@ -417,7 +428,7 @@ router.get("/dashboard/user-settings", async (req: Request, res: Response) => {
     const existing = await db
       .select()
       .from(usersTable)
-      .where(eq(usersTable.telegramUserId, BigInt(targetUserId)))
+      .where(eq(usersTable.telegramUserId, targetUserId))
       .limit(1);
 
     if (existing[0]) {

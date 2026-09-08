@@ -20,6 +20,7 @@ export interface ExecutionPlan {
     | "deep_reasoning"
     | "coding"
     | "study"
+    | "creative"
     | "writing"
     | "brainstorming"
     | "general";

@@ -344,7 +344,7 @@ export class GeminiService {
     try {
       // Execute the SDK stream with timeout guard
       const streamPromise = (
-        client.models as {
+        (client.models as unknown) as {
           generateContentStream: (params: {
             model: string;
             contents: Content[];
@@ -378,7 +378,7 @@ export class GeminiService {
         if (Array.isArray(chunks)) {
           for (const c of chunks) {
             if (c.web?.uri && !sources.some((s) => s.uri === c.web?.uri)) {
-              sources.push(c.web);
+              sources.push({ uri: c.web.uri, title: c.web.title });
             }
           }
         }

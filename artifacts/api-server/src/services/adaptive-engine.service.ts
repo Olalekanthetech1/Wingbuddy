@@ -4,7 +4,7 @@ import type { Message } from "@workspace/db";
 import { StructureAwareParser } from "../utils/telegram-formatter";
 
 export interface AdaptiveHistoryOptions {
-  mode?: ModeKey;
+  mode?: ModeKey | string;
   currentMessage?: string;
   memoriesCount?: number;
   semanticRecallCount?: number;
@@ -45,11 +45,12 @@ export class AdaptiveEngineService {
 
     // 1. Base dynamic starting window based on mode
     let baseLimit = 25;
-    if (mode === "coder" || mode === "architect" || mode === "reasoning" || mode === "tutor") {
+    const modeStr = String(mode);
+    if (modeStr === "coder" || modeStr === "architect" || modeStr === "reasoning" || modeStr === "tutor" || modeStr === "deep_research" || modeStr === "study" || modeStr === "math") {
       baseLimit = 40; // Needs broad multi-turn code/context tracking
-    } else if (mode === "concise" || mode === "casual") {
+    } else if (modeStr === "concise" || modeStr === "casual") {
       baseLimit = 16; // Snappy, short context focus
-    } else if (mode === "creative" || mode === "storyteller") {
+    } else if (modeStr === "creative" || modeStr === "storyteller") {
       baseLimit = 35; // Creative continuity
     }
 
@@ -236,7 +237,7 @@ export class AdaptiveEngineService {
    * - Respects explicit GEMINI_MODEL overrides if configured by user
    */
   static computeAdaptiveModel(options: {
-    mode?: ModeKey;
+    mode?: ModeKey | string;
     prompt?: string;
     enableSearch?: boolean;
     isDeepReasoning?: boolean;
@@ -274,18 +275,21 @@ export class AdaptiveEngineService {
         prompt,
       );
 
+    const modeStr = String(mode);
     if (
       isDeepReasoning ||
-      mode === "coder" ||
-      mode === "architect" ||
-      mode === "reasoning" ||
+      modeStr === "coder" ||
+      modeStr === "architect" ||
+      modeStr === "reasoning" ||
+      modeStr === "deep_research" ||
+      modeStr === "math" ||
       isCodeOrMathPrompt
     ) {
       return "gemini-2.5-pro";
     }
 
     // 4. Web search grounding and general conversational chat adapt to fast, high-rate-limit Flash
-    if (enableSearch || mode === "concise" || mode === "casual" || mode === "creative") {
+    if (enableSearch || modeStr === "concise" || modeStr === "casual" || modeStr === "creative" || modeStr === "general" || modeStr === "study" || modeStr === "auto") {
       return "gemini-2.5-flash";
     }
 

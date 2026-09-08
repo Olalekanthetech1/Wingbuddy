@@ -175,3 +175,122 @@ model SystemSetting {
   @@map("system_settings")
 }
 
+/// Persisted Execution Graphs
+model ExecutionGraphRecord {
+  id             Int       @id @default(autoincrement())
+  graphId        String    @unique @map("graph_id")
+  telegramUserId BigInt    @map("telegram_user_id")
+  latestRevision Int       @default(1) @map("latest_revision")
+  status         String    @default("ready")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  @@index([telegramUserId], map: "execution_graphs_user_idx")
+  @@index([status], map: "execution_graphs_status_idx")
+  @@map("execution_graphs")
+}
+
+/// Immutable Graph Revisions
+model GraphRevisionRecord {
+  id               Int       @id @default(autoincrement())
+  graphId          String    @map("graph_id")
+  planRevision     Int       @map("plan_revision")
+  revisionId       String    @unique @map("revision_id")
+  parentRevisionId String?   @map("parent_revision_id")
+  telegramUserId   BigInt    @map("telegram_user_id")
+  goal             String    @db.Text
+  status           String    @default("ready")
+  graphJson        String    @map("graph_json") @db.Text
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  @@index([graphId, planRevision], map: "graph_revisions_graph_rev_idx")
+  @@index([telegramUserId], map: "graph_revisions_user_idx")
+  @@map("graph_revisions")
+}
+
+/// Durable Execution Sessions
+model ExecutionSessionRecord {
+  id               Int       @id @default(autoincrement())
+  executionId      String    @unique @map("execution_id")
+  requestId        String    @map("request_id")
+  taskId           Int?      @map("task_id")
+  graphId          String    @map("graph_id")
+  planRevision     Int       @map("plan_revision")
+  revisionId       String    @map("revision_id")
+  telegramUserId   BigInt    @map("telegram_user_id")
+  status           String    @default("ready")
+  currentNodesJson String?   @map("current_nodes_json") @db.Text
+  errorJson        String?   @map("error_json") @db.Text
+  startedAt        DateTime  @default(now()) @map("started_at")
+  updatedAt        DateTime  @default(now()) @updatedAt @map("updated_at")
+  completedAt      DateTime? @map("completed_at")
+
+  @@index([graphId, planRevision], map: "execution_sessions_graph_rev_idx")
+  @@index([status], map: "execution_sessions_status_idx")
+  @@index([telegramUserId], map: "execution_sessions_user_idx")
+  @@map("execution_sessions")
+}
+
+/// Node Execution Attempts & Audit Log
+model NodeExecutionRecord {
+  id             Int       @id @default(autoincrement())
+  executionId    String    @map("execution_id")
+  graphId        String    @map("graph_id")
+  planRevision   Int       @map("plan_revision")
+  nodeId         String    @map("node_id")
+  attempt        Int       @default(1)
+  idempotencyKey String    @unique @map("idempotency_key")
+  status         String
+  workerId       String?   @map("worker_id")
+  resultJson     String?   @map("result_json") @db.Text
+  errorCode      String?   @map("error_code")
+  errorMessage   String?   @map("error_message") @db.Text
+  isRetryable    Boolean   @default(false) @map("is_retryable")
+  startedAt      DateTime  @default(now()) @map("started_at")
+  completedAt    DateTime? @map("completed_at")
+
+  @@index([graphId, planRevision, nodeId], map: "node_executions_graph_node_idx")
+  @@index([idempotencyKey], map: "node_executions_idempotency_idx")
+  @@index([status], map: "node_executions_status_idx")
+  @@map("node_executions")
+}
+
+/// Durable Distributed Execution Leases
+model ExecutionLeaseRecord {
+  id             Int      @id @default(autoincrement())
+  leaseKey       String   @unique @map("lease_key")
+  executionId    String   @map("execution_id")
+  graphId        String   @map("graph_id")
+  planRevision   Int      @map("plan_revision")
+  nodeId         String   @map("node_id")
+  workerId       String   @map("worker_id")
+  attempt        Int      @default(1)
+  claimedAt      DateTime @default(now()) @map("claimed_at")
+  leaseExpiresAt DateTime @map("lease_expires_at")
+
+  @@index([leaseExpiresAt], map: "execution_leases_expires_idx")
+  @@index([graphId, planRevision, nodeId], map: "execution_leases_graph_node_idx")
+  @@map("execution_leases")
+}
+
+/// Execution Approvals
+model ExecutionApprovalRecord {
+  id               Int       @id @default(autoincrement())
+  approvalId       String    @unique @map("approval_id")
+  telegramUserId   BigInt    @map("telegram_user_id")
+  graphId          String    @map("graph_id")
+  planRevision     Int       @map("plan_revision")
+  nodeId           String    @map("node_id")
+  status           String    @default("pending")
+  reason           String    @db.Text
+  requestedAt      DateTime  @default(now()) @map("requested_at")
+  resolvedAt       DateTime? @map("resolved_at")
+  expiresAt        DateTime? @map("expires_at")
+  resolvedByUserId BigInt?   @map("resolved_by_user_id")
+
+  @@index([telegramUserId], map: "execution_approvals_user_idx")
+  @@index([graphId, planRevision, nodeId], map: "execution_approvals_graph_node_idx")
+  @@index([status], map: "execution_approvals_status_idx")
+  @@map("execution_approvals")
+}
+

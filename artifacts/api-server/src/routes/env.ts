@@ -140,6 +140,54 @@ const ENV_SPECS: EnvVariableSpec[] = [
     required: false,
     defaultValue: "production",
   },
+  {
+    key: "EXECUTION_ENGINE_ENABLED",
+    category: "performance",
+    isSensitive: false,
+    description: "Autonomous Execution Engine feature flag ('true' to enable, 'false' to disable)",
+    required: false,
+    defaultValue: "true",
+  },
+  {
+    key: "EXECUTION_MAX_CONCURRENCY",
+    category: "performance",
+    isSensitive: false,
+    description: "Maximum global concurrent node execution limit",
+    required: false,
+    defaultValue: "10",
+  },
+  {
+    key: "EXECUTION_MAX_PER_USER",
+    category: "performance",
+    isSensitive: false,
+    description: "Maximum concurrent execution sessions per user",
+    required: false,
+    defaultValue: "3",
+  },
+  {
+    key: "EXECUTION_LEASE_DURATION_MS",
+    category: "performance",
+    isSensitive: false,
+    description: "Database row lease duration in milliseconds for claimed nodes",
+    required: false,
+    defaultValue: "30000",
+  },
+  {
+    key: "EXECUTION_DEFAULT_TIMEOUT_MS",
+    category: "performance",
+    isSensitive: false,
+    description: "Default execution timeout per node in milliseconds",
+    required: false,
+    defaultValue: "60000",
+  },
+  {
+    key: "EXECUTION_MAX_RETRIES",
+    category: "performance",
+    isSensitive: false,
+    description: "Maximum automated retry attempts for transient node errors",
+    required: false,
+    defaultValue: "3",
+  },
 ];
 
 function maskValue(val: string): string {
@@ -297,9 +345,9 @@ router.post("/env/test", async (req: Request, res: Response) => {
     if (key === "GEMINI_API_KEY") {
       const result = await apiKeyPoolService.testRawKey(testVal);
       res.json({
-        ok: result.healthy,
+        ok: result.valid,
         latencyMs: Date.now() - startTime,
-        message: result.healthy ? "Gemini API connection healthy!" : result.error,
+        message: result.valid ? "Gemini API connection healthy!" : result.error,
         details: result,
       });
       return;
@@ -365,7 +413,8 @@ router.post("/env/test", async (req: Request, res: Response) => {
 
 // DELETE /api/env/:key - Delete a custom or optional variable
 router.delete("/env/:key", async (req: Request, res: Response) => {
-  const { key } = req.params;
+  const rawKey = req.params.key;
+  const key = Array.isArray(rawKey) ? rawKey[0] : rawKey;
   if (!key) {
     res.status(400).json({ error: "Missing key" });
     return;

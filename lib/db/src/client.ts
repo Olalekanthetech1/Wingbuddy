@@ -50,7 +50,8 @@ export function isPgVectorAvailable(): boolean {
   return pgVectorAvailable;
 }
 
-export async function ensureDatabaseSchema(pgPool: pg.Pool): Promise<void> {
+export async function ensureDatabaseSchema(pgPool?: pg.Pool): Promise<void> {
+  const pool = pgPool || getPool();
   const schemaSql = `
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
@@ -188,6 +189,108 @@ export async function ensureDatabaseSchema(pgPool: pg.Pool): Promise<void> {
       value TEXT NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    -- Production Execution Engine Tables
+    CREATE TABLE IF NOT EXISTS execution_graphs (
+      id SERIAL PRIMARY KEY,
+      graph_id TEXT NOT NULL UNIQUE,
+      telegram_user_id BIGINT NOT NULL,
+      latest_revision INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'ready',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS execution_graphs_user_idx ON execution_graphs(telegram_user_id);
+    CREATE INDEX IF NOT EXISTS execution_graphs_status_idx ON execution_graphs(status);
+
+    CREATE TABLE IF NOT EXISTS graph_revisions (
+      id SERIAL PRIMARY KEY,
+      graph_id TEXT NOT NULL,
+      plan_revision INTEGER NOT NULL,
+      revision_id TEXT NOT NULL UNIQUE,
+      parent_revision_id TEXT,
+      telegram_user_id BIGINT NOT NULL,
+      goal TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'ready',
+      graph_json TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS graph_revisions_graph_rev_idx ON graph_revisions(graph_id, plan_revision);
+    CREATE INDEX IF NOT EXISTS graph_revisions_user_idx ON graph_revisions(telegram_user_id);
+
+    CREATE TABLE IF NOT EXISTS execution_sessions (
+      id SERIAL PRIMARY KEY,
+      execution_id TEXT NOT NULL UNIQUE,
+      request_id TEXT NOT NULL,
+      task_id INTEGER,
+      graph_id TEXT NOT NULL,
+      plan_revision INTEGER NOT NULL,
+      revision_id TEXT NOT NULL,
+      telegram_user_id BIGINT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'ready',
+      current_nodes_json TEXT,
+      error_json TEXT,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      completed_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS execution_sessions_graph_rev_idx ON execution_sessions(graph_id, plan_revision);
+    CREATE INDEX IF NOT EXISTS execution_sessions_status_idx ON execution_sessions(status);
+    CREATE INDEX IF NOT EXISTS execution_sessions_user_idx ON execution_sessions(telegram_user_id);
+
+    CREATE TABLE IF NOT EXISTS node_executions (
+      id SERIAL PRIMARY KEY,
+      execution_id TEXT NOT NULL,
+      graph_id TEXT NOT NULL,
+      plan_revision INTEGER NOT NULL,
+      node_id TEXT NOT NULL,
+      attempt INTEGER NOT NULL DEFAULT 1,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL,
+      worker_id TEXT,
+      result_json TEXT,
+      error_code TEXT,
+      error_message TEXT,
+      is_retryable BOOLEAN NOT NULL DEFAULT FALSE,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      completed_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS node_executions_graph_node_idx ON node_executions(graph_id, plan_revision, node_id);
+    CREATE INDEX IF NOT EXISTS node_executions_idempotency_idx ON node_executions(idempotency_key);
+    CREATE INDEX IF NOT EXISTS node_executions_status_idx ON node_executions(status);
+
+    CREATE TABLE IF NOT EXISTS execution_leases (
+      id SERIAL PRIMARY KEY,
+      lease_key TEXT NOT NULL UNIQUE,
+      execution_id TEXT NOT NULL,
+      graph_id TEXT NOT NULL,
+      plan_revision INTEGER NOT NULL,
+      node_id TEXT NOT NULL,
+      worker_id TEXT NOT NULL,
+      attempt INTEGER NOT NULL DEFAULT 1,
+      claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      lease_expires_at TIMESTAMPTZ NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS execution_leases_expires_idx ON execution_leases(lease_expires_at);
+    CREATE INDEX IF NOT EXISTS execution_leases_graph_node_idx ON execution_leases(graph_id, plan_revision, node_id);
+
+    CREATE TABLE IF NOT EXISTS execution_approvals (
+      id SERIAL PRIMARY KEY,
+      approval_id TEXT NOT NULL UNIQUE,
+      telegram_user_id BIGINT NOT NULL,
+      graph_id TEXT NOT NULL,
+      plan_revision INTEGER NOT NULL,
+      node_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      reason TEXT NOT NULL,
+      requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      resolved_at TIMESTAMPTZ,
+      expires_at TIMESTAMPTZ,
+      resolved_by_user_id BIGINT
+    );
+    CREATE INDEX IF NOT EXISTS execution_approvals_user_idx ON execution_approvals(telegram_user_id);
+    CREATE INDEX IF NOT EXISTS execution_approvals_graph_node_idx ON execution_approvals(graph_id, plan_revision, node_id);
+    CREATE INDEX IF NOT EXISTS execution_approvals_status_idx ON execution_approvals(status);
     -- CDC PostgreSQL Trigger for reminders
     CREATE OR REPLACE FUNCTION notify_reminders_cdc() RETURNS trigger AS $$
     BEGIN
@@ -235,7 +338,7 @@ export async function ensureDatabaseSchema(pgPool: pg.Pool): Promise<void> {
     FOR EACH ROW EXECUTE FUNCTION notify_users_cdc();
   `;
 
-  const client = await pgPool.connect();
+  const client = await pool.connect();
   try {
     await client.query("BEGIN;");
     // Acquire transaction-level advisory lock to serialize concurrent schema initializations
@@ -245,9 +348,9 @@ export async function ensureDatabaseSchema(pgPool: pg.Pool): Promise<void> {
 
     // Check and initialize pgvector extension dynamically
     try {
-      await pgPool.query(`CREATE EXTENSION IF NOT EXISTS vector;`);
-      await pgPool.query(`ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS embedding vector(768);`);
-      await pgPool.query(`CREATE INDEX IF NOT EXISTS user_memories_embedding_idx ON user_memories USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);`);
+      await pool.query(`CREATE EXTENSION IF NOT EXISTS vector;`);
+      await pool.query(`ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS embedding vector(768);`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS user_memories_embedding_idx ON user_memories USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);`);
       pgVectorAvailable = true;
     } catch {
       // Graceful fallback if PostgreSQL instance does not have the compiled pgvector extension

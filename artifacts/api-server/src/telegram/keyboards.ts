@@ -140,3 +140,9 @@ export function feedbackReasonKeyboard(): InlineKeyboard {
     .row()
     .text("Other", "feedback:reason:other");
 }
+
+export function executionApprovalKeyboard(approvalId: string): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("✅ Approve", `exec_appr:${approvalId}`)
+    .text("❌ Reject", `exec_rejc:${approvalId}`);
+}

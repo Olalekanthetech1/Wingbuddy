@@ -3,12 +3,12 @@ import type { Express, Request, Response } from "express";
 import { chatDatabaseService } from "@workspace/db";
 import { logger } from "../lib/logger";
 import { getConfig } from "../config/env";
-import { MODES, MODE_KEYS, type ModeKey } from "../config/mode";
+import { MODES, MODE_KEYS, isModeKey, type ModeKey } from "../config/mode";
 import { ConversationService } from "../services/conversation.service";
 import { ModeService } from "../services/mode.service";
 import { ExecutionPlannerService } from "../services/execution-planner.service";
 import { GlobalContextService } from "../services/global-context.service";
-import { GeminiService } from "../gemini/gemini.service";
+import { GeminiService, type GeminiMessage } from "../gemini/gemini.service";
 import { AdaptiveIntentService } from "../services/adaptive-intent.service";
 import { ImageGenerationService } from "../services/image-generation.service";
 import { VideoGenerationService } from "../services/video-generation.service";
@@ -23,6 +23,7 @@ import { startTypingIndicator } from "./typing-indicator";
 import {
   PERSONALITIES,
   PERSONALITY_KEYS,
+  isPersonalityKey,
   type PersonalityKey,
 } from "../config/personality";
 import { memoryService } from "../services/memory.service";
@@ -40,7 +41,12 @@ import {
   settingsKeyboard,
   tasksKeyboard,
   taskDisambiguationKeyboard,
+  executionApprovalKeyboard,
 } from "./keyboards";
+import { executionEngine } from "../execution/execution-engine";
+import { getExecutionConfig } from "../execution/config";
+import { executionPersistence } from "../execution/persistence/execution-persistence.service";
+import { agentPlannerService } from "../planner/agent-planner.service";
 import {
   CHAT_TEXT,
   HELP_TEXT,
@@ -526,14 +532,13 @@ export function createTelegramBot(): TelegramBotRuntime {
       return;
     }
 
-    const rateLimit = rateLimiter.check(ctx.from.id);
-    if (!rateLimit.allowed) {
-      await ctx.reply(RATE_LIMIT_MESSAGE(rateLimit.retryAfterSeconds));
+    if (!rateLimiter.consume(ctx.from.id)) {
+      await ctx.reply("You’re sending requests a little too quickly. Please wait a moment and try again.");
       return;
     }
 
     const stopTyping = startTypingIndicator(ctx);
-    await ctx.sendChatAction("upload_photo").catch(() => {});
+    await ctx.api.sendChatAction(ctx.chat.id, "upload_photo").catch(() => {});
     try {
       const result = await ImageGenerationService.generate(rawPrompt, gemini);
 
@@ -590,14 +595,13 @@ export function createTelegramBot(): TelegramBotRuntime {
       return;
     }
 
-    const rateLimit = rateLimiter.check(ctx.from.id);
-    if (!rateLimit.allowed) {
-      await ctx.reply(RATE_LIMIT_MESSAGE(rateLimit.retryAfterSeconds));
+    if (!rateLimiter.consume(ctx.from.id)) {
+      await ctx.reply("You’re sending requests a little too quickly. Please wait a moment and try again.");
       return;
     }
 
     const stopTyping = startTypingIndicator(ctx);
-    await ctx.sendChatAction("upload_video").catch(() => {});
+    await ctx.api.sendChatAction(ctx.chat.id, "upload_video").catch(() => {});
     const progressMsg = await ctx.reply("🎬 Rendering your visual clip... this usually takes ~15-30s.").catch(() => null);
 
     try {
@@ -951,6 +955,50 @@ export function createTelegramBot(): TelegramBotRuntime {
     await ctx.answerCallbackQuery();
   });
 
+  bot.callbackQuery(/^exec_appr:(.+)$/, async (ctx) => {
+    if (!ctx.from || !authorized(ctx.from.id)) {
+      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
+      return;
+    }
+    const approvalId = ctx.match[1];
+    await ctx.answerCallbackQuery({ text: "Processing approval..." });
+    try {
+      const result = await executionEngine.submitApproval(approvalId, ctx.from.id, true);
+      if (result.success) {
+        await ctx.editMessageText(
+          `✅ <b>Approval Granted</b>\nExecution resumed for plan <code>${result.graphId}</code> (revision ${result.planRevision}).`,
+          { parse_mode: "HTML" },
+        );
+      } else {
+        await ctx.reply(`⚠️ Approval submission failed: ${result.error}`);
+      }
+    } catch (err: any) {
+      await ctx.reply(`⚠️ Approval failed: ${err.message}`);
+    }
+  });
+
+  bot.callbackQuery(/^exec_rejc:(.+)$/, async (ctx) => {
+    if (!ctx.from || !authorized(ctx.from.id)) {
+      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
+      return;
+    }
+    const approvalId = ctx.match[1];
+    await ctx.answerCallbackQuery({ text: "Processing rejection..." });
+    try {
+      const result = await executionEngine.submitApproval(approvalId, ctx.from.id, false);
+      if (result.success) {
+        await ctx.editMessageText(
+          `❌ <b>Execution Rejected</b>\nPlan <code>${result.graphId}</code> has been cancelled.`,
+          { parse_mode: "HTML" },
+        );
+      } else {
+        await ctx.reply(`⚠️ Rejection submission failed: ${result.error}`);
+      }
+    } catch (err: any) {
+      await ctx.reply(`⚠️ Rejection failed: ${err.message}`);
+    }
+  });
+
   async function handleIncomingTelegramMessage(
     ctx: Context,
     payload: {
@@ -1159,7 +1207,7 @@ export function createTelegramBot(): TelegramBotRuntime {
 
       // 4a. Natural Video Generation Intent (text-only):
       if (!media && adaptivePlan.detectedIntent === "video_generation" && adaptivePlan.videoPrompt) {
-        await ctx.sendChatAction("upload_video").catch(() => {});
+        await ctx.api.sendChatAction(ctx.chat.id, "upload_video").catch(() => {});
         const progressMsg = await ctx.reply("🎬 Rendering your video clip... this usually takes ~30-50s.").catch(() => null);
         try {
           const videoResult = await VideoGenerationService.generate(
@@ -1236,7 +1284,7 @@ export function createTelegramBot(): TelegramBotRuntime {
 
       // 4b. Natural Image Generation Intent (text-only):
       if (!media && adaptivePlan.detectedIntent === "image_generation" && adaptivePlan.imagePrompt) {
-        await ctx.sendChatAction("upload_photo").catch(() => {});
+        await ctx.api.sendChatAction(ctx.chat.id, "upload_photo").catch(() => {});
         try {
           const imageResult = await ImageGenerationService.generate(
             adaptivePlan.imagePrompt,
@@ -1304,6 +1352,120 @@ export function createTelegramBot(): TelegramBotRuntime {
         history: globalContextData.recentHistory,
       });
 
+      // 5a. Check Autonomous Execution Engine Pipeline
+      const execConfig = getExecutionConfig();
+      if (!media && execConfig.enabled) {
+        try {
+          let taskId = activeTaskContext?.task?.id;
+          if (!taskId && (currentPrompt.length > 15 || /calculate|compute|math|search|find|summarize|plan|step|task|research/i.test(currentPrompt))) {
+            const taskTitle = currentPrompt.slice(0, 40).replace(/[\r\n]+/g, " ");
+            const created = await taskService.createTask({
+              telegramUserId: ctx.from.id,
+              conversationId: globalContextData.conversationId,
+              title: taskTitle,
+              goal: currentPrompt,
+            });
+            taskId = created.task.id;
+            activeTaskContext = created;
+          }
+
+          const planResult = await agentPlannerService.planAndCompile({
+            telegramUserId: ctx.from.id,
+            goal: currentPrompt,
+            taskId,
+            context: {
+              capabilities: adaptivePlan.requiredCapabilities,
+              conversationHistory: globalContextData.recentHistory,
+              activeTask: activeTaskContext?.task ? { id: activeTaskContext.task.id, goal: activeTaskContext.task.goal } : undefined,
+            },
+          });
+
+          if (planResult.success && planResult.graph && !planResult.isDirectResponse) {
+            logger.info(
+              {
+                graphId: planResult.graph.graphId,
+                nodesCount: planResult.graph.nodes.length,
+                telegramUserId: ctx.from.id,
+              },
+              "TELEGRAM_AUTONOMOUS_EXECUTION_DISPATCHED",
+            );
+
+            const session = await executionEngine.startExecution({
+              graphId: planResult.graph.graphId,
+              planRevision: 1,
+              requestId: `req_${Date.now()}_${ctx.from.id}`,
+              taskId,
+              executionContext: {
+                telegramUserId: ctx.from.id,
+                chatId: ctx.chat.id,
+                conversationId: globalContextData.conversationId,
+              },
+            });
+
+            if (session.status === "WAITING_APPROVAL") {
+              const pendingApproval = await executionPersistence.getPendingApprovalForGraph(planResult.graph.graphId, 1);
+              if (pendingApproval) {
+                await ctx.reply(
+                  `⚠️ <b>Approval Required</b>\n\n<b>Node:</b> <code>${escapeHtml(pendingApproval.nodeId)}</code>\n<b>Reason:</b> ${escapeHtml(pendingApproval.reason || "Action requires explicit user confirmation")}`,
+                  {
+                    parse_mode: "HTML",
+                    reply_markup: executionApprovalKeyboard(pendingApproval.approvalId),
+                  },
+                );
+                return;
+              }
+            }
+
+            if (session.status === "COMPLETED") {
+              const outputState = session.state?.outputs || {};
+              const nodeResults = session.state?.nodeResults || {};
+
+              let finalAnswer = "";
+              if (outputState.final_summary?.output) {
+                const o = outputState.final_summary.output;
+                finalAnswer = typeof o === "string" ? o : (o.summary || o.response || JSON.stringify(o, null, 2));
+              } else if (outputState.response?.output) {
+                const o = outputState.response.output;
+                finalAnswer = typeof o === "string" ? o : (o.response || o.summary || JSON.stringify(o, null, 2));
+              } else {
+                const completedKeys = Object.keys(nodeResults).reverse();
+                for (const k of completedKeys) {
+                  const res = nodeResults[k];
+                  if (res?.output) {
+                    finalAnswer = typeof res.output === "string" ? res.output : (res.output.summary || res.output.formatted || res.output.response || JSON.stringify(res.output, null, 2));
+                    break;
+                  }
+                }
+              }
+
+              if (!finalAnswer) {
+                finalAnswer = `Execution plan ${planResult.graph.graphId} completed successfully.`;
+              }
+
+              await runStage(
+                "telegram_reply",
+                { telegramUserId: ctx.from.id, chatId: ctx.chat.id },
+                () => ctx.reply(finalAnswer, { reply_markup: feedbackKeyboard() }),
+              );
+
+              await conversations.addMessage(globalContextData.conversationId, "user", currentPrompt);
+              await conversations.addMessage(globalContextData.conversationId, "model", finalAnswer);
+
+              if (activeTaskContext) {
+                await taskService.syncTaskProgressFromResponse(activeTaskContext.task.id, finalAnswer);
+              }
+
+              return;
+            }
+          }
+        } catch (planExecErr: any) {
+          logger.warn(
+            { error: safeErrorMetadata(planExecErr) },
+            "Autonomous execution path failed; falling through to conversational streaming",
+          );
+        }
+      }
+
       let initialPlaceholder = "💭 <i>Thinking...</i>";
       if (media?.mediaType === "voice" || media?.mediaType === "audio") {
         initialPlaceholder = "🎧 <i>Transcribing and understanding voice note...</i>";
@@ -1318,12 +1480,19 @@ export function createTelegramBot(): TelegramBotRuntime {
       });
       await streamingResponder.init();
 
+      const normalizedHistory: GeminiMessage[] = assembledContext.history
+        .filter((m) => m.role === "user" || m.role === "model" || m.role === "assistant")
+        .map((m) => ({
+          role: (m.role === "assistant" ? "model" : m.role) as "user" | "model",
+          content: m.content,
+        }));
+
       const reply = await runStage(
         "gemini_request",
         { telegramUserId: ctx.from.id, chatId: ctx.chat.id },
         () =>
           gemini.generateReplyStream(
-            assembledContext.history,
+            normalizedHistory,
             currentPrompt,
             {
               personalityInstruction: globalContextData.userProfile.personalityInstruction,
