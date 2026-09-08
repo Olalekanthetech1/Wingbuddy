@@ -2,7 +2,7 @@ import type { ToolRegistry, ToolSecurityPolicy } from "../tools/tool-registry";
 
 /**
  * Execution Graph & Agent Planner Contract Definitions
- * Version: 1.0.0
+ * Version: 1.0.1
  */
 
 export const CURRENT_GRAPH_SCHEMA_VERSION = 1;
@@ -19,9 +19,8 @@ export type GraphStatus = "draft" | "ready" | "executing" | "paused_for_approval
 export type NodeStatus = "pending" | "ready" | "running" | "completed" | "failed" | "skipped" | "waiting_approval";
 export type NodeActionType = "llm_reasoning" | "tool_call" | "memory_write" | "user_checkpoint" | "subgoal_aggregate";
 export type ApprovalStatus = "not_required" | "pending" | "approved" | "denied" | "expired";
-
-export interface NodeApprovalInfo { status: ApprovalStatus; reason: string; requestedAt?: string; resolvedAt?: string; expiresAt?: string; resolvedByUserId?: number; }
 export type ExecutionErrorCategory = "validation" | "authentication" | "authorization" | "rate_limit" | "timeout" | "provider" | "tool" | "network" | "unknown";
+export interface NodeApprovalInfo { status: ApprovalStatus; reason: string; requestedAt?: string; resolvedAt?: string; expiresAt?: string; resolvedByUserId?: number; }
 export interface ExecutionError { code: string; message: string; retryable: boolean; category: ExecutionErrorCategory; details?: unknown; }
 export interface ArtifactRef { id: string; type: "file" | "image" | "memory_item" | "json" | "text"; uriOrRef: string; mimeType?: string; sizeBytes?: number; }
 export interface NodeResult { success: boolean; output?: unknown; error?: ExecutionError; artifacts?: ArtifactRef[]; metadata?: Record<string, unknown>; }
@@ -49,7 +48,6 @@ export interface CandidateEdge { fromNodeId: string; toNodeId: string; dependenc
 export interface CandidatePlan { graphId?: string; goal: string; strategy?: string; advisoryEstimatedSteps?: number; advisoryRequiresApproval?: boolean; nodes: CandidateNode[]; edges?: CandidateEdge[]; }
 export type PlannerErrorCode = "PLAN_GENERATION_FAILED" | "PLAN_COMPILATION_FAILED" | "PLAN_VALIDATION_FAILED" | "UNAUTHORIZED_TOOL_CAPABILITY" | "PLAN_REJECTED" | "INVALID_INPUT_BINDING" | "INVALID_DEPENDENCY" | "APPROVAL_REQUIRED";
 export interface CompilerContext { telegramUserId: number; requestId: string; taskId?: number; graphId?: string; planRevision?: number; parentRevisionId?: string; toolRegistry?: ToolRegistry; userCapabilities?: string[]; plannerModel?: string; timestamp?: string; effectivePolicy?: EffectiveExecutionPolicy; }
-export interface CompilationResult { success: boolean; graph?: ExecutionGraph; diagnostics: ValidationDiagnostic[]; errorCode?: PlannerErrorCode; topologicalOrder?: string[]; }
 export interface PlannerUserContext {
   mode?: string;
   capabilities?: string[];
@@ -59,6 +57,7 @@ export interface PlannerUserContext {
   conversationHistory?: Array<{ role: string; content: string }>;
   userPreferences?: Record<string, unknown>;
   mediaPresent?: boolean;
+  requiresExternalEvidence?: boolean;
 }
 export interface PlannerRequest { requestId: string; telegramUserId: number; goal: string; context?: PlannerUserContext; toolRegistry?: ToolRegistry; taskId?: number; graphId?: string; plannerModel?: string; }
 export interface ReplannerRequest { requestId: string; telegramUserId: number; previousGraphId: string; previousRevision: number; replanReason: string; failedNodeId?: string; context?: PlannerUserContext; toolRegistry?: ToolRegistry; taskId?: number; plannerModel?: string; }
