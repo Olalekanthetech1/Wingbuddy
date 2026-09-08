@@ -211,4 +211,45 @@ Here is the data:
     expect(result).not.toContain("^circ");
     expect(result).not.toContain("longrightarrow");
   });
+
+  it("TEST 14 — Tables: handles multiline cells with <br> tags properly indented", () => {
+    const input = "Here is a table:\n| Feature | Details |\n|---|---|\n| Speed | Very fast<br>Runs smoothly |\n| Memory | Low footprint<br/>Highly optimized |\n";
+    const result = formatTelegramMessage(input);
+    expect(result).toContain("<b>Speed</b>: Very fast\n  Runs smoothly");
+    expect(result).toContain("<b>Memory</b>: Low footprint\n  Highly optimized");
+  });
+
+  it("TEST 15 — Math: single variables and numbers in inline delimiters are extracted", () => {
+    const input = `Force is $F$ and Area is $A$, resulting in $10$.`;
+    const result = formatTelegramMessage(input);
+    expect(result).toBe("Force is F and Area is A, resulting in 10.");
+  });
+
+  it("TEST 16 — Math: unbraced subscripts and superscripts do not swallow punctuation", () => {
+    const input = `Strain is (ΔL/L_0). Another is x^2, and 10^-5.`;
+    const result = formatTelegramMessage(input);
+    expect(result).toContain("(ΔL/L₀)");
+    expect(result).toContain("x², and 10⁻⁵.");
+  });
+
+  it("TEST 17 — Math: preserves genuine currency when multiple dollar signs appear", () => {
+    const input = `I paid $5 for apples and she paid $10 for oranges.`;
+    const result = formatTelegramMessage(input);
+    expect(result).toBe("I paid $5 for apples and she paid $10 for oranges.");
+  });
+
+  it("TEST 18 — Tables: formats the exact Stainless Steel vs Aluminum table from smoke test", () => {
+    const input = `| Property             | Stainless Steel              | Aluminum               |
+| :------------------- | :--------------------------- | :--------------------- |
+| Density              | 7.8–8.0 g/cm³                | 2.7 g/cm³              |
+| Strength             | High                         | Moderate–High          |
+| Corrosion Resistance | Excellent                    | Very Good              |
+| Thermal Conductivity | Low                          | High                   |
+| Common Applications  | Kitchenware, medical equipment | Aircraft, heat sinks   |`;
+    const result = formatTelegramMessage(input);
+    console.log("TEST 18 RENDER OUTPUT:\n" + result);
+    expect(result).toContain("<b>Density</b>");
+    expect(result).toContain("• Stainless Steel: 7.8–8.0 g/cm³");
+    expect(result).not.toContain("|");
+  });
 });

@@ -1,6 +1,7 @@
 import { apiKeyPoolService } from "./api-key-pool.service";
 import type { ModeKey } from "../config/mode";
 import type { Message } from "@workspace/db";
+import { StructureAwareParser } from "../utils/telegram-formatter";
 
 export interface AdaptiveHistoryOptions {
   mode?: ModeKey;
@@ -366,6 +367,8 @@ export class AdaptiveEngineService {
     const chunks: string[] = [];
     let remaining = raw;
     let activeCodeFenceLang: string | null = null;
+    let activeTableHeader: string | null = null;
+    let activeTableSeparator: string | null = null;
 
     while (remaining.length > 0) {
       if (remaining.length <= maxLimit) {
@@ -374,6 +377,7 @@ export class AdaptiveEngineService {
         if (activeCodeFenceLang !== null) {
           finalChunk = `\`\`\`${activeCodeFenceLang}\n${finalChunk}`;
         }
+        // If we are inside an oversized table, we don't necessarily need to "close" it as our formatter handles partials
         chunks.push(finalChunk.trim());
         break;
       }
@@ -386,6 +390,21 @@ export class AdaptiveEngineService {
       const codeFenceIndex = searchWindow.lastIndexOf("\n```");
       if (codeFenceIndex > preferredTarget * 0.5) {
         breakIndex = codeFenceIndex + 4;
+      }
+
+      // Priority 1.5: Markdown Table boundaries
+      if (breakIndex === -1) {
+        const tables = StructureAwareParser.findTables(searchWindow);
+        if (tables.length > 0) {
+          const lastTable = tables[tables.length - 1];
+          // If the last table ends within our window and is reasonably far along
+          if (lastTable.end > preferredTarget * 0.5) {
+            breakIndex = lastTable.end;
+          } else if (lastTable.start > preferredTarget * 0.5) {
+            // If the table starts late, break before it to keep it atomic in the next chunk
+            breakIndex = lastTable.start;
+          }
+        }
       }
 
       // Priority 2: Markdown headers (# or ##)
@@ -452,6 +471,43 @@ export class AdaptiveEngineService {
 
       let currentChunk = remaining.slice(0, breakIndex).trim();
 
+      // Table awareness: Check if we are splitting a table
+      const tablesInFullText = StructureAwareParser.findTables(remaining);
+      const splitTable = tablesInFullText.find(t => breakIndex > t.start && breakIndex < t.end);
+
+      if (splitTable) {
+        // We are splitting a table!
+        // Find the best row boundary within the current chunk
+        const lines = currentChunk.split("\n");
+        let lastRowIdx = -1;
+        for (let i = lines.length - 1; i >= 0; i--) {
+          if (lines[i].trim().startsWith("|") && lines[i].trim().endsWith("|")) {
+            // Check if it's not the separator
+            if (!/^[\s|:\-]+$/.test(lines[i].trim())) {
+              lastRowIdx = i;
+              break;
+            }
+          }
+        }
+
+        if (lastRowIdx !== -1) {
+          const tableLines = lines.slice(0, lastRowIdx + 1);
+          currentChunk = tableLines.join("\n");
+          breakIndex = currentChunk.length + (remaining.indexOf(currentChunk) === -1 ? 0 : remaining.indexOf(currentChunk));
+          // We need to re-slice carefully because trim() might have shifted indices
+          const exactMatch = remaining.indexOf(currentChunk);
+          if (exactMatch !== -1) {
+             breakIndex = exactMatch + currentChunk.length;
+          }
+          
+          activeTableHeader = splitTable.headerRow;
+          activeTableSeparator = splitTable.separatorRow;
+        }
+      } else {
+        activeTableHeader = null;
+        activeTableSeparator = null;
+      }
+
       // Check if this chunk has an unclosed code block
       const codeFenceCount = (currentChunk.match(/```/g) || []).length;
       const isInsideCodeBlock = codeFenceCount % 2 !== 0;
@@ -487,8 +543,14 @@ export class AdaptiveEngineService {
 
       chunks.push(currentChunk);
       remaining = remaining.slice(breakIndex).trim();
+
       if (activeCodeFenceLang !== null && remaining.length > 0 && !remaining.startsWith("```")) {
         remaining = `\`\`\`${activeCodeFenceLang}\n${remaining}`;
+      } else if (activeTableHeader && activeTableSeparator && remaining.length > 0 && remaining.trim().startsWith("|")) {
+        // Inject table header into next chunk if we are continuing a table
+        if (!remaining.includes(activeTableSeparator)) {
+          remaining = `${activeTableHeader}\n${activeTableSeparator}\n${remaining}`;
+        }
       } else if (openHtmlTagsStack.length > 0 && remaining.length > 0) {
         const openingTags = openHtmlTagsStack.map((t) => `<${t}>`).join("");
         remaining = `${openingTags}${remaining}`;

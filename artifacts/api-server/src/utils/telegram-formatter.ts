@@ -116,9 +116,11 @@ export function normalizeLatexMath(mathStr: string): string {
   // 2. Accent & Vector macros: \vec{x}, \hat{x}, \bar{x}, \tilde{x}, \mathbb{R} -> x, R
   s = s.replace(/\\(?:vec|hat|bar|tilde|dot|ddot|mathbf|mathbb|mathcal)\{([^}]+)\}/g, "$1");
 
-  // 3. Centralized Symbol Registry Replacement
+  // 3. Centralized Symbol Registry Replacement (handle both with and without backslashes)
   for (const [tex, unicode] of Object.entries(CENTRALIZED_MATH_SYMBOL_REGISTRY)) {
-    const regex = new RegExp(tex.replace("\\", "\\\\") + "(?![a-zA-Z])", "g");
+    // Match \symbol or bare symbol (if it's a known greek letter/math command)
+    const command = tex.startsWith("\\") ? tex.slice(1) : tex;
+    const regex = new RegExp("\\\\?" + command.replace("\\", "\\\\") + "(?![a-zA-Z])", "g");
     s = s.replace(regex, unicode);
   }
 
@@ -191,7 +193,7 @@ export class StructureAwareParser {
    * Scans raw input and segments it into structured AST Nodes based on structural delimiters
    * (Code blocks, Display Math, Inline Math, Headings, Lists, Paragraphs).
    */
-  static tokenize(input: string): { nodes: ASTNode[]; rawTextWithTokens: string; placeholders: Map<string, ASTNode> } {
+  static tokenize(input: string, isStreaming: boolean = false): { nodes: ASTNode[]; rawTextWithTokens: string; placeholders: Map<string, ASTNode> } {
     let text = input;
     const placeholders = new Map<string, ASTNode>();
     let counter = 0;
@@ -229,12 +231,20 @@ export class StructureAwareParser {
     });
 
     text = text.replace(/\$([^\$\n]+?)\$/g, (fullMatch, mathContent) => {
-      const isCurrency = /^[\d,\.]+(?:\s*(?:USD|EUR|GBP))?$/i.test(mathContent.trim());
-      if (isCurrency) {
-        return fullMatch;
+      const mathTerms = /\b(?:sigma|epsilon|Delta|text|frac|alpha|beta|gamma|lambda|theta|omega|pi)\b/i;
+      // Fast bailout for obvious currency overlaps (e.g. "5 and she gave me ")
+      if (/\s/.test(mathContent) && /^[\d\.,\s\w]+$/.test(mathContent) && !/[a-zA-Z]\s*=\s*/.test(mathContent)) {
+          // It's mostly text/numbers with spaces and no math operators
+          // AND it doesn't contain common math keywords
+          if (!/[\\_^+\-*\/<>]/.test(mathContent) && !mathTerms.test(mathContent)) {
+              return fullMatch;
+          }
       }
-      const hasMath = /[\\=_^+\-*\/<>]|\b(?:sigma|epsilon|Delta|text|frac|alpha|beta|gamma|lambda|theta|omega|pi)\b/i.test(mathContent) ||
-        /[a-zA-Z]\s*=\s*/.test(mathContent);
+
+      const hasMath = /[\\=_^+\-*\/<>]/.test(mathContent) || 
+        mathTerms.test(mathContent) ||
+        /[a-zA-Z]\s*=\s*/.test(mathContent) ||
+        /^[A-Za-z0-9]+$/.test(mathContent.trim()); // Single variables ($F$, $A$) or numbers
 
       if (hasMath) {
         return normalizeLatexMath(mathContent);
@@ -248,6 +258,27 @@ export class StructureAwareParser {
     text = text.replace(/\^\\?circ/g, "°");
     text = text.replace(/\b(?:longrightarrow|rightarrow)\b/g, "→");
     text = text.replace(/\b(?:longleftarrow|leftarrow)\b/g, "←");
+
+    // Standalone subscripts / superscripts outside of math blocks (must not swallow punctuation)
+    // 1. With braces
+    text = text.replace(/_\{([^\}]+)\}/g, (_m, subText) => {
+      return convertSubscript(subText);
+    });
+    // 2. Without braces (limit to alphanumeric and sign)
+    text = text.replace(/_([\+\-]?[a-zA-Z0-9]+)/g, (fullMatch, subText) => {
+      const converted = convertSubscript(subText);
+      return converted !== subText ? converted : fullMatch;
+    });
+
+    // 1. With braces
+    text = text.replace(/\^\{([^\}]+)\}/g, (_m, superText) => {
+      return convertSuperscript(superText);
+    });
+    // 2. Without braces (limit to alphanumeric and sign)
+    text = text.replace(/\^([\+\-]?[a-zA-Z0-9]+)/g, (fullMatch, superText) => {
+      const converted = convertSuperscript(superText);
+      return converted !== superText ? converted : fullMatch;
+    });
 
     if (/\\(?:vec|frac|sigma|epsilon|Delta|cdot|text|customMacro|[a-zA-Z]+)/.test(text)) {
       text = text.replace(/\\(?:vec|hat|bar|tilde|dot|ddot|mathbf|mathbb|mathcal)\{([^}]+)\}/g, "$1");
@@ -294,7 +325,89 @@ export class StructureAwareParser {
       return `\n\n${key}\n\n`;
     });
 
+    // K. DEFER/PROTECT incomplete tables during streaming
+    if (isStreaming) {
+      // If the text ends with lines that look like a table but hasn't been captured as an AST node
+      const lines = text.split("\n");
+      let tableStartLine = -1;
+      // Look back for a sequence of lines starting with | that aren't already tokenized
+      for (let i = lines.length - 1; i >= Math.max(0, lines.length - 15); i--) {
+        const trimmedLine = lines[i].trim();
+        if (trimmedLine.startsWith("|")) {
+          if (trimmedLine.includes("XTELEGRAMTABLE")) {
+            // Already tokenized as a valid table, break
+            tableStartLine = -1;
+            break;
+          }
+          tableStartLine = i;
+        } else if (trimmedLine === "" && tableStartLine !== -1) {
+          // Allow empty lines within potential table
+        } else {
+          break;
+        }
+      }
+
+      if (tableStartLine !== -1) {
+        const potentialTablePart = lines.slice(tableStartLine).join("\n");
+        const key = `XTELEGRAMTABLE_INCOMPLETE${counter++}X`;
+        const node: ASTNode = { type: "code_block", raw: potentialTablePart, content: potentialTablePart, lang: "" };
+        placeholders.set(key, node);
+        
+        // Replace the trailing part in text
+        const before = lines.slice(0, tableStartLine).join("\n");
+        text = `${before}\n\n${key}\n\n`;
+      }
+    }
+
     return { nodes: Array.from(placeholders.values()), rawTextWithTokens: text, placeholders };
+  }
+
+  /**
+   * Helper to identify all tables in a text block for chunking purposes.
+   * Awareness of code blocks prevents misidentifying pipe-heavy code as tables.
+   */
+  static findTables(text: string): Array<{ start: number; end: number; raw: string; headerRow: string; separatorRow: string }> {
+    const results: Array<{ start: number; end: number; raw: string; headerRow: string; separatorRow: string }> = [];
+    
+    // 1. Identify code blocks to exclude
+    const codeBlocks: Array<{ start: number; end: number }> = [];
+    const codeBlockRegex = /```[\s\S]*?```|`[^`\n]+`/g;
+    let cbMatch;
+    while ((cbMatch = codeBlockRegex.exec(text)) !== null) {
+      codeBlocks.push({ start: cbMatch.index, end: cbMatch.index + cbMatch[0].length });
+    }
+
+    // 2. Identify tables
+    const tableRegex = /(?:^[ \t]*\|.+\|[ \t]*$\n?){2,}/gm;
+    let match;
+
+    while ((match = tableRegex.exec(text)) !== null) {
+      const matchStart = match.index;
+      const matchEnd = match.index + match[0].length;
+
+      // Check if table overlaps with any code block
+      const isInsideCode = codeBlocks.some(cb => 
+        (matchStart >= cb.start && matchStart < cb.end) || 
+        (matchEnd > cb.start && matchEnd <= cb.end) ||
+        (cb.start >= matchStart && cb.end <= matchEnd)
+      );
+      if (isInsideCode) continue;
+
+      const lines = match[0].split("\n").filter(l => l.trim().length > 0);
+      if (lines.length >= 2) {
+        const separatorLine = lines[1];
+        if (/\|[\s\-\:]+\|/.test(separatorLine)) {
+          results.push({
+            start: matchStart,
+            end: matchEnd,
+            raw: match[0],
+            headerRow: lines[0],
+            separatorRow: lines[1]
+          });
+        }
+      }
+    }
+    return results;
   }
 }
 
@@ -306,12 +419,12 @@ export class TelegramMessageFormatter {
    * Main entry point: Formats raw AI content into clean Telegram-safe HTML.
    * Uses a structure-aware parser and generic math normalizer.
    */
-  static format(rawInput: string): string {
+  static format(rawInput: string, isStreaming: boolean = false): string {
     if (!rawInput || typeof rawInput !== "string") return "";
 
     try {
       // 1. Tokenize & Parse AST Structures
-      const { rawTextWithTokens, placeholders } = StructureAwareParser.tokenize(rawInput);
+      const { rawTextWithTokens, placeholders } = StructureAwareParser.tokenize(rawInput, isStreaming);
 
       let text = rawTextWithTokens;
 
@@ -382,7 +495,7 @@ export class TelegramMessageFormatter {
         const cells = trimmed
           .slice(1, -1)
           .split("|")
-          .map((c) => c.trim());
+          .map((c) => c.replace(/<br\s*\/?>/gi, '\n').trim());
 
         // Ignore separator row
         if (cells.every((c) => /^[\s\-\:]+$/.test(c))) {
@@ -408,7 +521,8 @@ export class TelegramMessageFormatter {
       // <b>Row1Col1</b>: Row1Col2
       for (const row of rows) {
         if (row.length === 2) {
-          result += `<b>${row[0]}</b>: ${row[1]}\n`;
+          const val = row[1].replace(/\n/g, "\n  ");
+          result += `<b>${row[0]}</b>: ${val}\n`;
         }
       }
     } else {
@@ -421,7 +535,8 @@ export class TelegramMessageFormatter {
         if (row.length > 0) {
           result += `<b>${row[0]}</b>\n`;
           for (let j = 1; j < Math.min(row.length, headers.length); j++) {
-            result += `• ${headers[j]}: ${row[j]}\n`;
+            const val = row[j].replace(/\n/g, "\n  ");
+            result += `• ${headers[j]}: ${val}\n`;
           }
           if (i < rows.length - 1) {
             result += "\n";
@@ -434,8 +549,16 @@ export class TelegramMessageFormatter {
   }
 }
 
-export function formatTelegramMessage(rawInput: string): string {
-  return TelegramMessageFormatter.format(rawInput);
+export function formatTelegramMessage(
+  rawInput: string,
+  metadata?: { 
+    telegramUserId?: number; 
+    chunkIndex?: number; 
+    source?: string;
+    isStreaming?: boolean;
+  }
+): string {
+  return TelegramMessageFormatter.format(rawInput, metadata?.isStreaming);
 }
 
 export function stripTelegramHtml(htmlInput: string): string {

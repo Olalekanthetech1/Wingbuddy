@@ -93,7 +93,11 @@ export class StreamingResponder {
 
     this.latestText = fullText.trim();
     const rawChunks = AdaptiveEngineService.computeAdaptiveMessageSplit(this.latestText);
-    const chunks = rawChunks.map(chunk => formatTelegramMessage(chunk));
+    const chunks = rawChunks.map((chunk, idx) => formatTelegramMessage(chunk, {
+      telegramUserId: this.ctx.from?.id,
+      chunkIndex: idx,
+      source: "StreamingResponder.finalize"
+    }));
 
     if (!this.messageId) {
       // If initial placeholder failed, send standard split messages
@@ -152,7 +156,11 @@ export class StreamingResponder {
       return;
     }
 
-    const formattedSnippet = formatTelegramMessage(rawSnippet);
+    const formattedSnippet = formatTelegramMessage(rawSnippet, {
+      telegramUserId: this.ctx.from?.id,
+      source: `StreamingResponder.flushEdit(isFinal=${isFinal})`,
+      isStreaming: !isFinal
+    });
 
     try {
       await this.ctx.api.editMessageText(

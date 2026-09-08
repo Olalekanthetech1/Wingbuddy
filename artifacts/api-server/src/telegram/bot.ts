@@ -1,5 +1,6 @@
 import { Bot, Context, InlineKeyboard, InputFile, webhookCallback } from "grammy";
 import type { Express, Request, Response } from "express";
+import { chatDatabaseService } from "@workspace/db";
 import { logger } from "../lib/logger";
 import { getConfig } from "../config/env";
 import { MODES, MODE_KEYS, type ModeKey } from "../config/mode";
@@ -426,7 +427,11 @@ export function createTelegramBot(): TelegramBotRuntime {
       await conversations.addMessage(globalContextData.conversationId, "user", `/search ${query}`);
       await conversations.addMessage(globalContextData.conversationId, "model", reply);
 
-      const chunks = splitTelegramMessage(reply).map(chunk => formatTelegramMessage(chunk));
+      const chunks = splitTelegramMessage(reply).map((chunk, idx) => formatTelegramMessage(chunk, {
+        telegramUserId: ctx.from?.id,
+        chunkIndex: idx,
+        source: "bot.search_command"
+      }));
       for (const [index, chunk] of chunks.entries()) {
         await ctx.reply(chunk, {
           parse_mode: "HTML",
@@ -486,7 +491,11 @@ export function createTelegramBot(): TelegramBotRuntime {
       await conversations.addMessage(globalContextData.conversationId, "user", `/think ${query}`);
       await conversations.addMessage(globalContextData.conversationId, "model", reply);
 
-      const chunks = splitTelegramMessage(reply).map(chunk => formatTelegramMessage(chunk));
+      const chunks = splitTelegramMessage(reply).map((chunk, idx) => formatTelegramMessage(chunk, {
+        telegramUserId: ctx.from?.id,
+        chunkIndex: idx,
+        source: "bot.think_command"
+      }));
       for (const [index, chunk] of chunks.entries()) {
         await ctx.reply(chunk, {
           parse_mode: "HTML",
