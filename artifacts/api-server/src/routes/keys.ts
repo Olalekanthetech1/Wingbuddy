@@ -8,29 +8,10 @@ import { isExecutionEngineEnabled } from "../execution/config";
 
 const router: IRouter = Router();
 
-async function syncKeysToDatabase(): Promise<void> {
-  try {
-    const joined = apiKeyPoolService.getJoinedRawKeys();
-    process.env.GEMINI_API_KEY = joined;
-    await db
-      .insert(systemSettingsTable)
-      .values({ key: "GEMINI_API_KEY", value: joined, updatedAt: new Date() })
-      .onConflictDoUpdate({
-        target: systemSettingsTable.key,
-        set: { value: joined, updatedAt: new Date() },
-      });
-  } catch (err) {
-    logger.warn({ error: String(err) }, "Failed to sync API keys to PostgreSQL database");
-  }
-}
-
-// GET /api/keys - List all keys in pool with status & metrics
 router.get("/keys", (_req: Request, res: Response) => {
-  const summary = apiKeyPoolService.getSummary();
-  res.json(summary);
+  res.json(apiKeyPoolService.getSummary());
 });
 
-// POST /api/keys - Add and validate a new API key
 router.post("/keys", async (req: Request, res: Response) => {
   try {
     const { key, name } = req.body;
@@ -38,52 +19,52 @@ router.post("/keys", async (req: Request, res: Response) => {
       res.status(400).json({ error: "Missing required field 'key'" });
       return;
     }
-
     const added = await apiKeyPoolService.addKey(key, name);
-    await syncKeysToDatabase();
-
-    const isCooldown = added.status === "cooldown";
-    const message = isCooldown
-      ? `Key (${added.name}) is valid and added to pool in temporary cooldown (${added.cooldownSecondsLeft}s left). It will automatically activate when quota resets.`
-      : "API key validated, saved to database, and added to pool successfully";
-
     res.status(201).json({
-      message,
+      message: added.status === "cooldown" ? `Key (${added.name}) is valid and saved, but temporarily rate-limited (${added.cooldownSecondsLeft}s left).` : "API key validated and saved to the encrypted database registry.",
       key: added,
       poolSummary: apiKeyPoolService.getSummary(),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    logger.warn({ error: message }, "Managed API key add request failed");
     res.status(400).json({ error: message });
   }
 });
 
-// DELETE /api/keys/:id - Remove a key
 router.delete("/keys/:id", async (req: Request, res: Response) => {
   const rawId = req.params.id;
   const id = Array.isArray(rawId) ? rawId[0] : rawId;
-  const removed = apiKeyPoolService.removeKey(id);
-  if (!removed) {
-    res.status(404).json({ error: "Key not found" });
-    return;
+  try {
+    const result = await apiKeyPoolService.removeKey(id);
+    if (!result.removed) {
+      res.status(404).json({ error: "Key not found" });
+      return;
+    }
+    res.json({ message: result.source === "env" ? "Environment key revoked and tombstoned." : "Dashboard key permanently removed.", poolSummary: apiKeyPoolService.getSummary() });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error({ error: message, id }, "Managed API key removal failed");
+    res.status(500).json({ error: "Unable to remove API key" });
   }
-  await syncKeysToDatabase();
-  res.json({ message: "Key removed from database and pool", poolSummary: apiKeyPoolService.getSummary() });
 });
 
-// PATCH /api/keys/:id/toggle - Enable/disable a key
-router.patch("/keys/:id/toggle", (req: Request, res: Response) => {
+router.patch("/keys/:id/toggle", async (req: Request, res: Response) => {
   const rawId = req.params.id;
   const id = Array.isArray(rawId) ? rawId[0] : rawId;
-  const updated = apiKeyPoolService.toggleKey(id);
-  if (!updated) {
-    res.status(404).json({ error: "Key not found" });
-    return;
+  try {
+    const updated = await apiKeyPoolService.toggleKey(id);
+    if (!updated) {
+      res.status(404).json({ error: "Key not found" });
+      return;
+    }
+    res.json({ message: "Key state persisted", key: updated, poolSummary: apiKeyPoolService.getSummary() });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
   }
-  res.json({ message: "Key toggled", key: updated, poolSummary: apiKeyPoolService.getSummary() });
 });
 
-// POST /api/keys/mode - Change rotation mode
 router.post("/keys/mode", async (req: Request, res: Response) => {
   const { mode } = req.body;
   if (mode !== "round_robin" && mode !== "failover") {
@@ -91,98 +72,72 @@ router.post("/keys/mode", async (req: Request, res: Response) => {
     return;
   }
   apiKeyPoolService.setRotationMode(mode);
-  process.env.KEY_ROTATION_MODE = mode;
   try {
-    await db
-      .insert(systemSettingsTable)
-      .values({ key: "KEY_ROTATION_MODE", value: mode, updatedAt: new Date() })
-      .onConflictDoUpdate({
-        target: systemSettingsTable.key,
-        set: { value: mode, updatedAt: new Date() },
-      });
-  } catch (e) {
-    logger.warn({ error: String(e) }, "Failed to persist KEY_ROTATION_MODE to database");
+    await db.insert(systemSettingsTable).values({ key: "KEY_ROTATION_MODE", value: mode, updatedAt: new Date() }).onConflictDoUpdate({ target: systemSettingsTable.key, set: { value: mode, updatedAt: new Date() } });
+    res.json({ message: "Rotation mode persisted", rotationMode: mode });
+  } catch (err) {
+    logger.error({ error: err instanceof Error ? err.message : String(err) }, "Failed to persist rotation mode");
+    res.status(500).json({ error: "Unable to persist rotation mode" });
   }
-
-  res.json({ message: "Rotation mode updated and saved to database", rotationMode: mode });
 });
 
-// POST /api/keys/test - Test an arbitrary key or existing key
+router.post("/keys/:id/test", async (req: Request, res: Response) => {
+  const rawId = req.params.id;
+  const id = Array.isArray(rawId) ? rawId[0] : rawId;
+  try {
+    const publicKey = apiKeyPoolService.getSummary().keys.find((item) => item.id === id);
+    if (!publicKey) {
+      res.status(404).json({ error: "Key not found" });
+      return;
+    }
+    const candidates = await apiKeyPoolService.getOrderedKeysForExecution();
+    const managed = candidates.find((item) => item.id === id);
+    if (!managed) {
+      res.status(409).json({ error: "Key is disabled or invalid and cannot be tested" });
+      return;
+    }
+    const result = await apiKeyPoolService.testRawKey(managed.key);
+    if (result.valid && !result.isRateLimited) apiKeyPoolService.recordSuccess(id, result.latencyMs);
+    else if (!result.valid) apiKeyPoolService.recordError(id, result.error || "Key validation failed");
+    res.json(result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
+});
+
 router.post("/keys/test", async (req: Request, res: Response) => {
   const { key } = req.body;
   if (!key || typeof key !== "string") {
     res.status(400).json({ error: "Missing required field 'key'" });
     return;
   }
-  const result = await apiKeyPoolService.testRawKey(key);
-  res.json(result);
+  res.json(await apiKeyPoolService.testRawKey(key));
 });
 
-// GET /api/stats - Global server metrics
 router.get("/stats", (_req: Request, res: Response) => {
   const pool = apiKeyPoolService.getSummary();
   const config = getConfig();
   const executionEngineEnabled = isExecutionEngineEnabled();
-
-  res.json({
-    timestamp: new Date().toISOString(),
-    geminiModel: config.geminiModel,
-    telegramBotStatus: Boolean(config.telegramBotToken?.trim()) ? "active" : "pending_token",
-    databaseStatus: Boolean(process.env.DATABASE_URL?.trim()) ? "connected" : "standalone",
-    executionEngine: {
-      enabled: executionEngineEnabled,
-      status: executionEngineEnabled ? "active" : "disabled",
-    },
-    keyPool: pool,
-    uptimeSeconds: Math.floor(process.uptime()),
-    nodeVersion: process.version,
-    memoryUsageMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
-  });
+  res.json({ timestamp: new Date().toISOString(), geminiModel: config.geminiModel, telegramBotStatus: Boolean(config.telegramBotToken?.trim()) ? "active" : "pending_token", databaseStatus: Boolean(process.env.DATABASE_URL?.trim()) ? "connected" : "standalone", executionEngine: { enabled: executionEngineEnabled, status: executionEngineEnabled ? "active" : "disabled" }, keyPool: pool, uptimeSeconds: Math.floor(process.uptime()), nodeVersion: process.version, memoryUsageMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) });
 });
 
-// POST /api/chat/test - Direct interactive test console with multi-key pool
 router.post("/chat/test", async (req: Request, res: Response) => {
   try {
     const { message, personality, mode, enableSearch, userId } = req.body;
-    if (!message || typeof message !== "string") {
-      res.status(400).json({ error: "Missing required 'message' field" });
-      return;
-    }
-
+    if (!message || typeof message !== "string") { res.status(400).json({ error: "Missing required 'message' field" }); return; }
     const config = getConfig();
     const gemini = new GeminiService(apiKeyPoolService, config.geminiModel, config.geminiTimeoutMs);
-
     let memoryContext = "";
     if (userId) {
       try {
         const mems = await chatDatabaseService.getUserMemories(BigInt(userId));
-        if (mems.length > 0) {
-          memoryContext = mems.map((m) => `[${m.key}]: ${m.content}`).join("\n");
-        }
-      } catch (e) {
-        logger.warn({ error: String(e) }, "Failed to fetch user memories for test chat");
-      }
+        if (mems.length > 0) memoryContext = mems.map((m) => `[${m.key}]: ${m.content}`).join("\n");
+      } catch (error) { logger.warn({ error: error instanceof Error ? error.message : String(error) }, "Failed to fetch user memories for test chat"); }
     }
-
     const start = Date.now();
-    const reply = await gemini.generateReply(
-      [],
-      message,
-      {
-        personalityInstruction: personality ? `Personality: ${personality}` : undefined,
-        modeInstruction: mode ? `Mode: ${mode}` : undefined,
-        memoryInstruction: memoryContext || undefined,
-      },
-      { enableSearch: Boolean(enableSearch) },
-    );
-    const latencyMs = Date.now() - start;
-
-    res.json({
-      reply,
-      latencyMs,
-      timestamp: new Date().toISOString(),
-      poolState: apiKeyPoolService.getSummary(),
-    });
+    const reply = await gemini.generateReply([], message, { personalityInstruction: personality ? `Personality: ${personality}` : undefined, modeInstruction: mode ? `Mode: ${mode}` : undefined, memoryInstruction: memoryContext || undefined }, { enableSearch: Boolean(enableSearch) });
+    res.json({ reply, latencyMs: Date.now() - start, timestamp: new Date().toISOString(), poolState: apiKeyPoolService.getSummary() });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error({ error: msg }, "Test chat request failed");
