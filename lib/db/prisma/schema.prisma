@@ -66,38 +66,101 @@ model Message {
 
 /// Long-term persistent memory for user preferences, facts, and profile knowledge
 model UserMemory {
-  id             Int          @id @default(autoincrement())
-  telegramUserId BigInt       @map("telegram_user_id")
-  key            String       @db.VarChar(128)
-  content        String       @db.Text
-  category       String       @default("general") @db.VarChar(64)
-  embeddingJson  String?      @map("embedding_json") @db.Text
-  sourceSessionId Int?        @map("source_session_id")
-  createdAt      DateTime     @default(now()) @map("created_at")
-  updatedAt      DateTime     @default(now()) @updatedAt @map("updated_at")
+  id                   Int       @id @default(autoincrement())
+  telegramUserId       BigInt    @map("telegram_user_id")
+  key                  String    @db.VarChar(128)
+  content              String    @db.Text
+  category             String    @default("general") @db.VarChar(64)
+  type                 String    @default("user_fact") @db.VarChar(64)
+  structuredValue      String?   @map("structured_value") @db.Text
+  confidence           String    @default("high") @db.VarChar(16)
+  importance           String    @default("medium") @db.VarChar(16)
+  status               String    @default("active") @db.VarChar(16)
+  embeddingJson        String?   @map("embedding_json") @db.Text
+  sourceSessionId      Int?      @map("source_session_id")
+  sourceMessageId      Int?      @map("source_message_id")
+  sourceConversationId Int?      @map("source_conversation_id")
+  expiresAt            DateTime? @map("expires_at")
+  lastAccessedAt       DateTime? @map("last_accessed_at")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @default(now()) @updatedAt @map("updated_at")
 
   // Relationships
-  user           User?        @relation(fields: [telegramUserId], references: [telegramUserId], onDelete: Cascade)
+  user User? @relation(fields: [telegramUserId], references: [telegramUserId], onDelete: Cascade)
 
   @@unique([telegramUserId, key], map: "user_memories_user_key_idx")
   @@index([telegramUserId, category], map: "user_memories_user_category_idx")
+  @@index([telegramUserId, status], map: "user_memories_user_status_idx")
   @@map("user_memories")
+}
+
+/// Agent Multi-Step Tasks
+model AgentTask {
+  id             Int       @id @default(autoincrement())
+  telegramUserId BigInt    @map("telegram_user_id")
+  conversationId Int?      @map("conversation_id")
+  title          String    @db.Text
+  goal           String    @db.Text
+  taskType       String    @default("general") @map("task_type")
+  status         String    @default("pending")
+  currentStep    Int       @default(1) @map("current_step")
+  contextJson    String?   @map("context_json") @db.Text
+  metadataJson   String?   @map("metadata_json") @db.Text
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at")
+  completedAt    DateTime? @map("completed_at")
+
+  @@index([telegramUserId, status], map: "agent_tasks_user_status_idx")
+  @@index([telegramUserId, updatedAt], map: "agent_tasks_user_updated_idx")
+  @@map("agent_tasks")
+}
+
+/// Agent Task Execution Steps
+model AgentTaskStep {
+  id            Int      @id @default(autoincrement())
+  taskId        Int      @map("task_id")
+  stepOrder     Int      @map("step_order")
+  title         String   @db.Text
+  description   String?  @db.Text
+  status        String   @default("pending")
+  resultSummary String?  @map("result_summary") @db.Text
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@index([taskId, stepOrder], map: "agent_task_steps_task_step_idx")
+  @@map("agent_task_steps")
+}
+
+/// Summaries for past conversation turns
+model ConversationSummary {
+  id                     Int      @id @default(autoincrement())
+  telegramUserId         BigInt   @map("telegram_user_id")
+  conversationId         Int      @map("conversation_id")
+  summary                String   @db.Text
+  keyTakeawaysJson       String?  @map("key_takeaways_json") @db.Text
+  artifactRefsJson       String?  @map("artifact_refs_json") @db.Text
+  messageCountSummarized Int      @default(0) @map("message_count_summarized")
+  createdAt              DateTime @default(now()) @map("created_at")
+  updatedAt              DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@index([telegramUserId, conversationId], map: "conversation_summaries_user_conv_idx")
+  @@map("conversation_summaries")
 }
 
 /// Scheduled proactive reminders with recurring checks and natural language parsing
 model Reminder {
-  id             Int          @id @default(autoincrement())
-  telegramUserId BigInt       @map("telegram_user_id")
-  chatId         BigInt       @map("chat_id")
-  prompt         String       @db.Text
-  dueAt          DateTime     @map("due_at")
-  isCompleted    Boolean      @default(false) @map("is_completed")
-  snoozeCount    Int          @default(0) @map("snooze_count")
-  createdAt      DateTime     @default(now()) @map("created_at")
-  updatedAt      DateTime     @default(now()) @updatedAt @map("updated_at")
+  id             Int      @id @default(autoincrement())
+  telegramUserId BigInt   @map("telegram_user_id")
+  chatId         BigInt   @map("chat_id")
+  prompt         String   @db.Text
+  dueAt          DateTime @map("due_at")
+  isCompleted    Boolean  @default(false) @map("is_completed")
+  snoozeCount    Int      @default(0) @map("snooze_count")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at")
 
   // Relationships
-  user           User?        @relation(fields: [telegramUserId], references: [telegramUserId], onDelete: Cascade)
+  user User? @relation(fields: [telegramUserId], references: [telegramUserId], onDelete: Cascade)
 
   @@index([telegramUserId, isCompleted], map: "reminders_user_completed_idx")
   @@index([dueAt, isCompleted], map: "reminders_due_completed_idx")

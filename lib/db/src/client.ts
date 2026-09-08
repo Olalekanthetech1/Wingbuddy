@@ -95,16 +95,79 @@ export async function ensureDatabaseSchema(pgPool: pg.Pool): Promise<void> {
       key TEXT NOT NULL,
       content TEXT NOT NULL,
       category TEXT NOT NULL DEFAULT 'general',
+      type TEXT NOT NULL DEFAULT 'user_fact',
+      structured_value TEXT,
+      confidence TEXT NOT NULL DEFAULT 'high',
+      importance TEXT NOT NULL DEFAULT 'medium',
+      status TEXT NOT NULL DEFAULT 'active',
       embedding_json TEXT,
       source_session_id INTEGER,
+      source_message_id INTEGER,
+      source_conversation_id INTEGER,
+      expires_at TIMESTAMPTZ,
+      last_accessed_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     CREATE UNIQUE INDEX IF NOT EXISTS user_memories_user_key_idx ON user_memories(telegram_user_id, key);
     CREATE INDEX IF NOT EXISTS user_memories_user_category_idx ON user_memories(telegram_user_id, category);
+    CREATE INDEX IF NOT EXISTS user_memories_user_status_idx ON user_memories(telegram_user_id, status);
 
-    -- Ensure embedding_json exists for upgrades
+    -- Ensure upgraded columns exist for user_memories
     ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS embedding_json TEXT;
+    ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'user_fact';
+    ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS structured_value TEXT;
+    ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS confidence TEXT NOT NULL DEFAULT 'high';
+    ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS importance TEXT NOT NULL DEFAULT 'medium';
+    ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+    ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS source_message_id INTEGER;
+    ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS source_conversation_id INTEGER;
+    ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+    ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS last_accessed_at TIMESTAMPTZ;
+
+    CREATE TABLE IF NOT EXISTS agent_tasks (
+      id SERIAL PRIMARY KEY,
+      telegram_user_id BIGINT NOT NULL,
+      conversation_id INTEGER,
+      title TEXT NOT NULL,
+      goal TEXT NOT NULL,
+      task_type TEXT NOT NULL DEFAULT 'general',
+      status TEXT NOT NULL DEFAULT 'pending',
+      current_step INTEGER NOT NULL DEFAULT 1,
+      context_json TEXT,
+      metadata_json TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      completed_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS agent_tasks_user_status_idx ON agent_tasks(telegram_user_id, status);
+    CREATE INDEX IF NOT EXISTS agent_tasks_user_updated_idx ON agent_tasks(telegram_user_id, updated_at);
+
+    CREATE TABLE IF NOT EXISTS agent_task_steps (
+      id SERIAL PRIMARY KEY,
+      task_id INTEGER NOT NULL REFERENCES agent_tasks(id) ON DELETE CASCADE,
+      step_order INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      result_summary TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS agent_task_steps_task_step_idx ON agent_task_steps(task_id, step_order);
+
+    CREATE TABLE IF NOT EXISTS conversation_summaries (
+      id SERIAL PRIMARY KEY,
+      telegram_user_id BIGINT NOT NULL,
+      conversation_id INTEGER NOT NULL,
+      summary TEXT NOT NULL,
+      key_takeaways_json TEXT,
+      artifact_refs_json TEXT,
+      message_count_summarized INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS conversation_summaries_user_conv_idx ON conversation_summaries(telegram_user_id, conversation_id);
 
     CREATE TABLE IF NOT EXISTS reminders (
       id SERIAL PRIMARY KEY,

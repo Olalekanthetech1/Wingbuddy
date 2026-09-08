@@ -1,4 +1,6 @@
-import { getPrisma, getPool, isPgVectorAvailable } from "../client";
+import { getPrisma, getPool, getDb, isPgVectorAvailable } from "../client";
+import { agentTasksTable, agentTaskStepsTable, conversationSummariesTable, userMemoriesTable } from "../schema";
+import { eq, and, desc, inArray } from "drizzle-orm";
 
 export interface SaveMessageOptions {
   conversationId: number;
@@ -30,9 +32,17 @@ export interface SaveMemoryOptions {
   key: string;
   content: string;
   category?: "preference" | "fact" | "context" | "instruction" | "general" | string;
+  type?: "user_preference" | "user_fact" | "workflow_preference" | "project_context" | "learning_context" | "interaction_preference" | "important_context" | string;
+  structuredValue?: string;
+  confidence?: "low" | "medium" | "high";
+  importance?: "low" | "medium" | "high";
+  status?: "active" | "archived" | "deleted";
   embedding?: number[];
   embeddingJson?: string;
   sourceSessionId?: number;
+  sourceMessageId?: number;
+  sourceConversationId?: number;
+  expiresAt?: Date;
 }
 
 export interface ChatMessageRecord {
@@ -61,9 +71,58 @@ export interface UserMemoryRecord {
   key: string;
   content: string;
   category: string;
+  type: string;
+  structuredValue?: string | null;
+  confidence: "low" | "medium" | "high" | string;
+  importance: "low" | "medium" | "high" | string;
+  status: "active" | "archived" | "deleted" | string;
   embeddingJson?: string | null;
   similarity?: number;
   sourceSessionId: number | null;
+  sourceMessageId?: number | null;
+  sourceConversationId?: number | null;
+  expiresAt?: Date | null;
+  lastAccessedAt?: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface AgentTaskRecord {
+  id: number;
+  telegramUserId: number;
+  conversationId: number | null;
+  title: string;
+  goal: string;
+  taskType: string;
+  status: "pending" | "active" | "paused" | "waiting" | "completed" | "failed" | "cancelled" | string;
+  currentStep: number;
+  contextJson?: string | null;
+  metadataJson?: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  completedAt?: Date | null;
+}
+
+export interface AgentTaskStepRecord {
+  id: number;
+  taskId: number;
+  stepOrder: number;
+  title: string;
+  description: string | null;
+  status: "pending" | "running" | "completed" | "failed" | "skipped" | string;
+  resultSummary: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ConversationSummaryRecord {
+  id: number;
+  telegramUserId: number;
+  conversationId: number;
+  summary: string;
+  keyTakeawaysJson: string | null;
+  artifactRefsJson: string | null;
+  messageCountSummarized: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -500,6 +559,12 @@ export class ChatDatabaseService {
 
     await this.ensureUserExists(telegramUserId);
 
+    const type = options.type ?? "user_fact";
+    const confidence = options.confidence ?? "high";
+    const importance = options.importance ?? "medium";
+    const status = options.status ?? "active";
+    const structuredValue = options.structuredValue ?? null;
+
     const memory = await this.prisma.userMemory.upsert({
       where: {
         telegramUserId_key: {
@@ -510,6 +575,11 @@ export class ChatDatabaseService {
       update: {
         content: options.content,
         category,
+        type,
+        confidence,
+        importance,
+        status,
+        structuredValue,
         embeddingJson,
         sourceSessionId: options.sourceSessionId ?? null,
         updatedAt: new Date(),
@@ -519,6 +589,11 @@ export class ChatDatabaseService {
         key: options.key,
         content: options.content,
         category,
+        type,
+        confidence,
+        importance,
+        status,
+        structuredValue,
         embeddingJson,
         sourceSessionId: options.sourceSessionId ?? null,
       },
@@ -543,18 +618,86 @@ export class ChatDatabaseService {
   }
 
   /**
+   * Dynamically computes adaptive similarity threshold based on query vector dimensionality,
+   * vector norm/variance, and total user memory corpus size.
+   */
+  public computeAdaptiveMinSimilarity(queryVector: number[], totalMemories = 0): number {
+    if (!queryVector || queryVector.length === 0) return 0.35;
+
+    // High-dimensional embeddings (e.g. 768 or 1536) have tighter cosine distributions
+    const baseSimilarity = queryVector.length >= 768 ? 0.38 : 0.42;
+
+    // Adapt threshold based on corpus size to balance precision vs recall
+    if (totalMemories > 50) {
+      return Math.min(0.55, baseSimilarity + 0.10);
+    } else if (totalMemories > 20) {
+      return Math.min(0.50, baseSimilarity + 0.05);
+    } else if (totalMemories < 5) {
+      return Math.max(0.25, baseSimilarity - 0.10);
+    }
+
+    return baseSimilarity;
+  }
+
+  /**
+   * Dynamically computes adaptive search result count limit based on user memory corpus size.
+   */
+  public computeAdaptiveSearchLimit(totalMemories = 0): number {
+    if (totalMemories <= 0) return 5;
+    // Scale limit adaptively between 3 and 12 depending on corpus size
+    return Math.max(3, Math.min(12, Math.ceil(Math.log2(totalMemories + 1) * 2)));
+  }
+
+  /**
+   * Dynamically derives adaptive confidence rating from vector similarity scores.
+   */
+  public computeAdaptiveConfidence(similarityScore: number): "low" | "medium" | "high" {
+    if (similarityScore >= 0.75) return "high";
+    if (similarityScore >= 0.55) return "medium";
+    return "low";
+  }
+
+  /**
    * Searches user long-term memories using native PostgreSQL pgvector cosine distance (<=>)
    * or fast in-database/in-memory hybrid cosine scoring fallback.
+   * Dynamically computes adaptive similarity threshold and adaptive limit when not explicitly provided.
    */
   async searchSimilarMemories(
     telegramUserId: number | bigint,
     queryVector: number[],
-    limit = 5,
-    minSimilarity = 0.45,
+    limitOrOptions?: number | { limit?: number; minSimilarity?: number; category?: string },
+    minSimilarityParam?: number,
   ): Promise<UserMemoryRecord[]> {
     const uid = BigInt(telegramUserId);
+
+    let limit: number | undefined;
+    let minSimilarity: number | undefined;
+    let categoryFilter: string | undefined;
+
+    if (typeof limitOrOptions === "object" && limitOrOptions !== null) {
+      limit = limitOrOptions.limit;
+      minSimilarity = limitOrOptions.minSimilarity;
+      categoryFilter = limitOrOptions.category;
+    } else if (typeof limitOrOptions === "number") {
+      limit = limitOrOptions;
+      minSimilarity = minSimilarityParam;
+    }
+
+    // Retrieve user memories for adaptive calculation
+    const allMemories = await this.prisma.userMemory.findMany({
+      where: {
+        telegramUserId: uid,
+        ...(categoryFilter ? { category: categoryFilter } : {}),
+      },
+      orderBy: { updatedAt: "desc" },
+    });
+
+    const adaptiveLimit = limit ?? this.computeAdaptiveSearchLimit(allMemories.length);
+    const adaptiveMinSimilarity =
+      minSimilarity ?? this.computeAdaptiveMinSimilarity(queryVector, allMemories.length);
+
     if (!queryVector || queryVector.length === 0) {
-      return this.getUserMemories(uid);
+      return allMemories.slice(0, adaptiveLimit).map((m) => this.serializeMemory(m));
     }
 
     // 1. Attempt Native PostgreSQL pgvector cosine similarity search
@@ -564,14 +707,16 @@ export class ChatDatabaseService {
         const pool = getPool();
         const res = await pool.query(
           `
-          SELECT id, telegram_user_id, key, content, category, embedding_json, source_session_id, created_at, updated_at,
-                 (1 - (embedding <=> $1::vector)) as similarity
+          SELECT *, (1 - (embedding <=> $1::vector)) as similarity
           FROM user_memories
           WHERE telegram_user_id = $2 AND embedding IS NOT NULL
+          ${categoryFilter ? "AND category = $4" : ""}
           ORDER BY embedding <=> $1::vector ASC
           LIMIT $3
           `,
-          [vectorStr, uid.toString(), limit],
+          categoryFilter
+            ? [vectorStr, uid.toString(), adaptiveLimit, categoryFilter]
+            : [vectorStr, uid.toString(), adaptiveLimit],
         );
 
         if (res.rows && res.rows.length > 0) {
@@ -581,14 +726,28 @@ export class ChatDatabaseService {
               telegramUserId: Number(row.telegram_user_id),
               key: row.key,
               content: row.content,
-              category: row.category,
+              category: row.category || "general",
+              type: row.type || row.category || "user_fact",
+              structuredValue: row.structured_value || null,
+              confidence:
+                row.confidence ||
+                this.computeAdaptiveConfidence(
+                  typeof row.similarity === "number" ? row.similarity : parseFloat(row.similarity),
+                ),
+              importance: row.importance || "medium",
+              status: row.status || "active",
               embeddingJson: row.embedding_json,
-              similarity: typeof row.similarity === "number" ? row.similarity : parseFloat(row.similarity),
+              similarity:
+                typeof row.similarity === "number" ? row.similarity : parseFloat(row.similarity),
               sourceSessionId: row.source_session_id,
+              sourceMessageId: row.source_message_id,
+              sourceConversationId: row.source_conversation_id,
+              expiresAt: row.expires_at,
+              lastAccessedAt: row.last_accessed_at,
               createdAt: row.created_at,
               updatedAt: row.updated_at,
             }))
-            .filter((m) => (m.similarity ?? 0) >= minSimilarity);
+            .filter((m) => (m.similarity ?? 0) >= adaptiveMinSimilarity);
 
           if (results.length > 0) {
             return results;
@@ -600,11 +759,6 @@ export class ChatDatabaseService {
     }
 
     // 2. Hybrid In-Memory Cosine Similarity ranking over stored embedding JSON
-    const allMemories = await this.prisma.userMemory.findMany({
-      where: { telegramUserId: uid },
-      orderBy: { updatedAt: "desc" },
-    });
-
     const scored: Array<UserMemoryRecord & { similarity: number }> = [];
 
     for (const memory of allMemories) {
@@ -614,7 +768,7 @@ export class ChatDatabaseService {
           const storedVec = JSON.parse(memory.embeddingJson);
           if (Array.isArray(storedVec) && storedVec.length === queryVector.length) {
             const sim = computeCosineSimilarity(queryVector, storedVec);
-            if (sim >= minSimilarity) {
+            if (sim >= adaptiveMinSimilarity) {
               scored.push({ ...memRecord, similarity: sim });
             }
           }
@@ -623,7 +777,7 @@ export class ChatDatabaseService {
     }
 
     scored.sort((a, b) => b.similarity - a.similarity);
-    return scored.slice(0, limit);
+    return scored.slice(0, adaptiveLimit);
   }
 
   /**
@@ -676,21 +830,30 @@ export class ChatDatabaseService {
   }
 
   /**
-   * Deletes a specific long-term memory key for a user.
+   * Deletes a specific long-term memory by key or ID for a user.
    */
-  async deleteMemory(telegramUserId: number | bigint, key: string): Promise<boolean> {
+  async deleteMemory(telegramUserId: number | bigint, keyOrId: string | number): Promise<boolean> {
     const uid = BigInt(telegramUserId);
     try {
-      await this.prisma.userMemory.delete({
-        where: {
-          telegramUserId_key: {
+      if (typeof keyOrId === "number") {
+        const deleted = await this.prisma.userMemory.deleteMany({
+          where: {
+            id: keyOrId,
             telegramUserId: uid,
-            key,
           },
-        },
-      });
-      this.invalidateUserCache(telegramUserId);
-      return true;
+        });
+        this.invalidateUserCache(telegramUserId);
+        return deleted.count > 0;
+      } else {
+        const deleted = await this.prisma.userMemory.deleteMany({
+          where: {
+            telegramUserId: uid,
+            key: keyOrId,
+          },
+        });
+        this.invalidateUserCache(telegramUserId);
+        return deleted.count > 0;
+      }
     } catch {
       return false;
     }
@@ -858,7 +1021,235 @@ export class ChatDatabaseService {
   }
 
   // ==========================================
-  // HELPERS
+  // AGENT TASKS & TASK STEPS PERSISTENCE
+  // ==========================================
+
+  async createTask(options: {
+    telegramUserId: number | bigint;
+    conversationId?: number;
+    title: string;
+    goal: string;
+    taskType?: string;
+    status?: string;
+    contextJson?: string;
+    metadataJson?: string;
+  }): Promise<AgentTaskRecord> {
+    const telegramUserIdNum = Number(options.telegramUserId);
+    await this.ensureUserExists(BigInt(options.telegramUserId));
+
+    const db = getDb();
+    const [inserted] = await db
+      .insert(agentTasksTable)
+      .values({
+        telegramUserId: telegramUserIdNum,
+        conversationId: options.conversationId ?? null,
+        title: options.title,
+        goal: options.goal,
+        taskType: options.taskType ?? "general",
+        status: options.status ?? "active",
+        currentStep: 1,
+        contextJson: options.contextJson ?? null,
+        metadataJson: options.metadataJson ?? null,
+      })
+      .returning();
+
+    this.invalidateUserCache(telegramUserIdNum);
+    return this.serializeTask(inserted);
+  }
+
+  async updateTask(
+    taskId: number,
+    data: {
+      status?: string;
+      currentStep?: number;
+      goal?: string;
+      title?: string;
+      contextJson?: string;
+      metadataJson?: string;
+      completedAt?: Date | null;
+    },
+  ): Promise<AgentTaskRecord | null> {
+    const db = getDb();
+    const updateData: Record<string, unknown> = {
+      updatedAt: new Date(),
+    };
+
+    if (data.status !== undefined) updateData.status = data.status;
+    if (data.currentStep !== undefined) updateData.currentStep = data.currentStep;
+    if (data.goal !== undefined) updateData.goal = data.goal;
+    if (data.title !== undefined) updateData.title = data.title;
+    if (data.contextJson !== undefined) updateData.contextJson = data.contextJson;
+    if (data.metadataJson !== undefined) updateData.metadataJson = data.metadataJson;
+    if (data.completedAt !== undefined) updateData.completedAt = data.completedAt;
+
+    const [updated] = await db
+      .update(agentTasksTable)
+      .set(updateData)
+      .where(eq(agentTasksTable.id, taskId))
+      .returning();
+
+    if (updated) {
+      this.invalidateUserCache(updated.telegramUserId);
+      return this.serializeTask(updated);
+    }
+    return null;
+  }
+
+  async getActiveTasksForUser(telegramUserId: number | bigint): Promise<AgentTaskRecord[]> {
+    const uidNum = Number(telegramUserId);
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(agentTasksTable)
+      .where(
+        and(
+          eq(agentTasksTable.telegramUserId, uidNum),
+          inArray(agentTasksTable.status, ["pending", "active", "waiting", "paused"]),
+        ),
+      )
+      .orderBy(desc(agentTasksTable.updatedAt));
+
+    return rows.map((r) => this.serializeTask(r));
+  }
+
+  async getTaskById(taskId: number): Promise<AgentTaskRecord | null> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(agentTasksTable)
+      .where(eq(agentTasksTable.id, taskId))
+      .limit(1);
+
+    if (rows[0]) return this.serializeTask(rows[0]);
+    return null;
+  }
+
+  async createTaskStep(options: {
+    taskId: number;
+    stepOrder: number;
+    title: string;
+    description?: string;
+    status?: string;
+    resultSummary?: string;
+  }): Promise<AgentTaskStepRecord> {
+    const db = getDb();
+    const [inserted] = await db
+      .insert(agentTaskStepsTable)
+      .values({
+        taskId: options.taskId,
+        stepOrder: options.stepOrder,
+        title: options.title,
+        description: options.description ?? null,
+        status: options.status ?? "pending",
+        resultSummary: options.resultSummary ?? null,
+      })
+      .returning();
+
+    return this.serializeTaskStep(inserted);
+  }
+
+  async updateTaskStep(
+    stepId: number,
+    data: {
+      status?: string;
+      resultSummary?: string;
+      description?: string;
+    },
+  ): Promise<AgentTaskStepRecord | null> {
+    const db = getDb();
+    const [updated] = await db
+      .update(agentTaskStepsTable)
+      .set({
+        ...data,
+        updatedAt: new Date(),
+      })
+      .where(eq(agentTaskStepsTable.id, stepId))
+      .returning();
+
+    if (updated) return this.serializeTaskStep(updated);
+    return null;
+  }
+
+  async getTaskSteps(taskId: number): Promise<AgentTaskStepRecord[]> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(agentTaskStepsTable)
+      .where(eq(agentTaskStepsTable.taskId, taskId))
+      .orderBy(agentTaskStepsTable.stepOrder);
+
+    return rows.map((r) => this.serializeTaskStep(r));
+  }
+
+  // ==========================================
+  // CONVERSATION SUMMARY PERSISTENCE
+  // ==========================================
+
+  async saveConversationSummary(options: {
+    telegramUserId: number | bigint;
+    conversationId: number;
+    summary: string;
+    keyTakeawaysJson?: string;
+    artifactRefsJson?: string;
+    messageCountSummarized?: number;
+  }): Promise<ConversationSummaryRecord> {
+    const telegramUserIdNum = Number(options.telegramUserId);
+    const db = getDb();
+
+    const [inserted] = await db
+      .insert(conversationSummariesTable)
+      .values({
+        telegramUserId: telegramUserIdNum,
+        conversationId: options.conversationId,
+        summary: options.summary,
+        keyTakeawaysJson: options.keyTakeawaysJson ?? null,
+        artifactRefsJson: options.artifactRefsJson ?? null,
+        messageCountSummarized: options.messageCountSummarized ?? 0,
+      })
+      .returning();
+
+    return {
+      id: inserted.id,
+      telegramUserId: Number(inserted.telegramUserId),
+      conversationId: inserted.conversationId,
+      summary: inserted.summary,
+      keyTakeawaysJson: inserted.keyTakeawaysJson,
+      artifactRefsJson: inserted.artifactRefsJson,
+      messageCountSummarized: inserted.messageCountSummarized,
+      createdAt: inserted.createdAt,
+      updatedAt: inserted.updatedAt,
+    };
+  }
+
+  async getLatestSummaryForConversation(
+    conversationId: number,
+  ): Promise<ConversationSummaryRecord | null> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(conversationSummariesTable)
+      .where(eq(conversationSummariesTable.conversationId, conversationId))
+      .orderBy(desc(conversationSummariesTable.createdAt))
+      .limit(1);
+
+    if (rows[0]) {
+      return {
+        id: rows[0].id,
+        telegramUserId: Number(rows[0].telegramUserId),
+        conversationId: rows[0].conversationId,
+        summary: rows[0].summary,
+        keyTakeawaysJson: rows[0].keyTakeawaysJson,
+        artifactRefsJson: rows[0].artifactRefsJson,
+        messageCountSummarized: rows[0].messageCountSummarized,
+        createdAt: rows[0].createdAt,
+        updatedAt: rows[0].updatedAt,
+      };
+    }
+    return null;
+  }
+
+  // ==========================================
+  // HELPERS & SERIALIZERS
   // ==========================================
 
   private async ensureUserExists(telegramUserId: bigint): Promise<void> {
@@ -895,27 +1286,58 @@ export class ChatDatabaseService {
     };
   }
 
-  private serializeMemory(memory: {
-    id: number;
-    telegramUserId: bigint;
-    key: string;
-    content: string;
-    category: string;
-    embeddingJson?: string | null;
-    sourceSessionId: number | null;
-    createdAt: Date;
-    updatedAt: Date;
-  }): UserMemoryRecord {
+  private serializeMemory(memory: Record<string, unknown>): UserMemoryRecord {
     return {
-      id: memory.id,
+      id: Number(memory.id),
       telegramUserId: Number(memory.telegramUserId),
-      key: memory.key,
-      content: memory.content,
-      category: memory.category,
-      embeddingJson: memory.embeddingJson ?? null,
-      sourceSessionId: memory.sourceSessionId,
-      createdAt: memory.createdAt,
-      updatedAt: memory.updatedAt,
+      key: String(memory.key || ""),
+      content: String(memory.content || ""),
+      category: String(memory.category || "general"),
+      type: String(memory.type || "user_fact"),
+      structuredValue: memory.structuredValue ? String(memory.structuredValue) : null,
+      confidence: (memory.confidence as "low" | "medium" | "high") || "high",
+      importance: (memory.importance as "low" | "medium" | "high") || "medium",
+      status: (memory.status as "active" | "archived" | "deleted") || "active",
+      embeddingJson: memory.embeddingJson ? String(memory.embeddingJson) : null,
+      sourceSessionId: memory.sourceSessionId ? Number(memory.sourceSessionId) : null,
+      sourceMessageId: memory.sourceMessageId ? Number(memory.sourceMessageId) : null,
+      sourceConversationId: memory.sourceConversationId ? Number(memory.sourceConversationId) : null,
+      expiresAt: memory.expiresAt instanceof Date ? memory.expiresAt : null,
+      lastAccessedAt: memory.lastAccessedAt instanceof Date ? memory.lastAccessedAt : null,
+      createdAt: memory.createdAt instanceof Date ? memory.createdAt : new Date(),
+      updatedAt: memory.updatedAt instanceof Date ? memory.updatedAt : new Date(),
+    };
+  }
+
+  private serializeTask(task: Record<string, unknown>): AgentTaskRecord {
+    return {
+      id: Number(task.id),
+      telegramUserId: Number(task.telegramUserId),
+      conversationId: task.conversationId ? Number(task.conversationId) : null,
+      title: String(task.title || ""),
+      goal: String(task.goal || ""),
+      taskType: String(task.taskType || "general"),
+      status: String(task.status || "pending"),
+      currentStep: Number(task.currentStep || 1),
+      contextJson: task.contextJson ? String(task.contextJson) : null,
+      metadataJson: task.metadataJson ? String(task.metadataJson) : null,
+      createdAt: task.createdAt instanceof Date ? task.createdAt : new Date(),
+      updatedAt: task.updatedAt instanceof Date ? task.updatedAt : new Date(),
+      completedAt: task.completedAt instanceof Date ? task.completedAt : null,
+    };
+  }
+
+  private serializeTaskStep(step: Record<string, unknown>): AgentTaskStepRecord {
+    return {
+      id: Number(step.id),
+      taskId: Number(step.taskId),
+      stepOrder: Number(step.stepOrder || 1),
+      title: String(step.title || ""),
+      description: step.description ? String(step.description) : null,
+      status: String(step.status || "pending"),
+      resultSummary: step.resultSummary ? String(step.resultSummary) : null,
+      createdAt: step.createdAt instanceof Date ? step.createdAt : new Date(),
+      updatedAt: step.updatedAt instanceof Date ? step.updatedAt : new Date(),
     };
   }
 }

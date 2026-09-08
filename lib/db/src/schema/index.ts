@@ -71,14 +71,83 @@ export const userMemoriesTable = pgTable(
     key: text("key").notNull(),
     content: text("content").notNull(),
     category: text("category").default("general").notNull(),
+    type: text("type").default("user_fact").notNull(),
+    structuredValue: text("structured_value"),
+    confidence: text("confidence").default("high").notNull(), // 'low' | 'medium' | 'high'
+    importance: text("importance").default("medium").notNull(), // 'low' | 'medium' | 'high'
+    status: text("status").default("active").notNull(), // 'active' | 'archived' | 'deleted'
     embeddingJson: text("embedding_json"),
     sourceSessionId: integer("source_session_id"),
+    sourceMessageId: integer("source_message_id"),
+    sourceConversationId: integer("source_conversation_id"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    lastAccessedAt: timestamp("last_accessed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
     uniqueIndex("user_memories_user_key_idx").on(table.telegramUserId, table.key),
     index("user_memories_user_category_idx").on(table.telegramUserId, table.category),
+    index("user_memories_user_status_idx").on(table.telegramUserId, table.status),
+  ],
+);
+
+export const agentTasksTable = pgTable(
+  "agent_tasks",
+  {
+    id: serial("id").primaryKey(),
+    telegramUserId: bigint("telegram_user_id", { mode: "number" }).notNull(),
+    conversationId: integer("conversation_id"),
+    title: text("title").notNull(),
+    goal: text("goal").notNull(),
+    taskType: text("task_type").default("general").notNull(),
+    status: text("status").default("pending").notNull(), // 'pending' | 'active' | 'paused' | 'waiting' | 'completed' | 'failed' | 'cancelled'
+    currentStep: integer("current_step").default(1).notNull(),
+    contextJson: text("context_json"),
+    metadataJson: text("metadata_json"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("agent_tasks_user_status_idx").on(table.telegramUserId, table.status),
+    index("agent_tasks_user_updated_idx").on(table.telegramUserId, table.updatedAt),
+  ],
+);
+
+export const agentTaskStepsTable = pgTable(
+  "agent_task_steps",
+  {
+    id: serial("id").primaryKey(),
+    taskId: integer("task_id").notNull(),
+    stepOrder: integer("step_order").notNull(),
+    title: text("title").notNull(),
+    description: text("description"),
+    status: text("status").default("pending").notNull(), // 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
+    resultSummary: text("result_summary"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("agent_task_steps_task_step_idx").on(table.taskId, table.stepOrder),
+  ],
+);
+
+export const conversationSummariesTable = pgTable(
+  "conversation_summaries",
+  {
+    id: serial("id").primaryKey(),
+    telegramUserId: bigint("telegram_user_id", { mode: "number" }).notNull(),
+    conversationId: integer("conversation_id").notNull(),
+    summary: text("summary").notNull(),
+    keyTakeawaysJson: text("key_takeaways_json"),
+    artifactRefsJson: text("artifact_refs_json"),
+    messageCountSummarized: integer("message_count_summarized").default(0).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("conversation_summaries_user_conv_idx").on(table.telegramUserId, table.conversationId),
   ],
 );
 
@@ -111,6 +180,9 @@ export type User = typeof usersTable.$inferSelect;
 export type Conversation = typeof conversationsTable.$inferSelect;
 export type Message = typeof messagesTable.$inferSelect;
 export type UserMemory = typeof userMemoriesTable.$inferSelect;
+export type AgentTask = typeof agentTasksTable.$inferSelect;
+export type AgentTaskStep = typeof agentTaskStepsTable.$inferSelect;
+export type ConversationSummary = typeof conversationSummariesTable.$inferSelect;
 export type Reminder = typeof remindersTable.$inferSelect;
 export type SystemSetting = typeof systemSettingsTable.$inferSelect;
 

@@ -63,6 +63,39 @@ export function helpKeyboard(): InlineKeyboard {
     .text("◀️ Back", "menu:main");
 }
 
+export function tasksKeyboard(
+  tasks: Array<{ id: number; title: string; status: string }>,
+): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+  const displayTasks = tasks.slice(0, 5);
+
+  for (const t of displayTasks) {
+    const statusIcon = t.status === "active" ? "▶️" : t.status === "paused" ? "⏸️" : "⏳";
+    const shortTitle = t.title.length > 18 ? t.title.slice(0, 15) + "..." : t.title;
+    keyboard
+      .text(`${statusIcon} #${t.id}: ${shortTitle}`, `task:view:${t.id}`)
+      .text("❌", `task:cancel:${t.id}`)
+      .row();
+  }
+
+  if (tasks.length === 0) {
+    keyboard.text("➕ Start New Task", "menu:chat").row();
+  }
+
+  return keyboard.text("◀️ Back", "menu:main");
+}
+
+export function taskDisambiguationKeyboard(
+  tasks: Array<{ id: number; title: string }>,
+): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+  for (const t of tasks) {
+    const shortTitle = t.title.length > 20 ? t.title.slice(0, 18) + "..." : t.title;
+    keyboard.text(`▶️ Resume Task #${t.id}: ${shortTitle}`, `task:continue:${t.id}`).row();
+  }
+  return keyboard.text("❌ Cancel Choice", "menu:main");
+}
+
 export function memoriesKeyboard(
   memories: Array<{ id: number; key: string }>,
 ): InlineKeyboard {

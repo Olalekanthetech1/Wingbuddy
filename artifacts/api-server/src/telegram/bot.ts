@@ -4,6 +4,8 @@ import { logger } from "../lib/logger";
 import { getConfig } from "../config/env";
 import { MODES, MODE_KEYS, type ModeKey } from "../config/mode";
 import { ConversationService } from "../services/conversation.service";
+import { ModeService } from "../services/mode.service";
+import { ExecutionPlannerService } from "../services/execution-planner.service";
 import { GlobalContextService } from "../services/global-context.service";
 import { GeminiService } from "../gemini/gemini.service";
 import { AdaptiveIntentService } from "../services/adaptive-intent.service";
@@ -22,6 +24,9 @@ import {
   PERSONALITY_KEYS,
   type PersonalityKey,
 } from "../config/personality";
+import { memoryService } from "../services/memory.service";
+import { taskService } from "../services/task.service";
+import { contextManagerService } from "../services/context-manager.service";
 import {
   feedbackKeyboard,
   feedbackReasonKeyboard,
@@ -32,6 +37,8 @@ import {
   personalityKeyboard,
   remindersKeyboard,
   settingsKeyboard,
+  tasksKeyboard,
+  taskDisambiguationKeyboard,
 } from "./keyboards";
 import {
   CHAT_TEXT,
@@ -76,6 +83,8 @@ export function createTelegramBot(): TelegramBotRuntime {
   const config = getConfig();
   const bot = new Bot(config.telegramBotToken);
   const conversations = new ConversationService();
+  const modeService = new ModeService(conversations);
+  const executionPlanner = new ExecutionPlannerService(modeService);
   const globalContext = new GlobalContextService(conversations);
   const gemini = new GeminiService(
     config.geminiApiKey,
@@ -275,20 +284,53 @@ export function createTelegramBot(): TelegramBotRuntime {
     });
   });
 
-  bot.command("forget", async (ctx) => {
+  bot.command(["tasks", "task"], async (ctx) => {
     if (!(await requireAuthorized(ctx))) return;
     if (!ctx.from) return;
     await upsertUser(ctx);
-    const key = ctx.match?.trim().toLowerCase();
-    if (!key) {
-      await ctx.reply("Please specify the memory key to forget.\nExample: /forget preferred_stack");
+
+    const activeTasks = await taskService.getActiveTasksForUser(ctx.from.id);
+    let messageText = "<b>🎯 Active Tasks & Workflows</b>\n\n";
+
+    if (activeTasks.length === 0) {
+      messageText += "No active tasks currently running.\nTo start a task, say e.g.:\n<i>'Start a task to write a market analysis report'</i>";
+    } else {
+      messageText += activeTasks
+        .map(
+          (t) =>
+            `• <b>#${t.id}</b>: ${escapeHtml(t.title)}\n  Status: <code>${t.status.toUpperCase()}</code> | Step ${t.currentStep}`,
+        )
+        .join("\n\n");
+    }
+
+    await ctx.reply(messageText, {
+      parse_mode: "HTML",
+      reply_markup: tasksKeyboard(activeTasks),
+    });
+  });
+
+  bot.callbackQuery(/^task:(view|cancel|continue):(\d+)$/, async (ctx) => {
+    if (!ctx.from || !authorized(ctx.from.id)) {
+      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
       return;
     }
-    const deleted = await conversations.deleteUserMemory(ctx.from.id, key);
-    if (deleted) {
-      await ctx.reply(`🗑️ Forgotten memory: ${key}`);
-    } else {
-      await ctx.reply(`No memory found with key: ${key}`);
+
+    const action = ctx.match[1];
+    const taskId = parseInt(ctx.match[2], 10);
+    await ctx.answerCallbackQuery();
+
+    if (action === "cancel") {
+      await taskService.updateTaskStatus(taskId, "cancelled");
+      await ctx.reply(`❌ Task #${taskId} has been cancelled.`);
+    } else if (action === "continue" || action === "view") {
+      const activeTasks = await taskService.getActiveTasksForUser(ctx.from.id);
+      const target = activeTasks.find((t) => t.id === taskId);
+      if (target) {
+        await ctx.reply(
+          `▶️ <b>Task #${target.id}: ${escapeHtml(target.title)}</b>\nGoal: ${escapeHtml(target.goal)}\nStatus: <code>${target.status.toUpperCase()}</code> | Current Step: ${target.currentStep}`,
+          { parse_mode: "HTML" },
+        );
+      }
     }
   });
 
@@ -616,6 +658,25 @@ export function createTelegramBot(): TelegramBotRuntime {
 
   bot.command("mode", async (ctx) => {
     if (!(await requireAuthorized(ctx))) return;
+    if (!ctx.from) return;
+    await upsertUser(ctx);
+    const rawArg = ctx.match?.trim();
+    if (rawArg) {
+      try {
+        const result = await modeService.switchMode(ctx.from.id, rawArg, "command");
+        await ctx.reply(result.confirmationMessage, {
+          parse_mode: "HTML",
+          reply_markup: modeKeyboard(result.activeMode),
+        });
+      } catch (err) {
+        const currentMode = await conversations.getUserMode(ctx.from.id);
+        await ctx.reply(
+          `⚠️ Invalid or unrecognized mode: "${escapeHtml(rawArg)}".\n\nAvailable modes:\n• general\n• study\n• coding\n• research\n• reasoning\n• writing\n• brainstorming\n• travel`,
+          { reply_markup: modeKeyboard(currentMode) },
+        );
+      }
+      return;
+    }
     await modeMenu(ctx);
   });
 
@@ -804,16 +865,23 @@ export function createTelegramBot(): TelegramBotRuntime {
     });
   });
 
-  bot.callbackQuery(/^mode:(general|study|writing|brainstorming|coding|travel)$/, async (ctx) => {
+  bot.callbackQuery(/^mode:(.+)$/, async (ctx) => {
     if (!ctx.from || !authorized(ctx.from.id)) {
       await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
       return;
     }
-    const mode = ctx.match[1] as ModeKey;
+    const modeRaw = ctx.match[1];
     await upsertUser(ctx);
-    await conversations.setUserMode(ctx.from.id, mode);
-    await ctx.answerCallbackQuery({ text: `${MODES[mode].label} selected` });
-    await ctx.editMessageText(modeText(mode), { reply_markup: modeKeyboard(mode) });
+    try {
+      const result = await modeService.switchMode(ctx.from.id, modeRaw, "callback");
+      await ctx.answerCallbackQuery({ text: `${result.profile.label} active` });
+      await ctx.editMessageText(result.confirmationMessage, {
+        parse_mode: "HTML",
+        reply_markup: modeKeyboard(result.activeMode),
+      }).catch(() => {});
+    } catch (err) {
+      await ctx.answerCallbackQuery({ text: "Error switching mode", show_alert: true });
+    }
   });
 
   bot.callbackQuery("action:clear", async (ctx) => {
@@ -979,12 +1047,90 @@ export function createTelegramBot(): TelegramBotRuntime {
           }),
       );
 
-      // 3. Systematic & Dynamic Adaptation:
-      const adaptivePlan = AdaptiveIntentService.analyze(
-        prompt,
+      // 3. Dynamic Natural Language Mode Switch Intent Detection:
+      let currentPrompt = prompt;
+      const modeSwitchIntent = AdaptiveIntentService.detectModeSwitchIntent(currentPrompt, modeService);
+
+      if (modeSwitchIntent.isModeSwitch && modeSwitchIntent.requestedMode) {
+        try {
+          const switchResult = await modeService.switchMode(
+            ctx.from.id,
+            modeSwitchIntent.requestedMode,
+            media ? "voice" : "natural_language",
+          );
+
+          // Apply newly resolved mode directly into the current execution context immediately in the SAME turn!
+          globalContextData.userProfile.mode = switchResult.activeMode;
+
+          // Send Telegram confirmation card
+          await ctx.reply(switchResult.confirmationMessage, {
+            parse_mode: "HTML",
+            reply_markup: modeKeyboard(switchResult.activeMode),
+          });
+
+          if (!modeSwitchIntent.cleanedPrompt) {
+            // Pure mode switch request — turn complete!
+            return;
+          }
+
+          // User combined mode switch with an additional prompt
+          currentPrompt = modeSwitchIntent.cleanedPrompt;
+        } catch (err) {
+          logger.warn({ error: safeErrorMetadata(err) }, "Failed executing natural language mode switch");
+        }
+      }
+
+      // 3b. Task Intent Detection & Processing:
+      const taskIntent = taskService.detectTaskIntent(currentPrompt);
+      let activeTaskContext: { task: any; steps: any[] } | null = null;
+
+      if (taskIntent.intent === "NEW_TASK" && taskIntent.taskTitle) {
+        const created = await taskService.createTask({
+          telegramUserId: ctx.from.id,
+          conversationId: globalContextData.conversationId,
+          title: taskIntent.taskTitle,
+          goal: taskIntent.taskGoal || taskIntent.taskTitle,
+          steps: taskIntent.steps?.map((s) => ({ title: s })),
+        });
+        activeTaskContext = created;
+        await ctx.reply(
+          `🎯 <b>New Task Created (#${created.task.id})</b>\n<b>Title:</b> ${escapeHtml(created.task.title)}\n<b>Goal:</b> ${escapeHtml(created.task.goal)}`,
+          { parse_mode: "HTML", reply_markup: tasksKeyboard([created.task]) },
+        );
+      } else if (taskIntent.intent === "CANCEL_TASK") {
+        const resolved = await taskService.resolveTargetTask(ctx.from.id, taskIntent.taskIdHint);
+        if (resolved.task) {
+          await taskService.updateTaskStatus(resolved.task.id, "cancelled");
+          await ctx.reply(`❌ Task #${resolved.task.id} (${escapeHtml(resolved.task.title)}) cancelled.`);
+          return;
+        }
+      } else if (taskIntent.intent === "PAUSE_TASK") {
+        const resolved = await taskService.resolveTargetTask(ctx.from.id, taskIntent.taskIdHint);
+        if (resolved.task) {
+          await taskService.updateTaskStatus(resolved.task.id, "paused");
+          await ctx.reply(`⏸️ Task #${resolved.task.id} (${escapeHtml(resolved.task.title)}) paused.`);
+          return;
+        }
+      } else if (taskIntent.intent === "CONTINUE_TASK") {
+        const resolved = await taskService.resolveTargetTask(ctx.from.id, taskIntent.taskIdHint);
+        if (resolved.status === "AMBIGUOUS" && resolved.activeTasks) {
+          await ctx.reply("Which task would you like to continue?", {
+            reply_markup: taskDisambiguationKeyboard(resolved.activeTasks),
+          });
+          return;
+        }
+      }
+
+      // 4. Systematic & Dynamic Adaptation via ExecutionPlanner:
+      const executionPlan = executionPlanner.plan(
+        currentPrompt,
         globalContextData.userProfile.mode,
         globalContextData.recentHistory,
       );
+      const adaptivePlan = {
+        ...executionPlan,
+        effectiveModeInstruction: executionPlan.effectiveSystemPrompt,
+      };
 
       // 4a. Natural Video Generation Intent (text-only):
       if (!media && adaptivePlan.detectedIntent === "video_generation" && adaptivePlan.videoPrompt) {
@@ -1123,7 +1269,16 @@ export function createTelegramBot(): TelegramBotRuntime {
         }
       }
 
-      // 5. Build dynamic placeholder message for live progressive streaming
+      // 5. Assemble dynamic, token-budgeted, prioritized context payload
+      const assembledContext = await contextManagerService.assembleContext({
+        telegramUserId: ctx.from.id,
+        conversationId: globalContextData.conversationId,
+        userMessage: currentPrompt,
+        effectiveModeInstruction: adaptivePlan.effectiveModeInstruction,
+        activeTask: activeTaskContext,
+        history: globalContextData.recentHistory,
+      });
+
       let initialPlaceholder = "💭 <i>Thinking...</i>";
       if (media?.mediaType === "voice" || media?.mediaType === "audio") {
         initialPlaceholder = "🎧 <i>Transcribing and understanding voice note...</i>";
@@ -1143,11 +1298,11 @@ export function createTelegramBot(): TelegramBotRuntime {
         { telegramUserId: ctx.from.id, chatId: ctx.chat.id },
         () =>
           gemini.generateReplyStream(
-            globalContextData.recentHistory,
-            prompt,
+            assembledContext.history,
+            currentPrompt,
             {
               personalityInstruction: globalContextData.userProfile.personalityInstruction,
-              modeInstruction: adaptivePlan.effectiveModeInstruction,
+              modeInstruction: assembledContext.effectiveSystemPrompt,
               memoryInstruction: globalContextData.promptInstruction || undefined,
             },
             {
@@ -1195,33 +1350,11 @@ export function createTelegramBot(): TelegramBotRuntime {
       );
 
       // Asynchronous passive memory acquisition (background fact extraction)
-      void (async () => {
-        try {
-          const facts = await gemini.extractUserFacts(prompt);
-          for (const fact of facts) {
-            await conversations.saveUserMemory(
-              ctx.from!.id,
-              fact.key,
-              fact.content,
-              fact.category,
-            );
-            logger.info(
-              {
-                stage: "passive_memory_saved",
-                telegramUserId: ctx.from!.id,
-                key: fact.key,
-                category: fact.category,
-              },
-              "Learned user personal memory from message context",
-            );
-          }
-        } catch (error) {
-          logger.debug(
-            { stage: "passive_memory_extraction", error: safeErrorMetadata(error) },
-            "Passive memory extraction completed without changes",
-          );
-        }
-      })();
+      void memoryService.processBackgroundExtraction(
+        ctx.from.id,
+        currentPrompt,
+        globalContextData.conversationId,
+      );
     } catch (error) {
       logger.error(
         {

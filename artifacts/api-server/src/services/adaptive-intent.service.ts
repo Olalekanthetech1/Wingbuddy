@@ -1,10 +1,15 @@
-import { MODES, type ModeKey } from "../config/mode";
+import {
+  MODES,
+  type ModeKey,
+  type Capability,
+} from "../config/mode";
+import { ModeService } from "./mode.service";
 import { ImageGenerationService } from "./image-generation.service";
 import { VideoGenerationService } from "./video-generation.service";
 
 export interface AdaptiveExecutionPlan {
   enableSearch: boolean;
-  thinkingLevel?: string;
+  thinkingLevel?: "LOW" | "MEDIUM" | "HIGH" | undefined;
   detectedIntent:
     | "image_generation"
     | "video_generation"
@@ -18,6 +23,13 @@ export interface AdaptiveExecutionPlan {
   imagePrompt?: string;
   videoPrompt?: string;
   effectiveModeInstruction: string;
+}
+
+export interface ModeSwitchIntent {
+  isModeSwitch: boolean;
+  requestedMode?: ModeKey;
+  cleanedPrompt?: string;
+  isAmbiguous?: boolean;
 }
 
 const VIDEO_GENERATION_PATTERNS = [
@@ -61,11 +73,176 @@ const CODING_PATTERNS = [
   /\b(refactor|implement|boilerplate|unit test|endpoint|api route)\b/i,
 ];
 
+const AMBIGUOUS_MODE_PATTERNS = [
+  /^(?:please\s+)?(?:switch|change|set|toggle)\s+mode$/i,
+  /^\/mode$/i,
+  /\blet's\s+work\s+differently\b/i,
+  /\bchange\s+the\s+assistant\b/i,
+  /\bdifferent\s+mode\b/i,
+];
+
+const MODE_SWITCH_REGEXES = [
+  // Explicit "switch/change/turn on/activate/set/use/enable/toggle [back] [to] <mode> [mode]"
+  /\b(?:switch|change|turn\s+on|activate|set|use|enable|toggle)(?:\s+(?:assistant|bot|agent))?(?:\s+back)?(?:\s+(?:mode\s+to|to\s+mode|\bto\b|\binto\b|\bmode\b|\bover\s+to\b))?\s*([a-z_]+)(?:\s+mode)?\b/i,
+  // "mode: <mode>", "/mode <mode>"
+  /^(?:\/|#)?mode[:\s]+([a-z_]+)\b/i,
+  // "I want to switch to <mode>", "can you switch to <mode>", "please switch back to <mode>"
+  /\b(?:can\s+you|please|i\s+want\s+to|let's|lets)\s+(?:switch|change|turn\s+on|activate|enter)(?:\s+back)?\s+(?:to\s+)?(?:the\s+)?([a-z_]+)(?:\s+mode)?\b/i,
+  // "be my <role>", "act as a <role>", "take on the role of <role>"
+  /\b(?:be\s+(?:my|a|an)|act\s+as\s+(?:a|an)|take\s+on\s+(?:the\s+)?role\s+of)\s+([a-z_]+)\b/i,
+  // "enter <mode> mode"
+  /\benter\s+([a-z_]+)\s+mode\b/i,
+];
+
 export class AdaptiveIntentService {
   /**
+   * Detects whether input expresses a natural language mode-switch intent.
+   * Uses semantic intent recognition as the primary mechanism, backed by
+   * deterministic fast-path patterns for explicit commands.
+   * Handles ambiguity gracefully without destructive state mutations.
+   */
+  static detectModeSwitchIntent(
+    text: string,
+    modeService?: ModeService,
+  ): ModeSwitchIntent {
+    if (!text || !text.trim()) {
+      return { isModeSwitch: false };
+    }
+
+    const trimmed = text.trim();
+
+    // 0. Check for temporary single-turn overrides (e.g. "For this question...", "Just for this message...")
+    if (
+      /\b(for this (question|prompt|message|turn|time)|just for now)\b/i.test(trimmed)
+    ) {
+      return { isModeSwitch: false };
+    }
+
+    // 1. Check for explicit ambiguous mode switch requests
+    for (const ambigRegex of AMBIGUOUS_MODE_PATTERNS) {
+      if (ambigRegex.test(trimmed)) {
+        return { isModeSwitch: true, isAmbiguous: true };
+      }
+    }
+
+    const resolveMode = (raw: string): ModeKey | null => {
+      if (modeService) {
+        return modeService.resolveCanonicalMode(raw);
+      }
+      return new ModeService({} as any).resolveCanonicalMode(raw);
+    };
+
+    // 2. Fast-Path Deterministic Command & Explicit Patterns
+    for (const regex of MODE_SWITCH_REGEXES) {
+      const match = trimmed.match(regex);
+      if (match && match[1]) {
+        const candidateRaw = match[1].trim();
+        const canonicalMode = resolveMode(candidateRaw);
+        if (canonicalMode) {
+          let cleanedPrompt = trimmed
+            .replace(match[0], "")
+            .replace(/^[\s,;.]*(and|then|please|also|for me)[\s,;.]*/i, "")
+            .trim();
+          if (!cleanedPrompt || cleanedPrompt.length < 3) {
+            cleanedPrompt = undefined;
+          }
+
+          return {
+            isModeSwitch: true,
+            requestedMode: canonicalMode,
+            cleanedPrompt,
+            isAmbiguous: false,
+          };
+        }
+      }
+    }
+
+    // 3. Semantic Natural Language Intent Recognition Engine
+    const semanticMatchers: Array<{
+      mode: ModeKey;
+      patterns: RegExp[];
+    }> = [
+      {
+        mode: "study",
+        patterns: [
+          /\b(i want to study|study now|study mode)\b/i,
+          /\b(teach me|tutor me|be my tutor|act as my tutor|like a tutor)\b/i,
+          /\b(prepare for (my )?(upcoming )?(exam|quiz|test)|homework help)\b/i,
+          /\b(explain (this|calculus|concept) like a tutor)\b/i,
+        ],
+      },
+      {
+        mode: "coder",
+        patterns: [
+          /\b(let's work on (some )?code|coding mode|developer mode)\b/i,
+          /\b(act as (a|my) (senior )?(developer|dev|programmer|engineer))\b/i,
+          /\b(write (some )?code for me|help me code|refactor my code)\b/i,
+        ],
+      },
+      {
+        mode: "deep_research",
+        patterns: [
+          /\b(research (this|topic) thoroughly|deep research|research mode)\b/i,
+          /\b(using current sources|find up-to-date sources|verify facts online)\b/i,
+          /\b(let's investigate this (topic|subject|issue))\b/i,
+        ],
+      },
+      {
+        mode: "math",
+        patterns: [
+          /\b(help me solve this equation|math mode|reasoning mode)\b/i,
+          /\b(act as a mathematician|solve this step-by-step with logic)\b/i,
+        ],
+      },
+      {
+        mode: "creative",
+        patterns: [
+          /\b(give me a creative version|creative mode|writing mode)\b/i,
+          /\b(brainstorm ideas for|write a story|be my creative partner)\b/i,
+        ],
+      },
+      {
+        mode: "general",
+        patterns: [
+          /\b(back to normal|normal mode|default mode|general mode)\b/i,
+          /\b(forget (the|any) special mode|reset mode|standard mode)\b/i,
+        ],
+      },
+      {
+        mode: "auto",
+        patterns: [
+          /\b(auto mode|automatic mode|adapt automatically)\b/i,
+        ],
+      },
+    ];
+
+    for (const matcher of semanticMatchers) {
+      for (const pattern of matcher.patterns) {
+        if (pattern.test(trimmed)) {
+          let cleaned = trimmed
+            .replace(pattern, "")
+            .replace(/^[\s,;.]*(and|then|please|also|for me)[\s,;.]*/i, "")
+            .trim();
+          if (!cleaned || cleaned.length < 3) {
+            cleaned = undefined;
+          }
+
+          return {
+            isModeSwitch: true,
+            requestedMode: matcher.mode,
+            cleanedPrompt: cleaned,
+            isAmbiguous: false,
+          };
+        }
+      }
+    }
+
+    return { isModeSwitch: false };
+  }
+
+  /**
    * Evaluates the user query, conversational context, and user settings
-   * to systematically determine whether to engage web grounding, deep thinking,
-   * or tailored reasoning instructions automatically.
+   * to systematically determine mode instructions, search requirements, and thinking levels.
    */
   static analyze(
     text: string,
@@ -73,60 +250,88 @@ export class AdaptiveIntentService {
     history: Array<{ role: string; content: string }> = [],
   ): AdaptiveExecutionPlan {
     const trimmed = text.trim();
+    const modeProfile = MODES[userExplicitMode] || MODES.general;
 
     // 0a. Check for video generation request
-    const isVideoGen = VIDEO_GENERATION_PATTERNS.some((pattern) => pattern.test(trimmed));
+    const isVideoGen = VIDEO_GENERATION_PATTERNS.some((pattern) =>
+      pattern.test(trimmed),
+    );
     if (isVideoGen) {
-      const extractedVideoPrompt = VideoGenerationService.extractVideoPrompt(trimmed);
+      const extractedVideoPrompt =
+        VideoGenerationService.extractVideoPrompt(trimmed);
       return {
         enableSearch: false,
         thinkingLevel: undefined,
         detectedIntent: "video_generation",
         videoPrompt: extractedVideoPrompt || trimmed,
-        effectiveModeInstruction: MODES.brainstorming.instruction,
+        effectiveModeInstruction:
+          MODES.creative?.systemBehavior || MODES.general.systemBehavior,
       };
     }
 
     // 0b. Check for image generation request
-    const isImageGen = IMAGE_GENERATION_PATTERNS.some((pattern) => pattern.test(trimmed));
+    const isImageGen = IMAGE_GENERATION_PATTERNS.some((pattern) =>
+      pattern.test(trimmed),
+    );
     let extractedImagePrompt: string | undefined;
 
     if (isImageGen) {
-      extractedImagePrompt = ImageGenerationService.extractImagePrompt(trimmed);
+      extractedImagePrompt =
+        ImageGenerationService.extractImagePrompt(trimmed);
       return {
         enableSearch: false,
         thinkingLevel: undefined,
         detectedIntent: "image_generation",
         imagePrompt: extractedImagePrompt || trimmed,
-        effectiveModeInstruction: MODES.brainstorming.instruction,
+        effectiveModeInstruction:
+          MODES.creative?.systemBehavior || MODES.general.systemBehavior,
       };
     }
 
     // 1. Check for real-time web grounding need
+    const hasQuestionOrFactRequest =
+      /\?|\b(what|who|when|where|why|how|search|latest|news|weather|price|explain|solve|updates|events|status)\b/i.test(
+        trimmed,
+      );
+    const isCasualGreeting =
+      !hasQuestionOrFactRequest &&
+      /^(hi|hello|hey|good\s*(morning|evening|afternoon)|sup|yo|hope you)\b/i.test(
+        trimmed,
+      );
+
     const needsSearch =
-      userExplicitMode === "research" ||
-      TEMPORAL_FACT_PATTERNS.some((pattern) => pattern.test(trimmed)) ||
-      (history.length > 0 &&
-        /\b(latest|current|recent|today)\b/i.test(
-          history[history.length - 1]?.content || "",
-        ) &&
-        /\b(what about|how about|and|why)\b/i.test(trimmed));
+      modeProfile.capabilities.toolPermissions.searchAllowed &&
+      ((modeProfile.capabilities.enableSearchDefault && !isCasualGreeting) ||
+        TEMPORAL_FACT_PATTERNS.some((pattern) => pattern.test(trimmed)) ||
+        (history.length > 0 &&
+          /\b(latest|current|recent|today)\b/i.test(
+            history[history.length - 1]?.content || "",
+          ) &&
+          /\b(what about|how about|and|why)\b/i.test(trimmed)));
 
     // 2. Check for multi-step reasoning / thinking mode need
     const hasCodeBlock = /```/.test(trimmed);
-    const hasMultipleConstraints = (trimmed.match(/\d+[\.\)]/g) || []).length >= 2;
+    const hasMultipleConstraints =
+      (trimmed.match(/\d+[\.\)]/g) || []).length >= 2;
     const isReasoningText = DEEP_REASONING_PATTERNS.some((pattern) =>
       pattern.test(trimmed),
     );
-    const isCodingText = CODING_PATTERNS.some((pattern) => pattern.test(trimmed));
+    const isCodingText = CODING_PATTERNS.some((pattern) =>
+      pattern.test(trimmed),
+    );
 
     const needsDeepReasoning =
-      userExplicitMode === "reasoning" ||
-      userExplicitMode === "coding" ||
-      isReasoningText ||
-      (isCodingText && (trimmed.includes("bug") || trimmed.includes("error") || trimmed.includes("optimize"))) ||
-      (trimmed.length > 250 && hasMultipleConstraints) ||
-      hasCodeBlock;
+      modeProfile.capabilities.toolPermissions.thinkingAllowed &&
+      (userExplicitMode === "math" ||
+        userExplicitMode === "coder" ||
+        modeProfile.capabilities.thinkingLevelDefault !== undefined ||
+        isReasoningText ||
+        (isCodingText &&
+          (trimmed.includes("bug") ||
+            trimmed.includes("error") ||
+            trimmed.includes("optimize"))) ||
+        (trimmed.length > 250 && hasMultipleConstraints) ||
+        hasCodeBlock);
 
     // 3. Determine detected intent
     let detectedIntent: AdaptiveExecutionPlan["detectedIntent"] = "general";
@@ -136,32 +341,37 @@ export class AdaptiveIntentService {
       detectedIntent = "deep_reasoning";
     } else if (isCodingText) {
       detectedIntent = "coding";
+    } else if (userExplicitMode === "study") {
+      detectedIntent = "study";
+    } else if (userExplicitMode === "creative") {
+      detectedIntent = "writing";
     }
 
     // 4. Resolve effective system mode instruction dynamically
-    let effectiveModeInstruction = MODES[userExplicitMode]?.instruction || MODES.general.instruction;
+    let effectiveModeInstruction = modeProfile.systemBehavior;
 
     if (userExplicitMode === "general") {
       if (detectedIntent === "deep_reasoning") {
-        effectiveModeInstruction = MODES.reasoning.instruction;
+        effectiveModeInstruction = MODES.math.systemBehavior;
       } else if (detectedIntent === "search_grounding") {
-        effectiveModeInstruction = MODES.research.instruction;
+        effectiveModeInstruction = MODES.deep_research.systemBehavior;
       } else if (detectedIntent === "coding") {
-        effectiveModeInstruction = MODES.coding.instruction;
+        effectiveModeInstruction = MODES.coder.systemBehavior;
       }
     } else {
-      // If user selected another mode (e.g. study or writing), augment with reasoning or search when demanded by the query
-      if (needsDeepReasoning && userExplicitMode !== "reasoning") {
+      if (needsDeepReasoning && userExplicitMode !== "math") {
         effectiveModeInstruction = `${effectiveModeInstruction}\n\n[SYSTEMATIC ADAPTATION]: This inquiry involves technical or logical problem-solving. Carefully verify intermediate steps, explore edge cases, and ensure precision.`;
       }
-      if (needsSearch && userExplicitMode !== "research") {
+      if (needsSearch && userExplicitMode !== "deep_research") {
         effectiveModeInstruction = `${effectiveModeInstruction}\n\n[SYSTEMATIC ADAPTATION]: This inquiry touches on real-time or factual information. Verify current facts using search grounding.`;
       }
     }
 
     return {
       enableSearch: needsSearch,
-      thinkingLevel: needsDeepReasoning ? "LOW" : undefined,
+      thinkingLevel: needsDeepReasoning
+        ? modeProfile.capabilities.thinkingLevelDefault || "LOW"
+        : undefined,
       detectedIntent,
       effectiveModeInstruction,
     };

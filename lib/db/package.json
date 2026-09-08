@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./schema": "./src/schema/index.ts"
+    "./schema": "./src/schema/index.ts",
+    "./services/chat.service": "./src/services/chat.service.ts"
   },
   "scripts": {
     "push": "drizzle-kit push --config ./drizzle.config.ts",
