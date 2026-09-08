@@ -6,6 +6,7 @@ import envRouter from "./env";
 import executionRouter from "./execution";
 import modelsRouter from "./models";
 import simulatorRouter from "./simulator";
+import behaviorConfigRouter from "./behavior-config";
 
 const router: IRouter = Router();
 
@@ -16,5 +17,6 @@ router.use(envRouter);
 router.use(executionRouter);
 router.use(modelsRouter);
 router.use(simulatorRouter);
+router.use(behaviorConfigRouter);
 
 export default router;
