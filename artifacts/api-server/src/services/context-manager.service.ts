@@ -1,4 +1,3 @@
-import { memoryService } from "./memory.service";
 import { taskService } from "./task.service";
 import { instructionResolutionService } from "./instruction-resolution.service";
 import {
@@ -7,7 +6,12 @@ import {
 } from "./conversation-intelligence.service";
 import { GeminiService } from "../gemini/gemini.service";
 import { getConfig } from "../config/env";
-import { chatDatabaseService, type AgentTaskRecord, type AgentTaskStepRecord } from "@workspace/db";
+import {
+  chatDatabaseService,
+  type AgentTaskRecord,
+  type AgentTaskStepRecord,
+  type UserMemoryRecord,
+} from "@workspace/db";
 import { logger } from "../lib/logger";
 
 export interface AssembledContext {
@@ -38,6 +42,7 @@ export class ContextManagerService {
 
   /**
    * Assembles a complete, budgeted, context-aware prompt payload for Gemini using dynamic instruction precedence and semantic conversation state.
+   * Long-term memories must be pre-filtered by the Global Context layer; this service never reloads the full memory corpus.
    */
   async assembleContext(options: {
     telegramUserId: number | bigint;
@@ -45,6 +50,7 @@ export class ContextManagerService {
     userMessage: string;
     effectiveModeInstruction: string;
     activeTask?: { task: AgentTaskRecord; steps: AgentTaskStepRecord[] } | null;
+    relevantMemories?: UserMemoryRecord[];
     history?: Array<{ role: string; content: string }>;
     semanticState?: ConversationSemanticState | null;
     maxCharBudget?: number;
@@ -52,8 +58,14 @@ export class ContextManagerService {
     const telegramUserId = Number(options.telegramUserId);
     const maxBudget = options.maxCharBudget ?? ContextManagerService.DEFAULT_MAX_CHAR_BUDGET;
 
-    const memories = await memoryService.getMemories(telegramUserId);
-    const formattedMemories = await memoryService.formatMemoriesForPrompt(telegramUserId);
+    // Relevance is decided upstream by GlobalContextService. An omitted list means
+    // "no long-term memory for this turn", never "load all memories".
+    const memories = options.relevantMemories ?? [];
+    const formattedMemories = memories.length > 0
+      ? `\n\n[RELEVANT LONG-TERM MEMORY]\n${memories
+          .map((m) => `- ${m.content}`)
+          .join("\n")}\n\nUse only when relevant. Do not mention the memory system to the user.`
+      : "";
 
     let activeTaskData = options.activeTask || null;
     let formattedTaskContext = "";
@@ -130,6 +142,14 @@ export class ContextManagerService {
     if (semanticInstruction) {
       fullSystemPrompt += `\n\n${semanticInstruction}`;
     }
+    if (formattedMemories) {
+      fullSystemPrompt += formattedMemories;
+    }
+
+    // Memory is an internal personalization mechanism. The model may apply relevant
+    // preferences/facts silently, but must not narrate or expose memory retrieval.
+    fullSystemPrompt +=
+      "\n\n[MEMORY SILENCE POLICY]\nTreat long-term memory as silent background context. Never say that you remember something, never list stored memories, never reveal memory keys or retrieval details, and never attribute an answer to a stored memory unless the user explicitly asks about memory itself.";
 
     let currentLength = calculateLength(rawHistory, fullSystemPrompt.length);
     if (currentLength > maxBudget && rawHistory.length > 2) {
@@ -161,6 +181,7 @@ export class ContextManagerService {
         historyLength: rawHistory.length,
         appliedPreferencesCount: resolution.appliedPreferences.length,
         suppressedCount: resolution.suppressedInstructions.length,
+        relevantMemoryCount: memories.length,
         continuityFollowUp: continuity.isFollowUp,
         continuityConfidence: continuity.confidence,
         continuityReferenceType: continuity.referenceType,
