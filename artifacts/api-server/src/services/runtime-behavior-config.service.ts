@@ -37,7 +37,6 @@ class RuntimeBehaviorConfigService {
         CONSTRAINT assistant_behavior_kind_check CHECK (kind IN ('mode', 'personality'))
       )
     `);
-
     await this.seedBuiltIns();
     await this.hydrateRuntime();
     this.initialized = true;
@@ -51,9 +50,8 @@ class RuntimeBehaviorConfigService {
         ON CONFLICT (kind, key) DO NOTHING
       `);
     }
-
     for (const [key, profile] of Object.entries(MODES)) {
-      if (!profile || typeof profile !== "object') continue;
+      if (!profile || typeof profile !== "object") continue;
       await db.execute(sql`
         INSERT INTO ${sql.raw(TABLE)} (kind, key, config, is_default)
         VALUES ('mode', ${key}, ${JSON.stringify(profile)}, ${key === "auto"})
