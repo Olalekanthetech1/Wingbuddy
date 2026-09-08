@@ -3,9 +3,37 @@ import fs from "node:fs";
 import path from "node:path";
 import { logger } from "../lib/logger";
 import { apiKeyPoolService } from "../services/api-key-pool.service";
-import { getPool } from "@workspace/db";
+import { db, getPool, systemSettingsTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 
 const router: IRouter = Router();
+
+// Hydrate process.env from PostgreSQL database on startup
+export async function hydrateEnvFromDatabase(): Promise<void> {
+  try {
+    const rows = await db.select().from(systemSettingsTable);
+    if (rows && rows.length > 0) {
+      let geminiKeyUpdated = false;
+      for (const row of rows) {
+        if (row.key && row.value) {
+          process.env[row.key] = row.value;
+          if (row.key === "GEMINI_API_KEY") {
+            geminiKeyUpdated = true;
+          }
+        }
+      }
+      if (geminiKeyUpdated && process.env.GEMINI_API_KEY) {
+        apiKeyPoolService.reloadFromEnv(process.env.GEMINI_API_KEY);
+      }
+      logger.info({ loadedKeysCount: rows.length }, "Hydrated environment variables directly from PostgreSQL database");
+    }
+  } catch (err) {
+    logger.warn({ error: String(err) }, "Could not hydrate env variables from database (will use process.env)");
+  }
+}
+
+// Initial hydration trigger
+hydrateEnvFromDatabase().catch(() => {});
 
 export interface EnvVariableSpec {
   key: string;
@@ -191,8 +219,8 @@ router.get("/env", (_req: Request, res: Response) => {
   });
 });
 
-// POST /api/env - Bulk or single variable update with dynamic hot-reload
-router.post("/env", (req: Request, res: Response) => {
+// POST /api/env - Bulk or single variable update with dynamic hot-reload & database persistence
+router.post("/env", async (req: Request, res: Response) => {
   try {
     const { updates } = req.body;
     if (!updates || typeof updates !== "object") {
@@ -210,6 +238,20 @@ router.post("/env", (req: Request, res: Response) => {
 
       process.env[trimmedKey] = trimmedVal;
       updateDotEnvFile(trimmedKey, trimmedVal);
+
+      // Persist directly to PostgreSQL database
+      try {
+        await db
+          .insert(systemSettingsTable)
+          .values({ key: trimmedKey, value: trimmedVal, updatedAt: new Date() })
+          .onConflictDoUpdate({
+            target: systemSettingsTable.key,
+            set: { value: trimmedVal, updatedAt: new Date() },
+          });
+      } catch (dbErr) {
+        logger.warn({ key: trimmedKey, error: String(dbErr) }, "Failed to persist setting to systemSettingsTable (non-fatal)");
+      }
+
       updatedKeys.push(trimmedKey);
 
       // Hot-reload specific services
@@ -223,7 +265,7 @@ router.post("/env", (req: Request, res: Response) => {
     }
 
     res.json({
-      message: "Environment variables updated successfully",
+      message: "Environment variables saved to database and runtime successfully",
       updatedKeys,
       timestamp: new Date().toISOString(),
     });
@@ -322,7 +364,7 @@ router.post("/env/test", async (req: Request, res: Response) => {
 });
 
 // DELETE /api/env/:key - Delete a custom or optional variable
-router.delete("/env/:key", (req: Request, res: Response) => {
+router.delete("/env/:key", async (req: Request, res: Response) => {
   const { key } = req.params;
   if (!key) {
     res.status(400).json({ error: "Missing key" });
@@ -332,7 +374,13 @@ router.delete("/env/:key", (req: Request, res: Response) => {
   delete process.env[key];
   updateDotEnvFile(key, "");
 
-  res.json({ message: `Variable ${key} removed from runtime process`, key });
+  try {
+    await db.delete(systemSettingsTable).where(eq(systemSettingsTable.key, key));
+  } catch (err) {
+    logger.warn({ key, error: String(err) }, "Could not remove setting from systemSettingsTable");
+  }
+
+  res.json({ message: `Variable ${key} removed from database and runtime process`, key });
 });
 
 export default router;

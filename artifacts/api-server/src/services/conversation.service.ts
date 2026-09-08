@@ -82,9 +82,17 @@ export class ConversationService {
     personality: PersonalityKey,
   ): Promise<void> {
     await db
-      .update(usersTable)
-      .set({ personality, updatedAt: new Date() })
-      .where(eq(usersTable.telegramUserId, telegramUserId));
+      .insert(usersTable)
+      .values({
+        telegramUserId,
+        personality,
+        mode: "general",
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: usersTable.telegramUserId,
+        set: { personality, updatedAt: new Date() },
+      });
     chatDatabaseService.invalidateUserCache(telegramUserId);
   }
 
@@ -100,9 +108,17 @@ export class ConversationService {
 
   async setUserMode(telegramUserId: number, mode: ModeKey): Promise<void> {
     await db
-      .update(usersTable)
-      .set({ mode, updatedAt: new Date() })
-      .where(eq(usersTable.telegramUserId, telegramUserId));
+      .insert(usersTable)
+      .values({
+        telegramUserId,
+        personality: "playful",
+        mode,
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: usersTable.telegramUserId,
+        set: { mode, updatedAt: new Date() },
+      });
     chatDatabaseService.invalidateUserCache(telegramUserId);
   }
 

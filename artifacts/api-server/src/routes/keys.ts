@@ -3,9 +3,25 @@ import { apiKeyPoolService } from "../services/api-key-pool.service";
 import { GeminiService } from "../gemini/gemini.service";
 import { getConfig } from "../config/env";
 import { logger } from "../lib/logger";
-import { chatDatabaseService } from "@workspace/db";
+import { chatDatabaseService, db, systemSettingsTable } from "@workspace/db";
 
 const router: IRouter = Router();
+
+async function syncKeysToDatabase(): Promise<void> {
+  try {
+    const joined = apiKeyPoolService.getJoinedRawKeys();
+    process.env.GEMINI_API_KEY = joined;
+    await db
+      .insert(systemSettingsTable)
+      .values({ key: "GEMINI_API_KEY", value: joined, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: systemSettingsTable.key,
+        set: { value: joined, updatedAt: new Date() },
+      });
+  } catch (err) {
+    logger.warn({ error: String(err) }, "Failed to sync API keys to PostgreSQL database");
+  }
+}
 
 // GET /api/keys - List all keys in pool with status & metrics
 router.get("/keys", (_req: Request, res: Response) => {
@@ -23,8 +39,10 @@ router.post("/keys", async (req: Request, res: Response) => {
     }
 
     const added = await apiKeyPoolService.addKey(key, name);
+    await syncKeysToDatabase();
+
     res.status(201).json({
-      message: "API key validated and added successfully",
+      message: "API key validated, saved to database, and added to pool successfully",
       key: added,
       poolSummary: apiKeyPoolService.getSummary(),
     });
@@ -35,14 +53,15 @@ router.post("/keys", async (req: Request, res: Response) => {
 });
 
 // DELETE /api/keys/:id - Remove a key
-router.delete("/keys/:id", (req: Request, res: Response) => {
+router.delete("/keys/:id", async (req: Request, res: Response) => {
   const { id } = req.params;
   const removed = apiKeyPoolService.removeKey(id);
   if (!removed) {
     res.status(404).json({ error: "Key not found" });
     return;
   }
-  res.json({ message: "Key removed", poolSummary: apiKeyPoolService.getSummary() });
+  await syncKeysToDatabase();
+  res.json({ message: "Key removed from database and pool", poolSummary: apiKeyPoolService.getSummary() });
 });
 
 // PATCH /api/keys/:id/toggle - Enable/disable a key
@@ -57,14 +76,27 @@ router.patch("/keys/:id/toggle", (req: Request, res: Response) => {
 });
 
 // POST /api/keys/mode - Change rotation mode
-router.post("/keys/mode", (req: Request, res: Response) => {
+router.post("/keys/mode", async (req: Request, res: Response) => {
   const { mode } = req.body;
   if (mode !== "round_robin" && mode !== "failover") {
     res.status(400).json({ error: "Invalid mode. Must be 'round_robin' or 'failover'" });
     return;
   }
   apiKeyPoolService.setRotationMode(mode);
-  res.json({ message: "Rotation mode updated", rotationMode: mode });
+  process.env.KEY_ROTATION_MODE = mode;
+  try {
+    await db
+      .insert(systemSettingsTable)
+      .values({ key: "KEY_ROTATION_MODE", value: mode, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: systemSettingsTable.key,
+        set: { value: mode, updatedAt: new Date() },
+      });
+  } catch (e) {
+    logger.warn({ error: String(e) }, "Failed to persist KEY_ROTATION_MODE to database");
+  }
+
+  res.json({ message: "Rotation mode updated and saved to database", rotationMode: mode });
 });
 
 // POST /api/keys/test - Test an arbitrary key or existing key

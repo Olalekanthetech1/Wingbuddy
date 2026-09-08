@@ -465,10 +465,33 @@ export class AdaptiveEngineService {
         activeCodeFenceLang = null;
       }
 
+      // Balance open Telegram HTML tags (<b>, <i>, <s>, <u>, <code>, <pre>)
+      const openHtmlTagsStack: string[] = [];
+      const tagRegex = /<\/?(b|i|s|u|code|pre)\b[^>]*>/gi;
+      const tagMatches = [...currentChunk.matchAll(tagRegex)];
+      for (const m of tagMatches) {
+        const fullTag = m[0];
+        const tagName = m[1].toLowerCase();
+        if (fullTag.startsWith("</")) {
+          const idx = openHtmlTagsStack.lastIndexOf(tagName);
+          if (idx !== -1) openHtmlTagsStack.splice(idx, 1);
+        } else {
+          openHtmlTagsStack.push(tagName);
+        }
+      }
+
+      if (openHtmlTagsStack.length > 0) {
+        const closingTags = openHtmlTagsStack.slice().reverse().map((t) => `</${t}>`).join("");
+        currentChunk = currentChunk + closingTags;
+      }
+
       chunks.push(currentChunk);
       remaining = remaining.slice(breakIndex).trim();
       if (activeCodeFenceLang !== null && remaining.length > 0 && !remaining.startsWith("```")) {
         remaining = `\`\`\`${activeCodeFenceLang}\n${remaining}`;
+      } else if (openHtmlTagsStack.length > 0 && remaining.length > 0) {
+        const openingTags = openHtmlTagsStack.map((t) => `<${t}>`).join("");
+        remaining = `${openingTags}${remaining}`;
       }
     }
 

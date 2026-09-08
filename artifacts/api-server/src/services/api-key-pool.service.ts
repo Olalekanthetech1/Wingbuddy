@@ -121,8 +121,23 @@ export class ApiKeyPoolService {
     }
   }
 
+  public reloadFromEnv(rawVal?: string): void {
+    if (rawVal) {
+      process.env.GEMINI_API_KEY = rawVal;
+    }
+    this.keys.clear();
+    this.discoverInitialKeys();
+    logger.info({ totalKeys: this.keys.size }, "API Key pool reloaded dynamically");
+  }
+
   public getRotationMode(): RotationMode {
     return this.rotationMode;
+  }
+
+  public getJoinedRawKeys(): string {
+    return Array.from(this.keys.values())
+      .map((k) => k.key)
+      .join(",");
   }
 
   public setRotationMode(mode: RotationMode): void {

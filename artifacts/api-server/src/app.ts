@@ -553,10 +553,12 @@ app.get("/", (_req, res) => {
             Loading active users...
           </div>
         </div>
-        <div style="display:flex; align-items:center; gap:0.5rem;">
+        <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
           <select id="userSelectDropdown" class="input" style="font-weight:600; background:#0b1329; border-color:#3b82f6;" onchange="onUserSelectionChange(this.value)">
             <option value="">Loading users...</option>
           </select>
+          <input type="number" id="customUserIdInput" class="input" style="width:160px; background:#0b1329; border-color:#3b82f6;" placeholder="Custom User ID..." />
+          <button class="btn btn-sm btn-outline" onclick="applyCustomUserId()">Target ID</button>
           <button class="btn btn-sm btn-outline" onclick="loadUsers()">🔄 Refresh</button>
         </div>
       </div>
@@ -839,7 +841,7 @@ app.get("/", (_req, res) => {
     let currentRotationMode = 'round_robin';
     let currentPersonality = 'playful';
     let currentMode = 'general';
-    let currentSelectedUserId = '6307001401'; // Default to active Telegram user
+    let currentSelectedUserId = '';
     let cachedUsersList = [];
 
     function showAlert(msg, isError = false) {
@@ -860,36 +862,54 @@ app.get("/", (_req, res) => {
           const select = document.getElementById('userSelectDropdown');
           
           if (cachedUsersList.length === 0) {
-            select.innerHTML = '<option value="">No Telegram users registered</option>';
-            document.getElementById('selectedUserHeadline').textContent = 'No registered users';
-            return;
+            select.innerHTML = '<option value="">No registered Telegram users</option>';
+            if (!currentSelectedUserId) {
+              document.getElementById('selectedUserHeadline').textContent = 'No registered users — enter custom ID or wait for Telegram activity';
+            }
+          } else {
+            // Check if currentSelectedUserId exists in list, else pick first registered user
+            const found = cachedUsersList.find(u => String(u.telegramUserId) === String(currentSelectedUserId));
+            if (!found && !currentSelectedUserId) {
+              currentSelectedUserId = String(cachedUsersList[0].telegramUserId);
+            }
+
+            select.innerHTML = cachedUsersList.map(u => {
+              const displayName = (u.firstName || '') + (u.username ? (' (@' + u.username + ')') : '') || ('User #' + u.telegramUserId);
+              const isSelected = String(u.telegramUserId) === String(currentSelectedUserId);
+              return '<option value="' + u.telegramUserId + '" ' + (isSelected ? 'selected' : '') + '>' +
+                escapeHtml(displayName) + ' [ID: ' + u.telegramUserId + ']' +
+              '</option>';
+            }).join('');
+            
+            if (currentSelectedUserId && !found) {
+              select.innerHTML += '<option value="' + currentSelectedUserId + '" selected>Custom Target [ID: ' + currentSelectedUserId + ']</option>';
+            }
+            updateUserHeadline();
           }
 
-          // Check if currentSelectedUserId exists in list, else pick first
-          const found = cachedUsersList.find(u => String(u.telegramUserId) === String(currentSelectedUserId));
-          if (!found) {
-            currentSelectedUserId = String(cachedUsersList[0].telegramUserId);
+          if (currentSelectedUserId) {
+            loadUserSettings(currentSelectedUserId);
+            loadReminders(currentSelectedUserId);
+            loadMemories(null, currentSelectedUserId);
           }
-
-          select.innerHTML = cachedUsersList.map(u => {
-            const displayName = (u.firstName || '') + (u.username ? (' (@' + u.username + ')') : '') || ('User #' + u.telegramUserId);
-            const isSelected = String(u.telegramUserId) === String(currentSelectedUserId);
-            return '<option value="' + u.telegramUserId + '" ' + (isSelected ? 'selected' : '') + '>' +
-              escapeHtml(displayName) + ' [ID: ' + u.telegramUserId + ']' +
-            '</option>';
-          }).join('');
-
-          updateUserHeadline();
-          loadUserSettings(currentSelectedUserId);
-          loadReminders(currentSelectedUserId);
-          loadMemories(null, currentSelectedUserId);
         }
       } catch (e) {
         console.error('Failed to load users list', e);
       }
     }
 
+    function applyCustomUserId() {
+      const val = document.getElementById('customUserIdInput').value.trim();
+      if (!val) {
+        showAlert('Please enter a numeric Telegram User ID', true);
+        return;
+      }
+      onUserSelectionChange(val);
+      document.getElementById('customUserIdInput').value = '';
+    }
+
     function onUserSelectionChange(userId) {
+      if (!userId) return;
       currentSelectedUserId = String(userId);
       updateUserHeadline();
       loadUserSettings(currentSelectedUserId);
@@ -898,12 +918,16 @@ app.get("/", (_req, res) => {
     }
 
     function updateUserHeadline() {
+      if (!currentSelectedUserId) {
+        document.getElementById('selectedUserHeadline').textContent = 'No active user selected';
+        return;
+      }
       const user = cachedUsersList.find(u => String(u.telegramUserId) === String(currentSelectedUserId));
       if (user) {
         const name = (user.firstName || '') + (user.username ? (' (@' + user.username + ')') : '');
         document.getElementById('selectedUserHeadline').textContent = name + ' — Telegram ID: ' + user.telegramUserId;
       } else {
-        document.getElementById('selectedUserHeadline').textContent = 'User ID: ' + currentSelectedUserId;
+        document.getElementById('selectedUserHeadline').textContent = 'Custom User Context — Telegram ID: ' + currentSelectedUserId;
       }
     }
 
@@ -1108,6 +1132,10 @@ app.get("/", (_req, res) => {
     }
 
     async function setPersonality(personality) {
+      if (!currentSelectedUserId) {
+        showAlert('Please select or enter a target Telegram User ID first', true);
+        return;
+      }
       try {
         const res = await fetch('/api/dashboard/user-settings', {
           method: 'POST',
@@ -1123,6 +1151,10 @@ app.get("/", (_req, res) => {
     }
 
     async function setMode(mode) {
+      if (!currentSelectedUserId) {
+        showAlert('Please select or enter a target Telegram User ID first', true);
+        return;
+      }
       try {
         const res = await fetch('/api/dashboard/user-settings', {
           method: 'POST',
@@ -1174,6 +1206,10 @@ app.get("/", (_req, res) => {
     }
 
     async function addReminder() {
+      if (!currentSelectedUserId) {
+        showAlert('Please select or enter a target Telegram User ID first', true);
+        return;
+      }
       const promptInput = document.getElementById('newReminderPrompt');
       const minutesInput = document.getElementById('newReminderMinutes');
       const prompt = promptInput.value.trim();
@@ -1270,6 +1306,10 @@ app.get("/", (_req, res) => {
     }
 
     async function addMemory() {
+      if (!currentSelectedUserId) {
+        showAlert('Please select or enter a target Telegram User ID first', true);
+        return;
+      }
       const keyInput = document.getElementById('newMemoryKey');
       const contentInput = document.getElementById('newMemoryContent');
       const key = keyInput.value.trim();

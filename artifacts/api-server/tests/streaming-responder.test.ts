@@ -28,7 +28,7 @@ describe("StreamingResponder", () => {
       98765,
       12345,
       "Hello world! This is a complete response.",
-      { parse_mode: "Markdown" },
+      { parse_mode: "HTML" },
     );
   });
 
@@ -50,6 +50,6 @@ describe("StreamingResponder", () => {
     // Finalize should call reply with the final text
     replyMock.mockResolvedValueOnce({ message_id: 67890 });
     await responder.finalize("Direct fallback reply");
-    expect(replyMock).toHaveBeenCalledWith("Direct fallback reply", { parse_mode: "Markdown" });
+    expect(replyMock).toHaveBeenLastCalledWith("Direct fallback reply", { parse_mode: "HTML" });
   });
 });

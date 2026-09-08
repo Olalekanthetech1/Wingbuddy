@@ -1,7 +1,8 @@
 import { and, desc, eq, lte } from "drizzle-orm";
-import { db, remindersTable, type Reminder, cdcService, type ReminderCdcEvent } from "@workspace/db";
+import { db, remindersTable, usersTable, type Reminder, cdcService, type ReminderCdcEvent } from "@workspace/db";
 import { logger } from "../lib/logger";
 import { safeErrorMetadata } from "../utils/safe-error";
+import { formatTelegramMessage } from "../utils/telegram-formatter";
 import type { Bot } from "grammy";
 
 export interface ParsedReminder {
@@ -204,6 +205,16 @@ export class ReminderService {
     prompt: string;
     dueAt: Date;
   }): Promise<Reminder> {
+    await db
+      .insert(usersTable)
+      .values({
+        telegramUserId: params.telegramUserId,
+        firstName: "Dashboard User",
+        personality: "playful",
+        mode: "general",
+      })
+      .onConflictDoNothing();
+
     const [created] = await db
       .insert(remindersTable)
       .values({
@@ -432,9 +443,10 @@ export class ReminderScheduler {
             minute: "2-digit",
           });
 
+          const formattedPrompt = formatTelegramMessage(reminder.prompt);
           const text =
             `⏰ <b>Reminder Notification!</b>\n\n` +
-            `📌 <b>Task:</b> ${reminder.prompt}\n` +
+            `📌 <b>Task:</b> ${formattedPrompt}\n` +
             `🕒 <b>Scheduled for:</b> ${timeFormatted}` +
             (reminder.snoozeCount > 0 ? ` <i>(Snoozed ${reminder.snoozeCount}x)</i>` : "");
 

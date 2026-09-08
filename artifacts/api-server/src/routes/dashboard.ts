@@ -199,6 +199,17 @@ router.post("/dashboard/memories", async (req: Request, res: Response) => {
 
     const targetUserId = BigInt(userId);
 
+    // Ensure user record exists in database
+    await db
+      .insert(usersTable)
+      .values({
+        telegramUserId: targetUserId,
+        firstName: "Dashboard User",
+        personality: "playful",
+        mode: "general",
+      })
+      .onConflictDoNothing();
+
     // Compute embedding dynamically if available
     let embeddingVector: number[] | undefined;
     try {
@@ -208,12 +219,12 @@ router.post("/dashboard/memories", async (req: Request, res: Response) => {
       // Embedding optional if offline
     }
 
-    const saved = await chatDatabaseService.saveUserMemory({
-      telegramUserId: targetUserId,
+    const saved = await chatDatabaseService.saveMemory({
+      telegramUserId: Number(targetUserId),
       key: String(key).trim(),
       content: String(content).trim(),
       category: category ? String(category).trim() : "general",
-      embeddingVector,
+      embedding: embeddingVector,
     });
 
     res.status(201).json({ message: "Memory saved successfully", memory: saved });

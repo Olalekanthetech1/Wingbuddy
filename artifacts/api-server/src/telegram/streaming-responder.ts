@@ -1,6 +1,7 @@
 import type { Context } from "grammy";
 import { AdaptiveEngineService } from "../services/adaptive-engine.service";
 import { safeErrorMetadata } from "../utils/safe-error";
+import { formatTelegramMessage, stripTelegramHtml } from "../utils/telegram-formatter";
 import { logger } from "../lib/logger";
 
 export interface StreamingResponderOptions {
@@ -81,7 +82,7 @@ export class StreamingResponder {
   }
 
   /**
-   * Finalizes the streaming response with semantic code-fence-aware splitting.
+   * Finalizes the streaming response with semantic HTML-aware splitting and formatting.
    */
   async finalize(fullText: string): Promise<void> {
     this.isFinalized = true;
@@ -91,13 +92,14 @@ export class StreamingResponder {
     }
 
     this.latestText = fullText.trim();
-    const chunks = AdaptiveEngineService.computeAdaptiveMessageSplit(this.latestText);
+    const formattedFull = formatTelegramMessage(this.latestText);
+    const chunks = AdaptiveEngineService.computeAdaptiveMessageSplit(formattedFull);
 
     if (!this.messageId) {
       // If initial placeholder failed, send standard split messages
       for (const chunk of chunks) {
-        await this.ctx.reply(chunk, { parse_mode: "Markdown" }).catch(async () => {
-          await this.ctx.reply(chunk);
+        await this.ctx.reply(chunk, { parse_mode: "HTML" }).catch(async () => {
+          await this.ctx.reply(stripTelegramHtml(chunk));
         });
       }
       return;
@@ -110,15 +112,15 @@ export class StreamingResponder {
         this.ctx.chat!.id,
         this.messageId,
         firstChunk,
-        { parse_mode: "Markdown" },
+        { parse_mode: "HTML" },
       );
     } catch {
-      // Fallback without Markdown if markdown syntax parsing fails
+      // Fallback without HTML if parsing fails
       try {
         await this.ctx.api.editMessageText(
           this.ctx.chat!.id,
           this.messageId,
-          firstChunk,
+          stripTelegramHtml(firstChunk),
         );
       } catch (e) {
         logger.debug({ error: safeErrorMetadata(e) }, "Final edit error (safe to ignore)");
@@ -128,8 +130,8 @@ export class StreamingResponder {
     // If response was larger than single Telegram message, send remaining semantic chunks
     for (let i = 1; i < chunks.length; i++) {
       const chunk = chunks[i];
-      await this.ctx.reply(chunk, { parse_mode: "Markdown" }).catch(async () => {
-        await this.ctx.reply(chunk);
+      await this.ctx.reply(chunk, { parse_mode: "HTML" }).catch(async () => {
+        await this.ctx.reply(stripTelegramHtml(chunk));
       });
     }
   }
@@ -140,22 +142,24 @@ export class StreamingResponder {
     this.isFlushInProgress = true;
     const startCall = Date.now();
 
-    // Prepare adaptive preview snippet leaving room for typing cursor
-    const displayText = isFinal
+    // Prepare adaptive preview snippet
+    const rawSnippet = isFinal
       ? this.latestText
       : `${this.latestText.slice(0, 3800)} ▍`;
 
-    if (!displayText.trim()) {
+    if (!rawSnippet.trim()) {
       this.isFlushInProgress = false;
       return;
     }
+
+    const formattedSnippet = formatTelegramMessage(rawSnippet);
 
     try {
       await this.ctx.api.editMessageText(
         this.ctx.chat.id,
         this.messageId,
-        displayText,
-        { parse_mode: "Markdown" },
+        formattedSnippet,
+        { parse_mode: "HTML" },
       );
     } catch (err: unknown) {
       const errMsg = String(err);
@@ -165,12 +169,12 @@ export class StreamingResponder {
       ) {
         // Safe no-op
       } else {
-        // If markdown fails during mid-stream unclosed tags, retry as plain text
+        // If HTML fails during mid-stream unclosed tags, retry with stripped plain text
         try {
           await this.ctx.api.editMessageText(
             this.ctx.chat.id,
             this.messageId,
-            displayText,
+            stripTelegramHtml(formattedSnippet),
           );
         } catch {
           // Ignore transient stream throttle rejections

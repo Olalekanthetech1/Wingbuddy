@@ -119,6 +119,12 @@ export async function ensureDatabaseSchema(pgPool: pg.Pool): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS reminders_user_completed_idx ON reminders(telegram_user_id, is_completed);
     CREATE INDEX IF NOT EXISTS reminders_due_completed_idx ON reminders(due_at, is_completed);
+
+    CREATE TABLE IF NOT EXISTS system_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
     -- CDC PostgreSQL Trigger for reminders
     CREATE OR REPLACE FUNCTION notify_reminders_cdc() RETURNS trigger AS $$
     BEGIN

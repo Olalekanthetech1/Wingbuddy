@@ -1,6 +1,7 @@
 import app, { telegramRuntime } from "./app";
 import { logger } from "./lib/logger";
 import { getPool, ensureDatabaseSchema } from "@workspace/db";
+import { hydrateEnvFromDatabase } from "./routes/env";
 
 const port = 3000;
 
@@ -10,6 +11,7 @@ const server = app.listen(port, "0.0.0.0", async () => {
     const pool = getPool();
     await ensureDatabaseSchema(pool);
     logger.info("Database schema verification and initialization completed");
+    await hydrateEnvFromDatabase();
   } catch (err) {
     logger.warn({ error: err instanceof Error ? err.message : String(err) }, "Database schema auto-init warning");
   }

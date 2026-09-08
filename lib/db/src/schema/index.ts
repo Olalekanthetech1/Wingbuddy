@@ -101,9 +101,16 @@ export const remindersTable = pgTable(
   ],
 );
 
+export const systemSettingsTable = pgTable("system_settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export type User = typeof usersTable.$inferSelect;
 export type Conversation = typeof conversationsTable.$inferSelect;
 export type Message = typeof messagesTable.$inferSelect;
 export type UserMemory = typeof userMemoriesTable.$inferSelect;
 export type Reminder = typeof remindersTable.$inferSelect;
+export type SystemSetting = typeof systemSettingsTable.$inferSelect;
 

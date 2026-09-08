@@ -14,6 +14,7 @@ import { RateLimitService } from "../services/rate-limit.service";
 import { isAuthorizedTelegramUser } from "../services/authorization.service";
 import { telegramWorkerQueue } from "../services/worker-queue.service";
 import { splitTelegramMessage } from "../utils/split-message";
+import { formatTelegramMessage, stripTelegramHtml } from "../utils/telegram-formatter";
 import { safeErrorMetadata } from "../utils/safe-error";
 import { startTypingIndicator } from "./typing-indicator";
 import {
@@ -376,10 +377,16 @@ export function createTelegramBot(): TelegramBotRuntime {
       await conversations.addMessage(globalContextData.conversationId, "user", `/search ${query}`);
       await conversations.addMessage(globalContextData.conversationId, "model", reply);
 
-      const chunks = splitTelegramMessage(reply);
+      const formattedReply = formatTelegramMessage(reply);
+      const chunks = splitTelegramMessage(formattedReply);
       for (const [index, chunk] of chunks.entries()) {
         await ctx.reply(chunk, {
+          parse_mode: "HTML",
           reply_markup: index === chunks.length - 1 ? feedbackKeyboard() : undefined,
+        }).catch(async () => {
+          await ctx.reply(stripTelegramHtml(chunk), {
+            reply_markup: index === chunks.length - 1 ? feedbackKeyboard() : undefined,
+          });
         });
       }
     } catch (error) {
@@ -431,10 +438,16 @@ export function createTelegramBot(): TelegramBotRuntime {
       await conversations.addMessage(globalContextData.conversationId, "user", `/think ${query}`);
       await conversations.addMessage(globalContextData.conversationId, "model", reply);
 
-      const chunks = splitTelegramMessage(reply);
+      const formattedReply = formatTelegramMessage(reply);
+      const chunks = splitTelegramMessage(formattedReply);
       for (const [index, chunk] of chunks.entries()) {
         await ctx.reply(chunk, {
+          parse_mode: "HTML",
           reply_markup: index === chunks.length - 1 ? feedbackKeyboard() : undefined,
+        }).catch(async () => {
+          await ctx.reply(stripTelegramHtml(chunk), {
+            reply_markup: index === chunks.length - 1 ? feedbackKeyboard() : undefined,
+          });
         });
       }
     } catch (error) {
