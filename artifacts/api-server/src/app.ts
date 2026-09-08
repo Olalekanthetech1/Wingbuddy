@@ -10,6 +10,7 @@ import { safeErrorMetadata } from "./utils/safe-error";
 import { renderDashboardHtml } from "./dashboard-ui";
 import { renderDashboardModelControls } from "./dashboard-model-controls";
 import { renderDashboardControlPlane } from "./dashboard-control-plane";
+import { renderDashboardBotSimulator } from "./dashboard-bot-simulator";
 import { apiKeyPoolService } from "./services/api-key-pool.service";
 
 const app: Express = express();
@@ -86,7 +87,7 @@ app.use("/api", router);
 
 const serveDashboard = (_req: Request, res: Response): void => {
   const html = renderDashboardHtml();
-  const enhanced = html.replace("</body>", `${renderDashboardModelControls()}${renderDashboardControlPlane()}</body>`);
+  const enhanced = html.replace("</body>", `${renderDashboardModelControls()}${renderDashboardControlPlane()}${renderDashboardBotSimulator()}</body>`);
   res.type("html").send(enhanced);
 };
 app.get("/", serveDashboard);
