@@ -1,9 +1,10 @@
-import app, { telegramRuntime } from "./app";
+import app, { telegramRuntime, setRuntimeHydrationReady } from "./app";
 import { logger } from "./lib/logger";
 import { getPool, ensureDatabaseSchema } from "@workspace/db";
 import { hydrateEnvFromDatabase } from "./routes/env";
 import { getExecutionConfig } from "./execution/config";
 import { apiKeyPoolService } from "./services/api-key-pool.service";
+import { runtimeBehaviorConfigService } from "./services/runtime-behavior-config.service";
 
 const port = 3000;
 let startupStateReady = false;
@@ -17,12 +18,15 @@ const server = app.listen(port, "0.0.0.0", async () => {
     await hydrateEnvFromDatabase();
     await apiKeyPoolService.initializeDb();
     await apiKeyPoolService.hydrateFromDatabase();
+    await runtimeBehaviorConfigService.initialize();
 
     startupStateReady = true;
+    setRuntimeHydrationReady(true);
     telegramRuntime.initOrReload();
     logger.info("Runtime configuration hydrated before Telegram initialization");
   } catch (err) {
     startupStateReady = false;
+    setRuntimeHydrationReady(false);
     logger.error({ error: err instanceof Error ? err.message : String(err) }, "CRITICAL_STARTUP_HYDRATION_FAILURE");
     logger.error("Telegram runtime will remain stopped until authoritative PostgreSQL state is available");
   }
