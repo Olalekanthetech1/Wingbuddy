@@ -67,7 +67,7 @@ export const searchInformationTool: AssistantTool = {
 export const webSearchTool: AssistantTool = {
   name: "web_search",
   description: "Searches the live web through Tavily and returns source-backed results. Use this dynamically when fresh, current, broad, or multi-source web evidence is needed. Do not invent results when Tavily is unavailable.",
-  policy: { sideEffect: false, destructive: false, confirmationRequired: false, idempotent: true, requiredCapabilities: ["web_research"], timeoutMs: 30000 },
+  policy: { sideEffect: false, destructive: false, confirmationRequired: false, idempotent: true, requiredCapabilities: [], timeoutMs: 30000 },
   execute: async (input: unknown) => {
     const record = asRecord(input);
     const query = requireNonEmptyString(record.query, "query");
@@ -90,7 +90,7 @@ export const webSearchTool: AssistantTool = {
 export const webExtractTool: AssistantTool = {
   name: "web_extract",
   description: "Extracts readable content from one or more known web URLs through Tavily. Use after web_search when source content needs deeper inspection.",
-  policy: { sideEffect: false, destructive: false, confirmationRequired: false, idempotent: true, requiredCapabilities: ["web_research"], timeoutMs: 45000 },
+  policy: { sideEffect: false, destructive: false, confirmationRequired: false, idempotent: true, requiredCapabilities: [], timeoutMs: 45000 },
   execute: async (input: unknown) => {
     const record = asRecord(input);
     const urls = Array.isArray(record.urls) ? record.urls.map(String) : typeof record.url === "string" ? [record.url] : [];
