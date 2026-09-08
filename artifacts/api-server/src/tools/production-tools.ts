@@ -1,19 +1,18 @@
 import { ToolRegistry, type AssistantTool } from "./tool-registry";
 import { logger } from "../lib/logger";
 import { taskService } from "../services/task.service";
-import { reminderService } from "../services/reminder.service";
+import { reminderService, reminderScheduler } from "../services/reminder.service";
+import { installDurableReminderDelivery } from "../services/reliable-reminder-delivery";
 
 function asRecord(input: unknown): Record<string, unknown> {
   if (!input || typeof input !== "object" || Array.isArray(input)) return {};
   return input as Record<string, unknown>;
 }
-
 function requireNonEmptyString(value: unknown, field: string): string {
   const result = String(value ?? "").trim();
   if (!result) throw new Error(`Missing required field: ${field}`);
   return result;
 }
-
 function parseDueAt(value: unknown): Date {
   const raw = requireNonEmptyString(value, "dueAt");
   const dueAt = new Date(raw);
@@ -29,14 +28,12 @@ export const calculateMathTool: AssistantTool = {
   execute: async (input: unknown) => {
     const record = asRecord(input);
     const rawExpr = typeof record.expression === "string" ? record.expression : String(input || "");
-    const converted = rawExpr.replace(/\^/g, "**");
-    const sanitized = converted.replace(/[^0-9+\-*/().%*\s]/gi, "").trim();
+    const sanitized = rawExpr.replace(/\^/g, "**").replace(/[^0-9+\-*/().%*\s]/gi, "").trim();
     if (!sanitized || !/^[\d\s+\-*/().%*]+$/.test(sanitized)) throw new Error("Invalid mathematical expression.");
     try {
-      const evalFn = new Function(`"use strict"; return (${sanitized});`);
-      const numericResult = evalFn();
-      if (typeof numericResult !== "number" || !Number.isFinite(numericResult)) throw new Error("Expression did not produce a finite number.");
-      return { expression: sanitized, result: numericResult, formatted: Number.isInteger(numericResult) ? String(numericResult) : numericResult.toFixed(4) };
+      const result = new Function(`"use strict"; return (${sanitized});`)();
+      if (typeof result !== "number" || !Number.isFinite(result)) throw new Error("Expression did not produce a finite number.");
+      return { expression: sanitized, result, formatted: Number.isInteger(result) ? String(result) : result.toFixed(4) };
     } catch (err: any) {
       logger.warn({ expression: sanitized, error: err?.message }, "TOOL_CALCULATE_MATH_ERROR");
       throw new Error(`Math calculation failed: ${err?.message || "unknown error"}`);
@@ -62,9 +59,7 @@ export const searchInformationTool: AssistantTool = {
       const extract = String(payload.extract || "").trim();
       if (!extract) throw new Error("External lookup returned no substantive finding.");
       return { query, title: payload.title || query, description: payload.description || "", findings: [extract], sourceUrl: payload.content_urls?.desktop?.page || url, retrievedAt: new Date().toISOString(), requestedByUserId: context.telegramUserId };
-    } finally {
-      clearTimeout(timeout);
-    }
+    } finally { clearTimeout(timeout); }
   },
 };
 
@@ -103,13 +98,10 @@ export const createTaskTool: AssistantTool = {
     const validStatuses = ["pending", "active", "paused", "waiting"] as const;
     const status = validStatuses.includes(requestedStatus as any) ? requestedStatus as (typeof validStatuses)[number] : "active";
     const rawSteps = Array.isArray(record.steps) ? record.steps : undefined;
-    const steps = rawSteps && rawSteps.length > 0
-      ? rawSteps.map((step, index) => {
-          const item = typeof step === "string" ? { title: step } : asRecord(step);
-          return { title: requireNonEmptyString(item.title, `steps[${index}].title`), description: typeof item.description === "string" ? item.description : undefined };
-        })
-      : undefined;
-
+    const steps = rawSteps && rawSteps.length > 0 ? rawSteps.map((step, index) => {
+      const item = typeof step === "string" ? { title: step } : asRecord(step);
+      return { title: requireNonEmptyString(item.title, `steps[${index}].title`), description: typeof item.description === "string" ? item.description : undefined };
+    }) : undefined;
     const task = await taskService.createTask({
       telegramUserId: context.telegramUserId,
       conversationId: context.conversationId,
@@ -121,16 +113,7 @@ export const createTaskTool: AssistantTool = {
       contextData: typeof record.contextData === "object" && record.contextData !== null ? record.contextData as Record<string, unknown> : undefined,
       metadataData: { source: "autonomous_tool", idempotencyKey: context.idempotencyKey || null },
     });
-
-    return {
-      taskId: task.task.id,
-      title: task.task.title,
-      goal: task.task.goal,
-      status: task.task.status,
-      currentStep: task.task.currentStep,
-      steps: task.steps.map((step) => ({ id: step.id, order: step.stepOrder, title: step.title, status: step.status })),
-      persisted: true,
-    };
+    return { taskId: task.task.id, title: task.task.title, goal: task.task.goal, status: task.task.status, currentStep: task.task.currentStep, steps: task.steps.map((step) => ({ id: step.id, order: step.stepOrder, title: step.title, status: step.status })), persisted: true };
   },
 };
 
@@ -162,6 +145,7 @@ export const deleteUserSessionTool: AssistantTool = {
 let productionRegistryInstance: ToolRegistry | null = null;
 export function getProductionToolRegistry(): ToolRegistry {
   if (!productionRegistryInstance) {
+    installDurableReminderDelivery(reminderScheduler);
     const registry = new ToolRegistry();
     registry.register(calculateMathTool);
     registry.register(searchInformationTool);
