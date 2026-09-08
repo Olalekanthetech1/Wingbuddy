@@ -4,10 +4,8 @@ import { getPool, ensureDatabaseSchema } from "@workspace/db";
 import { hydrateEnvFromDatabase } from "./routes/env";
 import { getExecutionConfig } from "./execution/config";
 import { apiKeyPoolService } from "./services/api-key-pool.service";
-import { behaviorRegistryService } from "./services/behavior-registry.service";
 
 const port = 3000;
-let startupStateReady = false;
 
 const server = app.listen(port, "0.0.0.0", async () => {
   logger.info({ port }, `Server listening on 0.0.0.0:${port}`);
@@ -18,25 +16,14 @@ const server = app.listen(port, "0.0.0.0", async () => {
     await hydrateEnvFromDatabase();
     await apiKeyPoolService.initializeDb();
     await apiKeyPoolService.hydrateFromDatabase();
-    await behaviorRegistryService.initialize();
-
-    startupStateReady = true;
     telegramRuntime.initOrReload();
-    logger.info("Runtime configuration hydrated before Telegram initialization");
   } catch (err) {
-    startupStateReady = false;
-    logger.error({ error: err instanceof Error ? err.message : String(err) }, "CRITICAL_STARTUP_HYDRATION_FAILURE");
-    logger.error("Telegram runtime will remain stopped until authoritative PostgreSQL state is available");
+    logger.warn({ error: err instanceof Error ? err.message : String(err) }, "Database/runtime hydration warning");
   }
 
   const execConfig = getExecutionConfig();
   logger.info({ enabled: execConfig.enabled, maxConcurrency: execConfig.maxConcurrency, maxPerUser: execConfig.maxPerUser, maxPerGraph: execConfig.maxPerGraph, maxPerTool: execConfig.maxPerTool, leaseDurationMs: execConfig.leaseDurationMs, staleLeaseThresholdMs: execConfig.staleLeaseThresholdMs, defaultTimeoutMs: execConfig.defaultTimeoutMs, maxRetries: execConfig.maxRetries }, "AUTONOMOUS_EXECUTION_ENGINE_STATUS");
-
-  if (startupStateReady) {
-    void telegramRuntime.start().catch((error: unknown) => logger.error({ err: error }, "Telegram bot failed to start"));
-  } else {
-    logger.error("Telegram bot startup skipped because authoritative runtime hydration did not complete");
-  }
+  void telegramRuntime.start().catch((error: unknown) => logger.error({ err: error }, "Telegram bot failed to start"));
 });
 
 const shutdown = (signal: string): void => {
