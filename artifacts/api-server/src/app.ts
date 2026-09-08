@@ -507,6 +507,54 @@ app.get("/", (_req, res) => {
       </div>
     </div>
 
+    <!-- 1.5. Adaptive Environment Variables & Secrets Configurator Card -->
+    <div class="card" style="margin-bottom: 1.5rem;">
+      <div class="section-title">
+        <span>⚙️ Adaptive Environment Variables & Secrets Configurator</span>
+        <button class="btn btn-sm btn-outline" onclick="loadEnvVars()">🔄 Refresh Secrets</button>
+      </div>
+      <p style="color:var(--text-muted);font-size:0.85rem;margin:0 0 0.75rem 0;">
+        Manage runtime credentials, API tokens, webhooks, database connection strings, and server flags live.
+      </p>
+
+      <!-- Category Filter Bar -->
+      <div class="selector-bar" style="margin-bottom:1rem;">
+        <span style="font-weight:600;color:var(--text);">Category:</span>
+        <button id="envFilterAll" class="selector-btn active" onclick="filterEnvCategory('all')">All</button>
+        <button id="envFilterCore" class="selector-btn" onclick="filterEnvCategory('core')">🔑 Core Credentials</button>
+        <button id="envFilterWebhook" class="selector-btn" onclick="filterEnvCategory('webhook')">🌐 Webhooks</button>
+        <button id="envFilterAccess" class="selector-btn" onclick="filterEnvCategory('access')">⚙️ Access & Models</button>
+        <button id="envFilterPerformance" class="selector-btn" onclick="filterEnvCategory('performance')">🚀 Server & Perf</button>
+        <button id="envFilterCustom" class="selector-btn" onclick="filterEnvCategory('custom')">✨ Custom Vars</button>
+      </div>
+
+      <!-- Env Vars Table -->
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Variable Name</th>
+            <th>Category</th>
+            <th>Value / Secret Preview</th>
+            <th>Status</th>
+            <th style="text-align:right;">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="envTableBody">
+          <tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:1.5rem;">Loading environment variables...</td></tr>
+        </tbody>
+      </table>
+
+      <!-- Add Custom Variable Form -->
+      <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border);">
+        <div style="font-size:0.875rem;font-weight:600;margin-bottom:0.4rem;">➕ Add Custom Environment Variable</div>
+        <div class="form-row">
+          <input type="text" id="newEnvKey" class="input" placeholder="Variable Key (e.g. CUSTOM_SERVICE_KEY)" />
+          <input type="password" id="newEnvVal" class="input" placeholder="Value / Secret Token" />
+          <button class="btn" onclick="addCustomEnvVar()">Save Variable</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 2. AI Personality & Mode Configurator Card -->
     <div class="card" style="margin-bottom: 1.5rem;">
       <div class="section-title">
@@ -1191,9 +1239,194 @@ app.get("/", (_req, res) => {
       }
     }
 
+    // 7. Adaptive Environment Variables Configurator Functions
+    let cachedEnvVars = [];
+    let currentEnvCategory = 'all';
+    let unmaskedKeys = new Set();
+
+    async function loadEnvVars() {
+      try {
+        const res = await fetch('/api/env');
+        if (res.ok) {
+          const data = await res.json();
+          cachedEnvVars = data.variables || [];
+          renderEnvVars();
+        }
+      } catch (e) {
+        console.error('Failed to load environment variables', e);
+      }
+    }
+
+    function filterEnvCategory(category) {
+      currentEnvCategory = category;
+      ['All', 'Core', 'Webhook', 'Access', 'Performance', 'Custom'].forEach(c => {
+        const btn = document.getElementById('envFilter' + c);
+        if (btn) btn.classList.remove('active');
+      });
+      const activeBtn = document.getElementById('envFilter' + capitalize(category));
+      if (activeBtn) activeBtn.classList.add('active');
+      renderEnvVars();
+    }
+
+    function toggleEnvMask(key) {
+      if (unmaskedKeys.has(key)) {
+        unmaskedKeys.delete(key);
+      } else {
+        unmaskedKeys.add(key);
+      }
+      renderEnvVars();
+    }
+
     function escapeHtml(str) {
       if (!str) return '';
-      return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return String(str)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;');
+    }
+
+    function escapeAttr(str) {
+      if (!str) return '';
+      return String(str)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function renderEnvVars() {
+      const tbody = document.getElementById('envTableBody');
+      if (!tbody) return;
+
+      const filtered = cachedEnvVars.filter(v => {
+        if (currentEnvCategory === 'all') return true;
+        return v.category === currentEnvCategory;
+      });
+
+      if (filtered.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:1.5rem;">No variables found in category "' + escapeHtml(currentEnvCategory) + '"</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = filtered.map(v => {
+        const isUnmasked = unmaskedKeys.has(v.key);
+        const maskIcon = isUnmasked ? '🙈' : '👁️';
+        const isSetBadge = v.isSet ? '<span class="status-badge online">Configured</span>' : '<span class="status-badge offline">Unset</span>';
+
+        const safeKeyAttr = escapeAttr(v.key);
+        const safeValAttr = escapeAttr(v.value || '');
+
+        let testBtn = '';
+        if (v.key === 'GEMINI_API_KEY' || v.key === 'TELEGRAM_BOT_TOKEN' || v.key === 'DATABASE_URL') {
+          testBtn = '<button class="btn btn-sm btn-outline" style="margin-right:0.35rem;" data-key="' + safeKeyAttr + '" onclick="testEnvVar(this.dataset.key)">🧪 Test</button>';
+        }
+
+        let deleteBtn = '';
+        if (v.category === 'custom' || !v.required) {
+          deleteBtn = '<button class="btn btn-sm btn-danger" data-key="' + safeKeyAttr + '" onclick="deleteEnvVar(this.dataset.key)">🗑️</button>';
+        }
+
+        return '<tr>' +
+          '<td><div class="code-badge" style="font-weight:700;">' + escapeHtml(v.key) + '</div><div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.2rem;">' + escapeHtml(v.description || '') + '</div></td>' +
+          '<td><span class="pill-tag">' + escapeHtml(v.category) + '</span></td>' +
+          '<td>' +
+            '<div style="display:flex;align-items:center;gap:0.4rem;">' +
+              '<input type="' + (isUnmasked ? 'text' : 'password') + '" id="env_input_' + safeKeyAttr + '" class="input" style="font-family:monospace;font-size:0.8rem;padding:0.35rem 0.5rem;" value="' + safeValAttr + '" />' +
+              (v.isSensitive ? '<button class="btn btn-sm btn-outline" style="padding:0.25rem 0.4rem;" data-key="' + safeKeyAttr + '" onclick="toggleEnvMask(this.dataset.key)">' + maskIcon + '</button>' : '') +
+            '</div>' +
+          '</td>' +
+          '<td>' + isSetBadge + '</td>' +
+          '<td style="text-align:right;white-space:nowrap;">' +
+            testBtn +
+            '<button class="btn btn-sm" style="margin-right:0.35rem;" data-key="' + safeKeyAttr + '" onclick="saveEnvVar(this.dataset.key)">💾 Save</button>' +
+            deleteBtn +
+          '</td>' +
+        '</tr>';
+      }).join('');
+    }
+
+    async function saveEnvVar(key) {
+      const input = document.getElementById('env_input_' + key);
+      if (!input) return;
+      const newVal = input.value;
+
+      try {
+        const res = await fetch('/api/env', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ updates: { [key]: newVal } }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showAlert('✅ Environment variable ' + key + ' updated live!');
+          loadEnvVars();
+          loadStats();
+        } else {
+          showAlert('Error: ' + (data.error || 'Failed to save'), true);
+        }
+      } catch (e) {
+        showAlert('Network error saving environment variable', true);
+      }
+    }
+
+    async function testEnvVar(key) {
+      const input = document.getElementById('env_input_' + key);
+      const val = input ? input.value : '';
+      showAlert('🧪 Testing connection for ' + key + '...');
+
+      try {
+        const res = await fetch('/api/env/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key, value: val }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          showAlert('✅ Test Passed (' + data.latencyMs + 'ms): ' + data.message);
+        } else {
+          showAlert('❌ Test Failed: ' + (data.error || data.message || 'Verification failed'), true);
+        }
+      } catch (e) {
+        showAlert('Network error during connection test', true);
+      }
+    }
+
+    async function addCustomEnvVar() {
+      const kInput = document.getElementById('newEnvKey');
+      const vInput = document.getElementById('newEnvVal');
+      const k = kInput.value.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+      const v = vInput.value.trim();
+
+      if (!k) {
+        showAlert('Please specify a variable name', true);
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/env', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ updates: { [k]: v } }),
+        });
+        if (res.ok) {
+          showAlert('✅ Custom variable ' + k + ' created!');
+          kInput.value = '';
+          vInput.value = '';
+          loadEnvVars();
+        }
+      } catch (e) {}
+    }
+
+    async function deleteEnvVar(key) {
+      if (!confirm('Remove environment variable "' + key + '" from runtime?')) return;
+      try {
+        const res = await fetch('/api/env/' + encodeURIComponent(key), { method: 'DELETE' });
+        if (res.ok) {
+          showAlert('Variable ' + key + ' removed');
+          loadEnvVars();
+        }
+      } catch (e) {}
     }
 
     function capitalize(str) {
@@ -1205,6 +1438,7 @@ app.get("/", (_req, res) => {
     loadUsers();
     loadStats();
     loadKeys();
+    loadEnvVars();
     loadTelemetry();
 
     setInterval(loadStats, 4000);

@@ -22,7 +22,7 @@ export interface AppConfig {
 function required(name: string): string {
   const value = process.env[name]?.trim();
   if (!value) {
-    throw new Error(`${name} is required. Add it to Replit Secrets or environment variables.`);
+    throw new Error(`${name} is required. Add it to Environment Variables or Dashboard.`);
   }
   return value;
 }

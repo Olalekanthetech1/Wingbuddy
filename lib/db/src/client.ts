@@ -166,8 +166,13 @@ export async function ensureDatabaseSchema(pgPool: pg.Pool): Promise<void> {
     FOR EACH ROW EXECUTE FUNCTION notify_users_cdc();
   `;
 
+  const client = await pgPool.connect();
   try {
-    await pgPool.query(schemaSql);
+    await client.query("BEGIN;");
+    // Acquire transaction-level advisory lock to serialize concurrent schema initializations
+    await client.query("SELECT pg_advisory_xact_lock(987654321);");
+    await client.query(schemaSql);
+    await client.query("COMMIT;");
 
     // Check and initialize pgvector extension dynamically
     try {
@@ -180,7 +185,10 @@ export async function ensureDatabaseSchema(pgPool: pg.Pool): Promise<void> {
       pgVectorAvailable = false;
     }
   } catch (err) {
-    console.error("Failed to automatically ensure database schema:", err);
+    await client.query("ROLLBACK;").catch(() => {});
+    console.error("Database schema initialization note:", err instanceof Error ? err.message : String(err));
+  } finally {
+    client.release();
   }
 }
 
