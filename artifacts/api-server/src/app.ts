@@ -11,7 +11,6 @@ import { renderDashboardHtml } from "./dashboard-ui";
 import { renderDashboardModelControls } from "./dashboard-model-controls";
 import { renderDashboardControlPlane } from "./dashboard-control-plane";
 import { renderDashboardBotSimulator } from "./dashboard-bot-simulator";
-import { renderDashboardBehaviorControls } from "./dashboard-behavior-controls";
 import { apiKeyPoolService } from "./services/api-key-pool.service";
 
 const app: Express = express();
@@ -88,7 +87,7 @@ app.use("/api", router);
 
 const serveDashboard = (_req: Request, res: Response): void => {
   const html = renderDashboardHtml();
-  const enhanced = html.replace("</body>", `${renderDashboardModelControls()}${renderDashboardControlPlane()}${renderDashboardBotSimulator()}${renderDashboardBehaviorControls()}</body>`);
+  const enhanced = html.replace("</body>", `${renderDashboardModelControls()}${renderDashboardControlPlane()}${renderDashboardBotSimulator()}</body>`);
   res.type("html").send(enhanced);
 };
 app.get("/", serveDashboard);
