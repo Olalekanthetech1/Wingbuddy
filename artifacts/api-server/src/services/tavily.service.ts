@@ -131,11 +131,15 @@ export class TavilyService {
         if (response.ok) return data;
         const message = String(data?.detail || data?.error || `Tavily request failed with HTTP ${response.status}.`);
         const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
-        if (!retryable || attempt === MAX_RETRIES) throw new Error(message);
+        if (!retryable || attempt === MAX_RETRIES) {
+          const error = new Error(message);
+          (error as Error & { retryable?: boolean }).retryable = retryable;
+          throw error;
+        }
         lastError = new Error(message);
       } catch (error) {
         lastError = error;
-        if (attempt === MAX_RETRIES) break;
+        if ((error as Error & { retryable?: boolean })?.retryable === false || attempt === MAX_RETRIES) break;
       } finally { clearTimeout(timer); }
       await new Promise((resolve) => setTimeout(resolve, 300 * 2 ** attempt));
     }
