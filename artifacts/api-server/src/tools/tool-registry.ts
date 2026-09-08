@@ -1,12 +1,17 @@
 export interface ToolContext {
   telegramUserId: number;
   chatId: number;
+  conversationId?: number;
+  idempotencyKey?: string;
+  signal?: AbortSignal;
 }
 
 export interface ToolSecurityPolicy {
   sideEffect: boolean;
   destructive: boolean;
   confirmationRequired: boolean;
+  /** True only when the tool can safely be repeated with the same logical operation. */
+  idempotent: boolean;
   requiredCapabilities: string[];
   timeoutMs: number;
 }
@@ -15,6 +20,7 @@ export const DEFAULT_TOOL_POLICY: ToolSecurityPolicy = {
   sideEffect: false,
   destructive: false,
   confirmationRequired: false,
+  idempotent: true,
   requiredCapabilities: [],
   timeoutMs: 30000,
 };
