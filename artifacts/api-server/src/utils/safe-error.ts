@@ -23,12 +23,14 @@ export interface SafeErrorMetadata {
   status?: number | string;
   code?: number | string;
   apiStatus?: string;
+  stack?: string;
   cause?: {
     name: string;
     message: string;
     status?: number | string;
     code?: number | string;
     apiStatus?: string;
+    stack?: string;
   };
 }
 
@@ -46,12 +48,16 @@ function oneLevel(value: unknown): SafeErrorMetadata | undefined {
     parsed = undefined;
   }
   const apiError = parsed?.error;
+  const rawStack = (value as { stack?: unknown }).stack;
   const metadata: SafeErrorMetadata = {
     name: typeof value.name === "string" ? value.name : "Error",
     message: redact(
       typeof apiError?.message === "string" ? apiError.message : rawMessage,
     ).slice(0, 500),
   };
+  if (typeof rawStack === "string") {
+    metadata.stack = redact(rawStack).slice(0, 500);
+  }
   const status = value.status ?? apiError?.code;
   const code = value.code ?? apiError?.code;
   const apiStatus = apiError?.status;

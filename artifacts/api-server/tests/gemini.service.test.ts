@@ -86,4 +86,76 @@ describe("GeminiService", () => {
     );
     expect(generateContent).toHaveBeenCalledTimes(1);
   });
+
+  it("applies googleSearch tool and appends web citations when search is enabled", async () => {
+    const generateContent = vi.fn().mockResolvedValue({
+      text: "Google I/O 2026 introduced new Gemini 3 models.",
+      candidates: [
+        {
+          groundingMetadata: {
+            groundingChunks: [
+              { web: { uri: "https://blog.google/io", title: "Google I/O Keynote" } },
+            ],
+          },
+        },
+      ],
+    });
+    const service = new GeminiService("secret", "gemini-3.8-flash", 1000, "Be precise", {
+      models: { generateContent },
+    });
+
+    const reply = await service.generateReply([], "What happened at Google I/O today?", undefined, {
+      enableSearch: true,
+    });
+
+    expect(reply).toContain("Google I/O 2026 introduced new Gemini 3 models.");
+    expect(reply).toContain("🔍 Sources:");
+    expect(reply).toContain("Google I/O Keynote: https://blog.google/io");
+    expect(generateContent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          tools: [{ googleSearch: {} }],
+        }),
+      }),
+    );
+  });
+
+  it("configures thinkingConfig when thinkingLevel is passed", async () => {
+    const generateContent = vi.fn().mockResolvedValue({ text: "Self-corrected mathematical proof." });
+    const service = new GeminiService("secret", "gemini-3.8-flash", 1000, "Be precise", {
+      models: { generateContent },
+    });
+
+    const reply = await service.generateReply([], "Prove that sqrt(2) is irrational", undefined, {
+      thinkingLevel: "LOW",
+    });
+
+    expect(reply).toBe("Self-corrected mathematical proof.");
+    expect(generateContent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          thinkingConfig: { thinkingLevel: "LOW" },
+        }),
+      }),
+    );
+  });
+
+  it("embeds text using gemini-embedding-2-preview", async () => {
+    const embedContent = vi.fn().mockResolvedValue({
+      embedding: { values: [0.1, 0.2, 0.3] },
+    });
+    const service = new GeminiService("secret", "gemini-3.8-flash", 1000, "Be precise", {
+      models: {
+        generateContent: vi.fn(),
+        embedContent,
+      },
+    });
+
+    const embedding = await service.embedText("Recall database architecture");
+    expect(embedding).toEqual([0.1, 0.2, 0.3]);
+    expect(embedContent).toHaveBeenCalledWith({
+      model: "gemini-embedding-2-preview",
+      contents: "Recall database architecture",
+    });
+  });
 });

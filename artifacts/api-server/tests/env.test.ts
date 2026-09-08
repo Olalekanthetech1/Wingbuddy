@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { getConfig } from "../src/config/env";
+import { DEFAULT_MODEL, getConfig } from "../src/config/env";
 
 describe("environment validation", () => {
   beforeEach(() => {
@@ -10,8 +10,13 @@ describe("environment validation", () => {
     delete process.env.GEMINI_MODEL;
   });
 
-  it("uses the current Gemini flash default when no model is configured", () => {
-    expect(getConfig().geminiModel).toBe("gemini-3.6-flash");
+  it("uses the dynamic default when no model is configured", () => {
+    expect(getConfig().geminiModel).toBe(DEFAULT_MODEL);
+  });
+
+  it("dynamically resolves custom GEMINI_MODEL when configured", () => {
+    process.env.GEMINI_MODEL = "gemini-2.5-flash";
+    expect(getConfig().geminiModel).toBe("gemini-2.5-flash");
   });
 
   it("requires the bot token", () => {

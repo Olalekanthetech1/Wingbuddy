@@ -21,24 +21,30 @@ model User {
 
   // Relationships
   conversations  Conversation[]
+  memories       UserMemory[]
+  reminders      Reminder[]
 
   @@map("users")
 }
 
-/// Active chat sessions per user and Telegram chat
+/// Chat sessions per user and Telegram chat
 model Conversation {
-  id             Int       @id @default(autoincrement())
-  telegramUserId BigInt    @map("telegram_user_id")
-  chatId         BigInt    @map("chat_id")
-  createdAt      DateTime  @default(now()) @map("created_at")
-  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at")
+  id             Int          @id @default(autoincrement())
+  telegramUserId BigInt       @map("telegram_user_id")
+  chatId         BigInt       @map("chat_id")
+  title          String?
+  summary        String?      @db.Text
+  isActive       Boolean      @default(true) @map("is_active")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @default(now()) @updatedAt @map("updated_at")
 
   // Relationships
-  user           User?     @relation(fields: [telegramUserId], references: [telegramUserId], onDelete: Cascade)
+  user           User?        @relation(fields: [telegramUserId], references: [telegramUserId], onDelete: Cascade)
   messages       Message[]
 
   @@unique([telegramUserId, chatId], map: "conversations_user_chat_idx")
   @@index([chatId], map: "conversations_chat_id_idx")
+  @@index([telegramUserId, isActive], map: "conversations_user_active_idx")
   @@map("conversations")
 }
 
@@ -48,6 +54,7 @@ model Message {
   conversationId Int          @map("conversation_id")
   role           String
   content        String       @db.Text
+  tokenCount     Int?         @map("token_count")
   createdAt      DateTime     @default(now()) @map("created_at")
 
   // Relationships
@@ -56,3 +63,44 @@ model Message {
   @@index([conversationId, createdAt], map: "messages_conversation_created_idx")
   @@map("messages")
 }
+
+/// Long-term persistent memory for user preferences, facts, and profile knowledge
+model UserMemory {
+  id             Int          @id @default(autoincrement())
+  telegramUserId BigInt       @map("telegram_user_id")
+  key            String       @db.VarChar(128)
+  content        String       @db.Text
+  category       String       @default("general") @db.VarChar(64)
+  embeddingJson  String?      @map("embedding_json") @db.Text
+  sourceSessionId Int?        @map("source_session_id")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @default(now()) @updatedAt @map("updated_at")
+
+  // Relationships
+  user           User?        @relation(fields: [telegramUserId], references: [telegramUserId], onDelete: Cascade)
+
+  @@unique([telegramUserId, key], map: "user_memories_user_key_idx")
+  @@index([telegramUserId, category], map: "user_memories_user_category_idx")
+  @@map("user_memories")
+}
+
+/// Scheduled proactive reminders with recurring checks and natural language parsing
+model Reminder {
+  id             Int          @id @default(autoincrement())
+  telegramUserId BigInt       @map("telegram_user_id")
+  chatId         BigInt       @map("chat_id")
+  prompt         String       @db.Text
+  dueAt          DateTime     @map("due_at")
+  isCompleted    Boolean      @default(false) @map("is_completed")
+  snoozeCount    Int          @default(0) @map("snooze_count")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @default(now()) @updatedAt @map("updated_at")
+
+  // Relationships
+  user           User?        @relation(fields: [telegramUserId], references: [telegramUserId], onDelete: Cascade)
+
+  @@index([telegramUserId, isCompleted], map: "reminders_user_completed_idx")
+  @@index([dueAt, isCompleted], map: "reminders_due_completed_idx")
+  @@map("reminders")
+}
+

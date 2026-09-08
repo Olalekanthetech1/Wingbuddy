@@ -1,10 +1,12 @@
 import { and, desc, eq } from "drizzle-orm";
-import { db } from "@workspace/db";
 import {
+  chatDatabaseService,
   conversationsTable,
+  db,
   messagesTable,
   usersTable,
   type Message,
+  type UserMemoryRecord,
 } from "@workspace/db";
 import { isPersonalityKey, type PersonalityKey } from "../config/personality";
 import { isModeKey, type ModeKey } from "../config/mode";
@@ -83,6 +85,7 @@ export class ConversationService {
       .update(usersTable)
       .set({ personality, updatedAt: new Date() })
       .where(eq(usersTable.telegramUserId, telegramUserId));
+    chatDatabaseService.invalidateUserCache(telegramUserId);
   }
 
   async getUserMode(telegramUserId: number): Promise<ModeKey> {
@@ -100,6 +103,7 @@ export class ConversationService {
       .update(usersTable)
       .set({ mode, updatedAt: new Date() })
       .where(eq(usersTable.telegramUserId, telegramUserId));
+    chatDatabaseService.invalidateUserCache(telegramUserId);
   }
 
   private async getConversationId(telegramUserId: number, chatId: number): Promise<number> {
@@ -151,6 +155,92 @@ export class ConversationService {
     await db.delete(messagesTable).where(eq(messagesTable.conversationId, conversationId));
     await db
       .delete(conversationsTable)
+      .where(eq(conversationsTable.id, conversationId));
+  }
+
+  // ==========================================
+  // LONG-TERM USER MEMORY OPERATIONS
+  // ==========================================
+
+  async getUserMemories(telegramUserId: number): Promise<UserMemoryRecord[]> {
+    return chatDatabaseService.getUserMemories(telegramUserId);
+  }
+
+  async saveUserMemory(
+    telegramUserId: number,
+    key: string,
+    content: string,
+    category = "general",
+    embedding?: number[],
+  ): Promise<UserMemoryRecord> {
+    return chatDatabaseService.saveMemory({
+      telegramUserId,
+      key,
+      content,
+      category,
+      embedding,
+    });
+  }
+
+  async searchSimilarMemories(
+    telegramUserId: number,
+    queryVector: number[],
+    limit = 5,
+    minSimilarity = 0.45,
+  ): Promise<UserMemoryRecord[]> {
+    return chatDatabaseService.searchSimilarMemories(
+      telegramUserId,
+      queryVector,
+      limit,
+      minSimilarity,
+    );
+  }
+
+  async deleteUserMemory(telegramUserId: number, key: string): Promise<boolean> {
+    return chatDatabaseService.deleteMemory(telegramUserId, key);
+  }
+
+  async clearUserMemories(telegramUserId: number): Promise<number> {
+    return chatDatabaseService.clearUserMemories(telegramUserId);
+  }
+
+  formatMemoriesForPrompt(memories: UserMemoryRecord[]): string {
+    return chatDatabaseService.formatMemoriesForPrompt(memories);
+  }
+
+  async getUserWithFullContext(telegramUserId: number) {
+    return chatDatabaseService.getUserWithFullContext(telegramUserId);
+  }
+
+  async purgeUserData(telegramUserId: number): Promise<boolean> {
+    return chatDatabaseService.deleteUserCompletely(telegramUserId);
+  }
+
+  // ==========================================
+  // EPISODIC SESSION SUMMARY OPERATIONS
+  // ==========================================
+
+  async getRecentSessionSummary(
+    telegramUserId: number,
+    chatId: number,
+  ): Promise<string | null> {
+    const session = await db
+      .select({ summary: conversationsTable.summary })
+      .from(conversationsTable)
+      .where(
+        and(
+          eq(conversationsTable.telegramUserId, telegramUserId),
+          eq(conversationsTable.chatId, chatId),
+        ),
+      )
+      .limit(1);
+    return session[0]?.summary ?? null;
+  }
+
+  async setSessionSummary(conversationId: number, summary: string): Promise<void> {
+    await db
+      .update(conversationsTable)
+      .set({ summary, updatedAt: new Date() })
       .where(eq(conversationsTable.id, conversationId));
   }
 

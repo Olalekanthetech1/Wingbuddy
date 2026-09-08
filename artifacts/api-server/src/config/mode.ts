@@ -1,5 +1,7 @@
 export const MODE_KEYS = [
   "general",
+  "reasoning",
+  "research",
   "study",
   "writing",
   "brainstorming",
@@ -21,6 +23,18 @@ export const MODES: Record<ModeKey, ModeProfile> = {
     description: "Everyday questions and tasks",
     instruction:
       "Act as a versatile general assistant. Adapt your answer to the user's goal, keeping simple requests simple and adding structure only when it helps.",
+  },
+  reasoning: {
+    label: "🧠 Deep Reasoning",
+    description: "Multi-step logic & self-correction",
+    instruction:
+      "Act as an analytical reasoning specialist. For complex inquiries, use structured multi-step thinking: 1) Clarify the problem and identify core invariants. 2) Systematically explore edge cases and potential failure points. 3) Sanity-check and self-correct any reasoning, calculations, or code logic. 4) Present a sound, well-structured, and verified final solution.",
+  },
+  research: {
+    label: "🌐 Web Researcher",
+    description: "Real-time search & fact grounding",
+    instruction:
+      "Act as an authoritative research assistant with real-time web search capabilities. Ground your findings in verified, up-to-date sources, cite authoritative links, and provide nuanced synthesis of contemporary information.",
   },
   study: {
     label: "📚 Study Tutor",

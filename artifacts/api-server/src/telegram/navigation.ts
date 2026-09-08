@@ -52,40 +52,147 @@ export function modeText(current: ModeKey): string {
   ].join("\n");
 }
 
+export interface MemoryViewItem {
+  id: number;
+  key: string;
+  content: string;
+  category: string;
+}
+
+export function formatMemoriesMenuText(memories: MemoryViewItem[]): string {
+  if (memories.length === 0) {
+    return [
+      "🧠 Long-Term Memory (Profile)",
+      "",
+      "You don't have any saved memories yet.",
+      "",
+      "How to teach me:",
+      "• Send /remember <fact> (e.g. /remember stack: TypeScript, PostgreSQL)",
+      "• Or naturally tell me about your preferences in chat (e.g. \"Remember that I prefer concise answers\")",
+      "",
+      "Stored memories are permanently remembered across all your sessions.",
+    ].join("\n");
+  }
+
+  const items = memories.map(
+    (m, i) => `${i + 1}. [${m.category}] *${m.key}*: ${m.content}`,
+  );
+
+  return [
+    `🧠 Long-Term Memory (${memories.length} saved)`,
+    "",
+    "These are the facts and preferences I've saved for you:",
+    "",
+    ...items,
+    "",
+    "To delete a memory, tap its delete button below or use /forget <key>.",
+    "To add new ones: /remember <key>: <content>",
+  ].join("\n");
+}
+
 export const MEMORY_TEXT = [
   "🧠 Memory",
   "",
-  "Conversation history is already saved separately for each Telegram user and chat.",
+  "Conversation history is saved separately for each Telegram user and chat.",
   "",
-  "Long-term personal memories—such as preferences you explicitly ask me to remember—are being prepared for a later phase. I won’t silently turn every message into a permanent memory.",
+  "Your personal preferences and learned facts are preserved across all your sessions.",
 ].join("\n");
 
 export const VOICE_TEXT = [
-  "🎙️ Voice",
+  "🎙️ Voice Notes & Audio Understanding",
   "",
-  "Voice message support is planned, but it isn’t enabled yet. You can still type naturally and use Telegram’s voice-to-text keyboard if available.",
+  "Native voice memo processing is fully active!",
+  "",
+  "• Simply hold the microphone button in Telegram and send any voice note.",
+  "• Gemini will listen, accurately transcribe accents & nuance, and reply with full context.",
+  "• You can also send voice notes alongside captions or instructions.",
 ].join("\n");
 
+export interface ReminderViewItem {
+  id: number;
+  prompt: string;
+  dueAt: Date;
+  snoozeCount: number;
+}
+
+export function formatRemindersMenuText(reminders: ReminderViewItem[]): string {
+  if (reminders.length === 0) {
+    return [
+      "⏰ Proactive Reminders",
+      "",
+      "You don't have any pending reminders scheduled.",
+      "",
+      "How to set a reminder:",
+      "• Send: /remind in 15 mins to check oven",
+      "• Send: /remind tomorrow at 9am review pull request",
+      "• Or just type naturally in chat: \"Remind me tonight at 8pm to call mom\"",
+      "",
+      "When the time arrives, I will proactively send you a notification with Done & Snooze buttons!",
+    ].join("\n");
+  }
+
+  const items = reminders.map((r, i) => {
+    const timeStr = r.dueAt.toLocaleString([], {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    const snoozeStr = r.snoozeCount > 0 ? ` (snoozed ${r.snoozeCount}x)` : "";
+    return `${i + 1}. 📌 *${r.prompt}*\n   🕒 Due: ${timeStr}${snoozeStr}`;
+  });
+
+  return [
+    `⏰ Active Scheduled Reminders (${reminders.length})`,
+    "",
+    ...items,
+    "",
+    "To cancel a reminder, tap its cancel button below or use /reminders.",
+  ].join("\n");
+}
+
 export const REMINDERS_TEXT = [
-  "⏰ Reminders",
+  "⏰ Proactive Reminders",
   "",
-  "Reminders are planned for a later phase. Once enabled, you’ll be able to describe a reminder naturally and confirm it before it is scheduled.",
+  "Natural language scheduling is active! Tell me when and what to remind you about.",
+  "",
+  "Examples:",
+  "• \"Remind me in 30 minutes to stretch\"",
+  "• \"Remind me tomorrow at 8am to take vitamins\"",
+  "• \"/remind in 2 hours check deployment pipeline\"",
 ].join("\n");
+
 
 export const HELP_TEXT = [
   "❓ Help",
   "",
-  "Chat naturally by sending any text message—no Chat button is required.",
+  "Chat naturally by sending any text message—no Chat button or command is required.",
+  "",
+  "Smart features enabled:",
+  "• 🎨 High-Res Image Generation: Hugging Face FLUX.1 & Free Community art generation with Gemini Flash enhancement",
+  "• 🎬 Hybrid Video Generation: Hugging Face & Free Community video generation with cinematic camera enhancement",
+  "• 🌐 Real-Time Web Grounding: Automatic Google Search for up-to-date facts, news, and citations",
+  "• 🧠 Multi-Step Reasoning: Deep thinking mode with self-correction for logic, code, & math",
+  "• 🧬 Semantic Vector Memory: Dense embedding & hybrid RAG recall across your entire chat history",
+  "",
+  "⚡ Dynamic Adaptation:",
+  "You do NOT need to switch modes manually! The assistant automatically detects whether you need video generation, image generation, live web search, deep multi-step thinking, code generation, or casual chat on every message.",
   "",
   "Available shortcuts:",
   "/start — open the main menu",
-  "/help — show this help",
+  "/image <prompt> — generate free high-res art with Gemini enhancement",
+  "/video <prompt> — generate animated/cinematic video clip",
+  "/search <query> — explicitly force live web search",
+  "/think <problem> — explicitly trigger deep reasoning",
+  "/memories — view your long-term memories",
+  "/remember <fact> — save a preference or fact",
+  "/forget <key> — delete a remembered fact",
   "/clear — remove conversation messages",
   "/reset — start a completely fresh session",
   "/personality — choose how I sound",
+  "/mode — optional mode override (Deep Reasoning, Web Researcher, etc.)",
   "/status — show bot and conversation status",
   "",
-  "Personality controls communication style. Assistant modes change how I approach the task.",
-  "Conversation history is persistent and isolated by Telegram user and chat.",
-  "Long-term memory, voice, reminders, and external tools are not enabled yet.",
+  "Personality controls communication style. Assistant modes adapt dynamically to your intent.",
+  "Conversation history and long-term memories are persistent in PostgreSQL and isolated by user.",
 ].join("\n");

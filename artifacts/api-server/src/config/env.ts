@@ -1,8 +1,8 @@
-const DEFAULT_MODEL = "gemini-3.6-flash";
-const DEFAULT_MAX_HISTORY_MESSAGES = 20;
-const DEFAULT_RATE_LIMIT_MAX_REQUESTS = 6;
-const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
-const DEFAULT_GEMINI_TIMEOUT_MS = 45_000;
+export const DEFAULT_MODEL = process.env.GEMINI_DEFAULT_MODEL?.trim() || "gemini-3.6-flash";
+export const DEFAULT_MAX_HISTORY_MESSAGES = 20;
+export const DEFAULT_RATE_LIMIT_MAX_REQUESTS = 6;
+export const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
+export const DEFAULT_GEMINI_TIMEOUT_MS = 45_000;
 
 export interface AppConfig {
   telegramBotToken: string;

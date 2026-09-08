@@ -63,6 +63,34 @@ export function helpKeyboard(): InlineKeyboard {
     .text("◀️ Back", "menu:main");
 }
 
+export function memoriesKeyboard(
+  memories: Array<{ id: number; key: string }>,
+): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+  const displayMemories = memories.slice(0, 6);
+  for (const memory of displayMemories) {
+    const label = `🗑️ ${memory.key.length > 18 ? memory.key.slice(0, 15) + "..." : memory.key}`;
+    keyboard.text(label, `memory:delete:${memory.key}`).row();
+  }
+  if (memories.length > 0) {
+    keyboard.text("🧹 Clear All Memories", "memory:clear_all").row();
+  }
+  return keyboard.text("◀️ Back", "menu:main");
+}
+
+export function remindersKeyboard(
+  reminders: Array<{ id: number; prompt: string }>,
+): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+  const displayReminders = reminders.slice(0, 5);
+  for (const reminder of displayReminders) {
+    const label = `❌ Cancel: ${reminder.prompt.length > 18 ? reminder.prompt.slice(0, 15) + "..." : reminder.prompt}`;
+    keyboard.text(label, `rem_cancel:${reminder.id}`).row();
+  }
+  return keyboard.text("◀️ Back", "menu:main");
+}
+
+
 export function feedbackKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
     .text("👍 Helpful", "feedback:helpful")

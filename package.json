@@ -9,11 +9,18 @@
   ],
   "scripts": {
     "dev": "npm run dev --workspace=@workspace/api-server",
-    "build": "tsc --build && npm run build --workspace=@workspace/api-server",
+    "postinstall": "npm run prisma:generate",
+    "build": "npm run prisma:generate && tsc --build && npm run build --workspace=@workspace/api-server",
+    "start": "node --enable-source-maps artifacts/api-server/dist/index.mjs",
     "lint": "tsc --build",
     "typecheck:libs": "tsc --build",
     "typecheck": "tsc --build && npm run typecheck --workspace=@workspace/api-server",
-    "test": "npm run test --workspace=@workspace/api-server"
+    "test": "npm run test --workspace=@workspace/api-server",
+    "prisma:generate": "prisma generate --schema=./lib/db/schema.prisma",
+    "prisma:studio": "prisma studio --schema=./lib/db/schema.prisma",
+    "prisma:seed": "node ./lib/db/prisma/seed.ts",
+    "db:seed": "node ./lib/db/prisma/seed.ts",
+    "db:studio": "prisma studio --schema=./lib/db/schema.prisma"
   },
   "private": true,
   "dependencies": {
