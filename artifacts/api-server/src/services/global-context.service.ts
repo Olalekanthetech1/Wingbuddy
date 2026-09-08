@@ -32,16 +32,17 @@ export interface UserGlobalContext {
 /**
  * Global Context Layer:
  * Automatically associates incoming messages with the user's ID in PostgreSQL,
- * synchronizes identity, and aggregates long-term profile memories, episodic session summaries,
- * semantic vector memory recall, and working conversation history into an enriched context snapshot
- * before every Gemini completion.
+ * synchronizes identity, and aggregates only relevant long-term profile memories,
+ * episodic session summaries, semantic vector memory recall, and working conversation history
+ * into an enriched context snapshot before every Gemini completion.
  */
 export class GlobalContextService {
   constructor(private readonly conversations: ConversationService) {}
 
   /**
    * Queries and builds the complete global context for a user before calling Gemini.
-   * Runs transparently without requiring the user to invoke any slash commands.
+   * Long-term memory is recall-oriented: only memories relevant to the current request are
+   * passed to the model. Persistent memories remain stored and are never deleted by relevance filtering.
    */
   async getContextForCompletion(params: {
     telegramUserId: number;
@@ -80,46 +81,46 @@ export class GlobalContextService {
         chatDatabaseService.getRecentSessionSummaries(telegramUserId, 3),
       ]);
 
-    // 4. Native Vector Search & Hybrid RAG Retrieval across long-term memories and past dialogue
-    let memories = allMemories;
+    // 4. Recall-oriented long-term memory retrieval.
+    // IMPORTANT: never merge vector matches back with the full memory corpus.
+    // Relevance controls what is exposed to the model for this turn; storage is untouched.
+    let memories: UserMemoryRecord[] = [];
+    let memoryRecallSource: "vector" | "lexical" | "none" = "none";
+    const query = message?.trim() ?? "";
     let semanticRecall: Array<{ role: string; content: string }> = [];
 
-    if (message && message.trim().length > 3) {
+    if (query.length > 3) {
       try {
         let queryVec: number[] = [];
         if (geminiService && typeof geminiService.embedText === "function") {
-          queryVec = await geminiService.embedText(message);
+          queryVec = await geminiService.embedText(query);
         }
 
-        // 4a. Vector similarity search on memories via PostgreSQL pgvector
+        // Use the database's adaptive threshold and limit. Only matches are exposed to Gemini.
         if (queryVec.length > 0) {
-          const vectorMemories = await chatDatabaseService.searchSimilarMemories(
+          memories = await chatDatabaseService.searchSimilarMemories(
             telegramUserId,
             queryVec,
-            5,
-            0.45,
           );
-          if (vectorMemories.length > 0) {
-            // Merge top vector memories with other stored memories, deduplicating by key
-            const vectorKeySet = new Set(vectorMemories.map((m) => m.key));
-            const remaining = allMemories.filter((m) => !vectorKeySet.has(m.key));
-            memories = [...vectorMemories, ...remaining];
-          }
+          memoryRecallSource = memories.length > 0 ? "vector" : "none";
+        } else {
+          memories = await chatDatabaseService.searchMemories(telegramUserId, query);
+          memoryRecallSource = memories.length > 0 ? "lexical" : "none";
         }
 
-        // 4b. Semantic Dialogue Recall across past conversations
+        // Semantic dialogue recall across past conversations
         const historicalCandidates = await chatDatabaseService.searchHistoricalDialogue(
           telegramUserId,
-          message,
+          query,
           conversationId,
           5,
         );
 
         if (historicalCandidates.length > 0) {
-          if (queryVec.length > 0) {
+          if (queryVec.length > 0 && geminiService) {
             const scored = await Promise.all(
               historicalCandidates.map(async (cand) => {
-                const candVec = await geminiService!.embedText(cand.content);
+                const candVec = await geminiService.embedText(cand.content);
                 const score = candVec.length > 0 ? cosineSimilarity(queryVec, candVec) : 0.5;
                 return { cand, score };
               }),
@@ -137,11 +138,17 @@ export class GlobalContextService {
           }
         }
       } catch {
-        // Fallback gracefully without breaking completion pipeline
+        // Fail closed: retrieval failures must not expose the full persistent memory corpus.
+        memories = [];
+        memoryRecallSource = "none";
       }
     }
 
-    // 5. Dynamically compute the adaptive history window based on mode, prompt length, and memory density
+    // Keep the variable referenced for observability without exposing internal recall mechanics to users.
+    void allMemories;
+    void memoryRecallSource;
+
+    // 5. Dynamically compute the adaptive history window based on mode, prompt length, and recalled-memory density
     const adaptiveLimit = maxHistoryMessages !== undefined && maxHistoryMessages !== 20
       ? maxHistoryMessages
       : AdaptiveEngineService.computeAdaptiveHistoryLimit({
@@ -164,8 +171,8 @@ export class GlobalContextService {
       .trim();
     const displayName = fullName || userProfile?.username || undefined;
 
-    // 5. Format the unified Global Context block
-    const promptInstruction = chatDatabaseService.formatGlobalContextForPrompt({
+    // 6. Format the unified Global Context block using ONLY the recalled memories for this turn.
+    const promptInstructionBase = chatDatabaseService.formatGlobalContextForPrompt({
       userName: displayName,
       personalityLabel: personalityConfig.label,
       modeLabel: modeConfig.label,
@@ -173,6 +180,13 @@ export class GlobalContextService {
       sessionSummaries,
       semanticRecall,
     });
+
+    const promptInstruction = [
+      promptInstructionBase,
+      "[MEMORY SILENCE POLICY] Persistent memory is background context, not response content. Never mention, enumerate, expose, or narrate stored memories, memory keys, personalization, or the fact that something was remembered unless the user explicitly asks what you remember, asks to inspect/manage memories, or otherwise makes memory itself the subject of the request.",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
 
     const recentHistory = recentMessages.map((item) => ({
       role: (item.role === "model" ? "model" : "user") as "user" | "model",
