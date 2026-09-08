@@ -41,8 +41,42 @@ export class ContextManagerService {
   }
 
   /**
+   * Resolves long-term memory for the current turn without ever falling back to the full corpus.
+   * Callers may provide pre-filtered memories from GlobalContextService; otherwise this layer
+   * performs the same adaptive vector/lexical retrieval locally.
+   */
+  private async resolveRelevantMemories(
+    telegramUserId: number,
+    userMessage: string,
+    provided?: UserMemoryRecord[],
+  ): Promise<UserMemoryRecord[]> {
+    if (provided !== undefined) return provided;
+
+    const query = userMessage.trim();
+    if (query.length <= 3) return [];
+
+    try {
+      const queryVec = await this.getGemini().embedText(query);
+      if (queryVec.length > 0) {
+        return await chatDatabaseService.searchSimilarMemories(
+          telegramUserId,
+          queryVec,
+        );
+      }
+
+      return await chatDatabaseService.searchMemories(telegramUserId, query);
+    } catch (error) {
+      logger.debug?.(
+        { telegramUserId, error: error instanceof Error ? error.message : String(error) },
+        "Relevant memory retrieval unavailable; continuing without long-term memory for this turn",
+      );
+      return [];
+    }
+  }
+
+  /**
    * Assembles a complete, budgeted, context-aware prompt payload for Gemini using dynamic instruction precedence and semantic conversation state.
-   * Long-term memories must be pre-filtered by the Global Context layer; this service never reloads the full memory corpus.
+   * Long-term memory is relevance-gated and remains silent unless memory itself is the user's topic.
    */
   async assembleContext(options: {
     telegramUserId: number | bigint;
@@ -58,9 +92,12 @@ export class ContextManagerService {
     const telegramUserId = Number(options.telegramUserId);
     const maxBudget = options.maxCharBudget ?? ContextManagerService.DEFAULT_MAX_CHAR_BUDGET;
 
-    // Relevance is decided upstream by GlobalContextService. An omitted list means
-    // "no long-term memory for this turn", never "load all memories".
-    const memories = options.relevantMemories ?? [];
+    // Relevance is decided upstream when supplied. If omitted, retrieve only semantic/lexical matches.
+    const memories = await this.resolveRelevantMemories(
+      telegramUserId,
+      options.userMessage,
+      options.relevantMemories,
+    );
     const formattedMemories = memories.length > 0
       ? `\n\n[RELEVANT LONG-TERM MEMORY]\n${memories
           .map((m) => `- ${m.content}`)
@@ -179,9 +216,9 @@ export class ContextManagerService {
         tokenCountEstimate,
         isTruncated,
         historyLength: rawHistory.length,
+        relevantMemoryCount: memories.length,
         appliedPreferencesCount: resolution.appliedPreferences.length,
         suppressedCount: resolution.suppressedInstructions.length,
-        relevantMemoryCount: memories.length,
         continuityFollowUp: continuity.isFollowUp,
         continuityConfidence: continuity.confidence,
         continuityReferenceType: continuity.referenceType,
