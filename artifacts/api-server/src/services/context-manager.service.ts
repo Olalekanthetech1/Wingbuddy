@@ -5,6 +5,8 @@ import {
   conversationIntelligenceService,
   type ConversationSemanticState,
 } from "./conversation-intelligence.service";
+import { GeminiService } from "../gemini/gemini.service";
+import { getConfig } from "../config/env";
 import { chatDatabaseService, type AgentTaskRecord, type AgentTaskStepRecord } from "@workspace/db";
 import { logger } from "../lib/logger";
 
@@ -20,9 +22,22 @@ export interface AssembledContext {
 
 export class ContextManagerService {
   private static readonly DEFAULT_MAX_CHAR_BUDGET = 120_000; // ~30k tokens
+  private gemini?: GeminiService;
+
+  private getGemini(): GeminiService {
+    if (!this.gemini) {
+      const config = getConfig();
+      this.gemini = new GeminiService(
+        config.geminiApiKey,
+        config.geminiModel,
+        config.geminiTimeoutMs,
+      );
+    }
+    return this.gemini;
+  }
 
   /**
-   * Assembles a complete, budgeted, context-aware prompt payload for Gemini using dynamic instruction precedence resolution.
+   * Assembles a complete, budgeted, context-aware prompt payload for Gemini using dynamic instruction precedence and semantic conversation state.
    */
   async assembleContext(options: {
     telegramUserId: number | bigint;
@@ -67,10 +82,31 @@ export class ContextManagerService {
     let rawHistory = options.history || [];
     let isTruncated = false;
 
+    let semanticState = options.semanticState || null;
+    if (!semanticState && rawHistory.length > 0 && options.userMessage.trim()) {
+      try {
+        semanticState = await conversationIntelligenceService.analyzeSemanticState(
+          options.userMessage,
+          rawHistory,
+          async (history, analysisPrompt) =>
+            this.getGemini().generateReply(
+              history,
+              analysisPrompt,
+              "Act as the conversation-state interpreter. Return the exact JSON requested by the user prompt. Do not answer the underlying user request.",
+            ),
+        );
+      } catch (error) {
+        logger.debug?.(
+          { telegramUserId, error: error instanceof Error ? error.message : String(error) },
+          "Semantic conversation analysis fell back to deterministic continuity state",
+        );
+      }
+    }
+
     const continuity = conversationIntelligenceService.resolve(options.userMessage, rawHistory);
     const continuityInstruction = conversationIntelligenceService.buildContextInstruction(continuity);
-    const semanticInstruction = options.semanticState
-      ? conversationIntelligenceService.buildSemanticContextInstruction(options.semanticState)
+    const semanticInstruction = semanticState
+      ? conversationIntelligenceService.buildSemanticContextInstruction(semanticState)
       : "";
 
     const calculateLength = (hist: Array<{ role: string; content: string }>, sysPromptLength: number) => {
@@ -106,7 +142,7 @@ export class ContextManagerService {
 
     // Continuity targets must survive history pruning. If a follow-up is detected,
     // preserve a bounded recent window containing the target before trimming.
-    if (continuity.isFollowUp && continuity.confidence === "high" && rawHistory.length > 0) {
+    if ((continuity.isFollowUp || semanticState?.isFollowUp) && rawHistory.length > 0) {
       const recentWindow = rawHistory.slice(-6);
       if (recentWindow.length < rawHistory.length) {
         rawHistory = recentWindow;
@@ -128,10 +164,10 @@ export class ContextManagerService {
         continuityFollowUp: continuity.isFollowUp,
         continuityConfidence: continuity.confidence,
         continuityReferenceType: continuity.referenceType,
-        semanticFollowUp: options.semanticState?.isFollowUp ?? false,
-        semanticOperation: options.semanticState?.operation,
-        semanticConfidence: options.semanticState?.confidence,
-        semanticUnresolvedReference: Boolean(options.semanticState?.unresolvedReference),
+        semanticFollowUp: semanticState?.isFollowUp ?? false,
+        semanticOperation: semanticState?.operation,
+        semanticConfidence: semanticState?.confidence,
+        semanticUnresolvedReference: Boolean(semanticState?.unresolvedReference),
       },
       "CONTEXT_ASSEMBLED_WITH_PRECEDENCE",
     );
