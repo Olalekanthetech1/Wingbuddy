@@ -207,7 +207,7 @@ export function createTelegramBot(): TelegramBotRuntime {
     await conversations.purgeUserData(ctx.from.id);
     rateLimiter.clear(ctx.from.id);
     await ctx.reply(
-      "🔒 <b>All personal data purged.</b>\n\nYour user profile, conversations, messages, long-term memories, and active reminders have been completely removed from the database in compliance with GDPR cascading deletion.",
+      "🔒 <b>All personal data purged.</b>\n\nYour user profile, conversations, long-term memories, and active reminders have been completely removed from the database in compliance with GDPR cascading deletion.",
       { parse_mode: "HTML", reply_markup: mainMenuKeyboard() },
     );
   });
@@ -596,7 +596,7 @@ export function createTelegramBot(): TelegramBotRuntime {
     }
 
     if (!await rateLimiter.consumeAsync(ctx.from.id)) {
-      await ctx.reply("You’re sending requests a little too quickly. Please wait a moment and try again.");
+      await ctx.reply("You’re sending messages a little too quickly. Please wait a moment and try again.");
       return;
     }
 
@@ -1321,7 +1321,7 @@ export function createTelegramBot(): TelegramBotRuntime {
           const safeCaption = caption.length > 1000 ? caption.slice(0, 995) + "..." : caption;
 
           if (!Buffer.isBuffer(imageResult.buffer) || imageResult.buffer.length < 500) {
-            throw new Error("Natural image generation did not produce a valid buffer");
+            throw new Error("Natural image generation did not produce a valid image buffer");
           }
 
           await ctx.replyWithPhoto(
@@ -1352,22 +1352,13 @@ export function createTelegramBot(): TelegramBotRuntime {
         history: globalContextData.recentHistory,
       });
 
-      // 5a. Check Autonomous Execution Engine Pipeline
+      // 5a. Autonomous Execution Engine is only eligible for an explicit/active task.
+      // Normal conversational requests must never be promoted to a task merely because
+      // they are long or contain incidental words such as “research”, “step”, or “plan”.
       const execConfig = getExecutionConfig();
       if (!media && execConfig.enabled) {
         try {
           let taskId = activeTaskContext?.task?.id;
-          if (!taskId && (currentPrompt.length > 15 || /calculate|compute|math|search|find|summarize|plan|step|task|research/i.test(currentPrompt))) {
-            const taskTitle = currentPrompt.slice(0, 40).replace(/[\r\n]+/g, " ");
-            const created = await taskService.createTask({
-              telegramUserId: ctx.from.id,
-              conversationId: globalContextData.conversationId,
-              title: taskTitle,
-              goal: currentPrompt,
-            });
-            taskId = created.task.id;
-            activeTaskContext = created;
-          }
 
           const planResult = await agentPlannerService.planAndCompile({
             telegramUserId: ctx.from.id,
@@ -1380,12 +1371,15 @@ export function createTelegramBot(): TelegramBotRuntime {
             },
           });
 
+          // A direct response is intentionally handled by the normal conversational
+          // streaming path. Only a validated non-direct graph may enter autonomous execution.
           if (planResult.success && planResult.graph && !planResult.isDirectResponse) {
             logger.info(
               {
                 graphId: planResult.graph.graphId,
                 nodesCount: planResult.graph.nodes.length,
                 telegramUserId: ctx.from.id,
+                hasExplicitOrActiveTask: Boolean(taskId),
               },
               "TELEGRAM_AUTONOMOUS_EXECUTION_DISPATCHED",
             );
