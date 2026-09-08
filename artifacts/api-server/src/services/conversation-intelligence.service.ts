@@ -17,12 +17,11 @@ export interface ConversationReferenceResolution {
 }
 
 /**
- * Lightweight, deterministic conversation-intelligence layer.
+ * Lightweight conversation-continuity layer.
  *
- * This layer does not replace LLM reasoning and never decides safety-critical
- * execution policy. Its job is to preserve conversational continuity by
- * identifying contextual follow-ups and giving the response model an
- * explicit, bounded grounding target.
+ * This service does not make safety-critical execution decisions. It only
+ * identifies when the current turn depends on recent conversational context
+ * and supplies a bounded grounding target to the response context.
  */
 export class ConversationIntelligenceService {
   private static readonly FOLLOW_UP_PATTERNS: RegExp[] = [
@@ -33,7 +32,7 @@ export class ConversationIntelligenceService {
     /\b(as you said|like you said|what you said|you mentioned|you just said|you just told me|above)\b/i,
   ];
 
-  static resolve(
+  resolve(
     userMessage: string,
     history: ConversationTurn[] = [],
   ): ConversationReferenceResolution {
@@ -47,13 +46,17 @@ export class ConversationIntelligenceService {
       };
     }
 
-    const isFollowUp = this.FOLLOW_UP_PATTERNS.some((pattern) => pattern.test(message));
+    const isFollowUp = ConversationIntelligenceService.FOLLOW_UP_PATTERNS.some((pattern) =>
+      pattern.test(message),
+    );
+
     if (!isFollowUp) {
       return {
         isFollowUp: false,
         confidence: "low",
         referenceType: "none",
-        guidance: "Treat the current request as a new turn unless ordinary conversational context clearly indicates continuity.",
+        guidance:
+          "Treat the current request as a new turn unless ordinary conversational context clearly indicates continuity.",
       };
     }
 
@@ -61,20 +64,29 @@ export class ConversationIntelligenceService {
       .filter((turn) => /^(assistant|model)$/i.test(turn.role) && turn.content?.trim())
       .slice(-6);
     const latestAssistant = assistantTurns.at(-1);
-    const latestUser = [...history]
-      .reverse()
-      .find((turn) => /^user$/i.test(turn.role) && turn.content?.trim());
+    const latestUser = [...history].reverse().find(
+      (turn) => /^user$/i.test(turn.role) && turn.content?.trim(),
+    );
 
     let referenceType: ConversationReferenceResolution["referenceType"] = "topic";
-    if (/\b(story|example|answer|explanation|point|part|section|lesson|takeaway|moral)\b/i.test(message)) {
+    if (
+      /\b(story|example|answer|explanation|point|part|section|lesson|takeaway|moral)\b/i.test(
+        message,
+      )
+    ) {
       referenceType = "artifact";
-    } else if (/\b(continue|keep going|go on|another one|do the same|shorten|simpler|elaborate)\b/i.test(message)) {
+    } else if (
+      /\b(continue|keep going|go on|another one|do the same|shorten|simpler|elaborate)\b/i.test(
+        message,
+      )
+    ) {
       referenceType = "continuation";
     } else if (/\b(you said|you mentioned|above|previous)\b/i.test(message)) {
       referenceType = "instruction";
     }
 
-    const targetExcerpt = latestAssistant?.content?.slice(-1800) || latestUser?.content?.slice(-800);
+    const targetExcerpt =
+      latestAssistant?.content?.slice(-1800) || latestUser?.content?.slice(-800);
 
     return {
       isFollowUp: true,
@@ -86,7 +98,7 @@ export class ConversationIntelligenceService {
     };
   }
 
-  static buildContextInstruction(
+  buildContextInstruction(
     resolution: ConversationReferenceResolution,
   ): string {
     if (!resolution.isFollowUp) return "";
