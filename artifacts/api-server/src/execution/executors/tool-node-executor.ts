@@ -1,6 +1,6 @@
 import type { INodeExecutor, NodeExecutionParams } from "./node-executor.interface";
-import type { NodeResult, ExecutionError } from "../../planner/types";
-import { ToolRegistry, type AssistantTool } from "../../tools/tool-registry";
+import type { NodeResult } from "../../planner/types";
+import { ToolRegistry } from "../../tools/tool-registry";
 import { executionPersistence } from "../persistence/execution-persistence.service";
 import { retryEngine } from "../resilience/retry-engine";
 
@@ -25,7 +25,6 @@ export class ToolNodeExecutor implements INodeExecutor {
       };
     }
 
-    // 1. Tool Registry Authoritative Resolution
     const tool = this.toolRegistry.get(toolName);
     if (!tool) {
       return {
@@ -42,11 +41,8 @@ export class ToolNodeExecutor implements INodeExecutor {
 
     const policy = this.toolRegistry.getPolicy(toolName);
 
-    // 2. Runtime Capability Re-verification
     const userCaps = new Set(executionContext.availableCapabilities || []);
-    const requiredCaps = policy.requiredCapabilities || [];
-    const missingCaps = requiredCaps.filter((cap) => !userCaps.has(cap));
-
+    const missingCaps = (policy.requiredCapabilities || []).filter((cap) => !userCaps.has(cap));
     if (missingCaps.length > 0) {
       return {
         success: false,
@@ -60,13 +56,8 @@ export class ToolNodeExecutor implements INodeExecutor {
       };
     }
 
-    // 3. Approval Verification for Destructive / Confirmation-required tools
     if (policy.destructive || policy.confirmationRequired || (node.approval && node.approval.status !== "not_required")) {
-      const storedApproval = await executionPersistence.getApproval(
-        graphId,
-        planRevision,
-        node.id,
-      );
+      const storedApproval = await executionPersistence.getApproval(graphId, planRevision, node.id);
 
       if (!storedApproval || storedApproval.status === "pending") {
         if (!storedApproval) {
@@ -77,7 +68,7 @@ export class ToolNodeExecutor implements INodeExecutor {
             planRevision,
             nodeId: node.id,
             status: "pending",
-            reason: node.approval?.reason || `User confirmation required for destructive tool: ${toolName}`,
+            reason: node.approval?.reason || `User confirmation required for tool: ${toolName}`,
             requestedAt: new Date().toISOString(),
           });
         }
@@ -120,7 +111,6 @@ export class ToolNodeExecutor implements INodeExecutor {
         };
       }
 
-      // Check approval expiration
       if (storedApproval.expiresAt && new Date(storedApproval.expiresAt).getTime() < Date.now()) {
         return {
           success: false,
@@ -135,14 +125,28 @@ export class ToolNodeExecutor implements INodeExecutor {
       }
     }
 
-    // 4. Standardized Idempotency Key
-    const idempotencyKey = `${graphId}:r${planRevision}:${node.id}:att${attempt}`;
+    // A durable, non-idempotent side effect may never be replayed merely because
+    // an earlier network call timed out. The execution engine may still retry
+    // the node internally, but attempt > 0 is rejected here as a hard safety gate.
+    if (policy.sideEffect && !policy.idempotent && attempt > 0) {
+      return {
+        success: false,
+        error: {
+          code: "NON_IDEMPOTENT_RETRY_BLOCKED",
+          message: `Retry blocked for non-idempotent side-effecting tool "${toolName}" to prevent duplicate durable actions.`,
+          retryable: false,
+          category: "tool",
+        },
+        metadata: { durationMs: Date.now() - startTime },
+      };
+    }
 
-    // 5. Tool Context & Execution
+    const idempotencyKey = `${graphId}:r${planRevision}:${node.id}:att${attempt}`;
     const timeoutMs = node.timeoutMs || policy.timeoutMs || 30_000;
     const toolContext = {
       telegramUserId: executionContext.telegramUserId,
       chatId: executionContext.chatId ?? executionContext.telegramUserId,
+      conversationId: executionContext.conversationId,
       idempotencyKey,
       signal,
     };
@@ -153,7 +157,7 @@ export class ToolNodeExecutor implements INodeExecutor {
           if (signal.aborted || timeoutSignal.aborted) {
             throw new Error("Execution was aborted before tool dispatch.");
           }
-          return await tool.execute(resolvedInputs, toolContext as any);
+          return tool.execute(resolvedInputs, toolContext);
         },
         timeoutMs,
         `Tool "${toolName}"`,
@@ -162,14 +166,20 @@ export class ToolNodeExecutor implements INodeExecutor {
       return {
         success: true,
         output: toolOutput,
-        metadata: { durationMs: Date.now() - startTime },
+        metadata: {
+          durationMs: Date.now() - startTime,
+          toolName,
+          attempt,
+          sideEffect: policy.sideEffect,
+          idempotent: policy.idempotent,
+        },
       };
     } catch (err: any) {
       const classified = retryEngine.classifyError(err);
       return {
         success: false,
         error: classified,
-        metadata: { durationMs: Date.now() - startTime },
+        metadata: { durationMs: Date.now() - startTime, toolName, attempt },
       };
     }
   }
