@@ -31,7 +31,7 @@ describe("TavilyService", () => {
     expect((fetchMock.mock.calls[0][1] as RequestInit).headers).toMatchObject({ Authorization: "Bearer test-key" });
   });
 
-  it("retries transient provider failures but not permanent failures", async () => {
+  it("retries transient provider failures", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ error: "busy" }), { status: 503 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ results: [{ title: "Recovered", url: "https://example.com", content: "ok" }] }), { status: 200 }));
@@ -40,6 +40,14 @@ describe("TavilyService", () => {
     const result = await service.search({ query: "retry test" });
     expect(result.results[0].title).toBe("Recovered");
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry permanent provider failures", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new TavilyService("test-key");
+    await expect(service.search({ query: "auth test" })).rejects.toThrow("unauthorized");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("extracts multiple known URLs", async () => {
