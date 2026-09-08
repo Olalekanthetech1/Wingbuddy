@@ -214,10 +214,27 @@ app.get("/", (_req, res) => {
     }
 
     /* Key Pool & General Tables */
+    .table-container {
+      width: 100%;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      border-radius: 0.5rem;
+      margin-top: 0.75rem;
+    }
+    .table-container::-webkit-scrollbar {
+      height: 6px;
+    }
+    .table-container::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    .table-container::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 3px;
+    }
     .data-table {
       width: 100%;
+      min-width: 650px;
       border-collapse: collapse;
-      margin-top: 0.75rem;
       font-size: 0.85rem;
     }
     .data-table th {
@@ -246,6 +263,7 @@ app.get("/", (_req, res) => {
       padding: 0.15rem 0.45rem;
       border-radius: 0.25rem;
       color: #93c5fa;
+      word-break: break-all;
     }
 
     .selector-bar {
@@ -298,6 +316,7 @@ app.get("/", (_req, res) => {
       border-radius: 0.375rem;
       font-size: 0.85rem;
       outline: none;
+      max-width: 100%;
     }
     .input:focus { border-color: var(--accent); }
     .btn {
@@ -314,6 +333,7 @@ app.get("/", (_req, res) => {
       background-color: var(--accent);
       color: white;
       transition: background-color 0.15s;
+      white-space: nowrap;
     }
     .btn:hover { background-color: var(--accent-hover); }
     .btn-sm { padding: 0.3rem 0.6rem; font-size: 0.75rem; }
@@ -349,6 +369,7 @@ app.get("/", (_req, res) => {
       line-height: 1.5;
       white-space: pre-wrap;
       color: #e2e8f0;
+      word-break: break-word;
     }
     .prompt-pills {
       display: flex;
@@ -376,7 +397,80 @@ app.get("/", (_req, res) => {
     }
     .alert-success { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
     .alert-error { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
-    .flex-between { display: flex; align-items: center; justify-content: space-between; }
+    .flex-between { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.75rem; }
+
+    /* Comprehensive Mobile Responsiveness */
+    @media (max-width: 768px) {
+      body {
+        padding: 0.75rem 0.5rem 3rem 0.5rem;
+      }
+      .header {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0.75rem;
+      }
+      .header > div:last-child {
+        text-align: left !important;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        width: 100%;
+        padding-top: 0.5rem;
+        border-top: 1px solid var(--border);
+      }
+      h1 {
+        font-size: 1.4rem;
+      }
+      p.subtitle {
+        font-size: 0.85rem;
+      }
+      .grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.6rem;
+      }
+      .card {
+        padding: 0.9rem;
+        border-radius: 0.6rem;
+      }
+      .card-value {
+        font-size: 1rem;
+      }
+      .section-title {
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        font-size: 0.95rem;
+      }
+      .selector-bar {
+        padding: 0.5rem;
+        gap: 0.4rem;
+      }
+      .selector-btn {
+        flex: 1 1 auto;
+        padding: 0.4rem 0.6rem;
+        font-size: 0.75rem;
+        text-align: center;
+      }
+      .form-row {
+        grid-template-columns: 1fr;
+        gap: 0.5rem;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+      .card-title {
+        font-size: 0.72rem;
+      }
+      .card-value {
+        font-size: 0.95rem;
+      }
+      .pill-tag {
+        font-size: 0.7rem;
+        padding: 0.15rem 0.45rem;
+      }
+    }
   </style>
 </head>
 <body>
@@ -475,21 +569,23 @@ app.get("/", (_req, res) => {
       </div>
 
       <!-- Keys Table -->
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Key / Label</th>
-            <th>Token Preview</th>
-            <th>Status</th>
-            <th>Requests</th>
-            <th>Latency</th>
-            <th style="text-align:right;">Actions</th>
-          </tr>
-        </thead>
-        <tbody id="keysTableBody">
-          <tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:1.5rem;">Loading API keys...</td></tr>
-        </tbody>
-      </table>
+      <div class="table-container">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Key / Label</th>
+              <th>Token Preview</th>
+              <th>Status</th>
+              <th>Requests</th>
+              <th>Latency</th>
+              <th style="text-align:right;">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="keysTableBody">
+            <tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:1.5rem;">Loading API keys...</td></tr>
+          </tbody>
+        </table>
+      </div>
 
       <!-- Add New Key Form -->
       <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border);">
@@ -529,20 +625,22 @@ app.get("/", (_req, res) => {
       </div>
 
       <!-- Env Vars Table -->
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Variable Name</th>
-            <th>Category</th>
-            <th>Value / Secret Preview</th>
-            <th>Status</th>
-            <th style="text-align:right;">Actions</th>
-          </tr>
-        </thead>
-        <tbody id="envTableBody">
-          <tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:1.5rem;">Loading environment variables...</td></tr>
-        </tbody>
-      </table>
+      <div class="table-container">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Variable Name</th>
+              <th>Category</th>
+              <th>Value / Secret Preview</th>
+              <th>Status</th>
+              <th style="text-align:right;">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="envTableBody">
+            <tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:1.5rem;">Loading environment variables...</td></tr>
+          </tbody>
+        </table>
+      </div>
 
       <!-- Add Custom Variable Form -->
       <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border);">
@@ -594,20 +692,22 @@ app.get("/", (_req, res) => {
         Real-time scheduled alerts with CDC (Change Data Capture) synchronization. Cancel or snooze items live:
       </p>
 
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Reminder / Prompt</th>
-            <th>Due Time</th>
-            <th>Status</th>
-            <th>Snoozes</th>
-            <th style="text-align:right;">Actions</th>
-          </tr>
-        </thead>
-        <tbody id="remindersTableBody">
-          <tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:1.5rem;">Loading scheduled reminders...</td></tr>
-        </tbody>
-      </table>
+      <div class="table-container">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Reminder / Prompt</th>
+              <th>Due Time</th>
+              <th>Status</th>
+              <th>Snoozes</th>
+              <th style="text-align:right;">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="remindersTableBody">
+            <tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:1.5rem;">Loading scheduled reminders...</td></tr>
+          </tbody>
+        </table>
+      </div>
 
       <!-- Quick Schedule Reminder Form -->
       <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border);">
@@ -637,19 +737,21 @@ app.get("/", (_req, res) => {
         <button class="btn btn-outline" onclick="document.getElementById('memorySearchInput').value=''; loadMemories();">Clear</button>
       </div>
 
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Key / Subject</th>
-            <th>Category</th>
-            <th>Memory Fact Content</th>
-            <th style="text-align:right;">Action</th>
-          </tr>
-        </thead>
-        <tbody id="memoriesTableBody">
-          <tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:1.5rem;">Loading long-term memories...</td></tr>
-        </tbody>
-      </table>
+      <div class="table-container">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Key / Subject</th>
+              <th>Category</th>
+              <th>Memory Fact Content</th>
+              <th style="text-align:right;">Action</th>
+            </tr>
+          </thead>
+          <tbody id="memoriesTableBody">
+            <tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:1.5rem;">Loading long-term memories...</td></tr>
+          </tbody>
+        </table>
+      </div>
 
       <!-- Add Memory Form -->
       <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border);">
@@ -1332,7 +1434,7 @@ app.get("/", (_req, res) => {
           '<td><span class="pill-tag">' + escapeHtml(v.category) + '</span></td>' +
           '<td>' +
             '<div style="display:flex;align-items:center;gap:0.4rem;">' +
-              '<input type="' + (isUnmasked ? 'text' : 'password') + '" id="env_input_' + safeKeyAttr + '" class="input" style="font-family:monospace;font-size:0.8rem;padding:0.35rem 0.5rem;" value="' + safeValAttr + '" />' +
+              '<input type="' + (isUnmasked ? 'text' : 'password') + '" id="env_input_' + safeKeyAttr + '" class="input" style="font-family:monospace;font-size:0.8rem;padding:0.35rem 0.5rem;width:100%;min-width:140px;box-sizing:border-box;" value="' + safeValAttr + '" />' +
               (v.isSensitive ? '<button class="btn btn-sm btn-outline" style="padding:0.25rem 0.4rem;" data-key="' + safeKeyAttr + '" onclick="toggleEnvMask(this.dataset.key)">' + maskIcon + '</button>' : '') +
             '</div>' +
           '</td>' +
