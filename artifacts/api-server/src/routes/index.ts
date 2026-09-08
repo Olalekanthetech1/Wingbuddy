@@ -5,6 +5,7 @@ import dashboardRouter from "./dashboard";
 import envRouter from "./env";
 import executionRouter from "./execution";
 import modelsRouter from "./models";
+import simulatorRouter from "./simulator";
 
 const router: IRouter = Router();
 
@@ -14,5 +15,6 @@ router.use(dashboardRouter);
 router.use(envRouter);
 router.use(executionRouter);
 router.use(modelsRouter);
+router.use(simulatorRouter);
 
 export default router;
