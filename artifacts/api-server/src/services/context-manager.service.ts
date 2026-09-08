@@ -1,6 +1,7 @@
 import { memoryService } from "./memory.service";
 import { taskService } from "./task.service";
 import { instructionResolutionService } from "./instruction-resolution.service";
+import { conversationIntelligenceService } from "./conversation-intelligence.service";
 import { chatDatabaseService, type AgentTaskRecord, type AgentTaskStepRecord } from "@workspace/db";
 import { logger } from "../lib/logger";
 
@@ -32,18 +33,13 @@ export class ContextManagerService {
     const telegramUserId = Number(options.telegramUserId);
     const maxBudget = options.maxCharBudget ?? ContextManagerService.DEFAULT_MAX_CHAR_BUDGET;
 
-    // 1. Fetch raw persistent user memories
     const memories = await memoryService.getMemories(telegramUserId);
     const formattedMemories = await memoryService.formatMemoriesForPrompt(telegramUserId);
 
-    // 2. Fetch or format task context
     let activeTaskData = options.activeTask || null;
     let formattedTaskContext = "";
     if (activeTaskData) {
-      formattedTaskContext = taskService.formatTaskForPrompt(
-        activeTaskData.task,
-        activeTaskData.steps,
-      );
+      formattedTaskContext = taskService.formatTaskForPrompt(activeTaskData.task, activeTaskData.steps);
     } else {
       const activeTasks = await taskService.getActiveTasksForUser(telegramUserId);
       if (activeTasks.length > 0) {
@@ -54,34 +50,27 @@ export class ContextManagerService {
       }
     }
 
-    // 3. Fetch conversation summary if conversationId is provided
     let conversationSummary = "";
     let sessionSummaries: Array<{ summary: string }> = [];
     if (options.conversationId) {
-      const summaryRecord = await chatDatabaseService.getLatestSummaryForConversation(
-        options.conversationId,
-      );
+      const summaryRecord = await chatDatabaseService.getLatestSummaryForConversation(options.conversationId);
       if (summaryRecord) {
         conversationSummary = `\n\n[PAST CONVERSATION SUMMARY]\n${summaryRecord.summary}`;
         sessionSummaries.push({ summary: summaryRecord.summary });
       }
     }
 
-    // 4. Budgeting and History Pruning
     let rawHistory = options.history || [];
     let isTruncated = false;
 
-    // Estimate total character usage
+    const continuity = conversationIntelligenceService.resolve(options.userMessage, rawHistory);
+    const continuityInstruction = conversationIntelligenceService.buildContextInstruction(continuity);
+
     const calculateLength = (hist: Array<{ role: string; content: string }>, sysPromptLength: number) => {
       const histLength = hist.reduce((sum, h) => sum + h.content.length, 0);
-      return (
-        sysPromptLength +
-        options.userMessage.length +
-        histLength
-      );
+      return sysPromptLength + options.userMessage.length + histLength;
     };
 
-    // 5. Resolve Instruction Precedence Dynamically via InstructionResolutionService
     const resolution = instructionResolutionService.resolvePrecedence({
       effectiveModeInstruction: options.effectiveModeInstruction,
       userMessage: options.userMessage,
@@ -92,19 +81,26 @@ export class ContextManagerService {
     });
 
     let fullSystemPrompt = resolution.effectiveSystemPrompt + conversationSummary;
+    if (continuityInstruction) {
+      fullSystemPrompt += `\n\n${continuityInstruction}`;
+    }
 
     let currentLength = calculateLength(rawHistory, fullSystemPrompt.length);
-
-    // If exceeding budget, prune older history turns while retaining system prompts & current message
     if (currentLength > maxBudget && rawHistory.length > 2) {
       isTruncated = true;
-      logger.info(
-        { telegramUserId, currentLength, maxBudget, originalTurns: rawHistory.length },
-        "CONTEXT_TRUNCATED",
-      );
-
+      logger.info({ telegramUserId, currentLength, maxBudget, originalTurns: rawHistory.length }, "CONTEXT_TRUNCATED");
       while (rawHistory.length > 2 && calculateLength(rawHistory, fullSystemPrompt.length) > maxBudget) {
         rawHistory = rawHistory.slice(1);
+      }
+    }
+
+    // Continuity targets must survive history pruning. If a follow-up is detected,
+    // preserve a bounded recent window containing the target before trimming.
+    if (continuity.isFollowUp && continuity.confidence === "high" && rawHistory.length > 0) {
+      const recentWindow = rawHistory.slice(-6);
+      if (recentWindow.length < rawHistory.length) {
+        rawHistory = recentWindow;
+        isTruncated = true;
       }
     }
 
@@ -112,7 +108,17 @@ export class ContextManagerService {
     const tokenCountEstimate = Math.ceil(finalLength / 4);
 
     logger.info(
-      { telegramUserId, tokenCountEstimate, isTruncated, historyLength: rawHistory.length, appliedPreferencesCount: resolution.appliedPreferences.length, suppressedCount: resolution.suppressedInstructions.length },
+      {
+        telegramUserId,
+        tokenCountEstimate,
+        isTruncated,
+        historyLength: rawHistory.length,
+        appliedPreferencesCount: resolution.appliedPreferences.length,
+        suppressedCount: resolution.suppressedInstructions.length,
+        continuityFollowUp: continuity.isFollowUp,
+        continuityConfidence: continuity.confidence,
+        continuityReferenceType: continuity.referenceType,
+      },
       "CONTEXT_ASSEMBLED_WITH_PRECEDENCE",
     );
 
@@ -129,4 +135,3 @@ export class ContextManagerService {
 }
 
 export const contextManagerService = new ContextManagerService();
-
