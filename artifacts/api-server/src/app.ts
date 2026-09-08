@@ -1,10 +1,12 @@
-import express, { type Express } from "express";
+import express, { type Express, type Request, type Response } from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
 import router from "./routes";
 import { healthHandler } from "./routes/health";
 import { logger } from "./lib/logger";
 import { createTelegramBot } from "./telegram/bot";
+import { telegramWorkerQueue } from "./services/worker-queue.service";
+import { safeErrorMetadata } from "./utils/safe-error";
 
 const app: Express = express();
 
@@ -33,21 +35,36 @@ app.use(express.urlencoded({ extended: true }));
 
 let realTelegramRuntime: ReturnType<typeof createTelegramBot> | null = null;
 
-try {
-  realTelegramRuntime = createTelegramBot();
-  realTelegramRuntime.mountWebhook(app);
-} catch (error) {
-  logger.warn(
-    { error: error instanceof Error ? error.message : String(error) },
-    "Telegram bot deferred initialization: configure TELEGRAM_BOT_TOKEN and GEMINI_API_KEY in environment",
-  );
+export function initOrReloadTelegramBot(): ReturnType<typeof createTelegramBot> | null {
+  try {
+    if (process.env.TELEGRAM_BOT_TOKEN?.trim() && process.env.GEMINI_API_KEY?.trim()) {
+      if (realTelegramRuntime) {
+        realTelegramRuntime.stop().catch(() => {});
+      }
+      realTelegramRuntime = createTelegramBot();
+      logger.info("Telegram bot runtime initialized/reloaded successfully");
+      return realTelegramRuntime;
+    }
+  } catch (error) {
+    logger.warn(
+      { error: error instanceof Error ? error.message : String(error) },
+      "Telegram bot deferred initialization: configure TELEGRAM_BOT_TOKEN and GEMINI_API_KEY in environment or Dashboard",
+    );
+  }
+  return realTelegramRuntime;
 }
 
-const telegramRuntime = {
+// Initial setup attempt
+initOrReloadTelegramBot();
+
+export const telegramRuntime = {
   get bot() {
     return realTelegramRuntime?.bot;
   },
   async start() {
+    if (!realTelegramRuntime) {
+      initOrReloadTelegramBot();
+    }
     if (realTelegramRuntime) {
       await realTelegramRuntime.start();
     } else {
@@ -59,12 +76,57 @@ const telegramRuntime = {
       await realTelegramRuntime.stop();
     }
   },
-  mountWebhook(expressApp: Express) {
-    if (realTelegramRuntime) {
-      realTelegramRuntime.mountWebhook(expressApp);
-    }
-  },
+  initOrReload: initOrReloadTelegramBot,
 };
+
+// Resilient Telegram Webhook Ingestion Handler (Always mounted to prevent 404s)
+const handleTelegramWebhook = (req: Request, res: Response): void => {
+  const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET?.trim();
+  if (webhookSecret) {
+    const secretHeader = req.header("X-Telegram-Bot-Api-Secret-Token");
+    if (secretHeader !== webhookSecret) {
+      logger.warn("Telegram webhook received update with invalid secret token");
+      res.status(403).json({ error: "Unauthorized" });
+      return;
+    }
+  }
+
+  const update = req.body;
+  if (!update || typeof update !== "object" || typeof update.update_id !== "number") {
+    res.status(400).json({ error: "Invalid Telegram update payload" });
+    return;
+  }
+
+  // Fast-Ack: Immediately return 200 OK to Telegram in <5ms to prevent retry storms
+  res.status(200).json({ ok: true });
+
+  if (!realTelegramRuntime) {
+    initOrReloadTelegramBot();
+  }
+
+  if (realTelegramRuntime) {
+    try {
+      telegramWorkerQueue.enqueue(update);
+    } catch (err) {
+      logger.error({ error: safeErrorMetadata(err), updateId: update.update_id }, "Failed to enqueue Telegram update");
+    }
+  } else {
+    logger.warn(
+      { updateId: update.update_id },
+      "Telegram webhook received update, but TELEGRAM_BOT_TOKEN is not yet configured in environment variables or Dashboard",
+    );
+  }
+};
+
+app.post("/api/telegram/webhook", handleTelegramWebhook);
+app.post("/telegram/webhook", handleTelegramWebhook);
+
+app.get("/api/telegram/queue-metrics", (_req: Request, res: Response) => {
+  res.json({
+    status: "ok",
+    workerQueue: telegramWorkerQueue.getMetrics(),
+  });
+});
 
 app.get("/health", healthHandler);
 app.use("/api", router);
@@ -2109,4 +2171,3 @@ app.get("/", (_req, res) => {
 });
 
 export default app;
-export { telegramRuntime };

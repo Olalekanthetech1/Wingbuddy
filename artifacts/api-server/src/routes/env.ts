@@ -305,10 +305,13 @@ router.post("/env", async (req: Request, res: Response) => {
       // Hot-reload specific services
       if (trimmedKey === "GEMINI_API_KEY") {
         apiKeyPoolService.reloadFromEnv(trimmedVal);
+        import("../app").then((m) => m.initOrReloadTelegramBot?.()).catch(() => {});
       } else if (trimmedKey === "KEY_ROTATION_MODE") {
         if (trimmedVal === "round_robin" || trimmedVal === "failover") {
           apiKeyPoolService.setRotationMode(trimmedVal);
         }
+      } else if (trimmedKey === "TELEGRAM_BOT_TOKEN" || trimmedKey === "TELEGRAM_WEBHOOK_URL" || trimmedKey === "TELEGRAM_WEBHOOK_SECRET") {
+        import("../app").then((m) => m.initOrReloadTelegramBot?.()).catch(() => {});
       }
     }
 

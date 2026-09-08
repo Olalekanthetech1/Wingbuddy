@@ -13,6 +13,7 @@ const server = app.listen(port, "0.0.0.0", async () => {
     await ensureDatabaseSchema(pool);
     logger.info("Database schema verification and initialization completed");
     await hydrateEnvFromDatabase();
+    telegramRuntime.initOrReload();
   } catch (err) {
     logger.warn({ error: err instanceof Error ? err.message : String(err) }, "Database schema auto-init warning");
   }
