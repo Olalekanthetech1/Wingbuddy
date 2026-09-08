@@ -3,11 +3,14 @@ export const DEFAULT_MAX_HISTORY_MESSAGES = 20;
 export const DEFAULT_RATE_LIMIT_MAX_REQUESTS = 6;
 export const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
 export const DEFAULT_GEMINI_TIMEOUT_MS = 45_000;
+export const DEFAULT_TAVILY_TIMEOUT_MS = 30_000;
 
 export interface AppConfig {
   telegramBotToken: string;
   geminiApiKey: string;
   geminiModel: string;
+  tavilyApiKey?: string;
+  tavilyTimeoutMs: number;
   allowedTelegramUserIds: Set<number>;
   maxHistoryMessages: number;
   rateLimitMaxRequests: number;
@@ -54,6 +57,8 @@ export function getConfig(): AppConfig {
     telegramBotToken: required("TELEGRAM_BOT_TOKEN"),
     geminiApiKey: required("GEMINI_API_KEY"),
     geminiModel: process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL,
+    tavilyApiKey: process.env.TAVILY_API_KEY?.trim() || undefined,
+    tavilyTimeoutMs: positiveInt("TAVILY_TIMEOUT_MS", DEFAULT_TAVILY_TIMEOUT_MS),
     allowedTelegramUserIds: parseAllowedIds(),
     maxHistoryMessages: positiveInt("MAX_HISTORY_MESSAGES", DEFAULT_MAX_HISTORY_MESSAGES),
     rateLimitMaxRequests: positiveInt("RATE_LIMIT_MAX_REQUESTS", DEFAULT_RATE_LIMIT_MAX_REQUESTS),
