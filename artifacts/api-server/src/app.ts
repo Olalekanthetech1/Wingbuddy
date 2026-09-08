@@ -11,6 +11,7 @@ import { renderDashboardHtml } from "./dashboard-ui";
 import { renderDashboardModelControls } from "./dashboard-model-controls";
 import { renderDashboardControlPlane } from "./dashboard-control-plane";
 import { renderDashboardBotSimulator } from "./dashboard-bot-simulator";
+import { renderDashboardBehaviorControls } from "./dashboard-behavior-controls";
 import { apiKeyPoolService } from "./services/api-key-pool.service";
 
 const app: Express = express();
@@ -35,8 +36,7 @@ export function initOrReloadTelegramBot(): ReturnType<typeof createTelegramBot> 
   return realTelegramRuntime;
 }
 
-// Deliberately do not initialize the Telegram runtime during module import.
-// The process entrypoint hydrates PostgreSQL-backed configuration first, then calls initOrReloadTelegramBot().
+// Telegram is initialized only after the process entrypoint hydrates authoritative state.
 
 export const telegramRuntime = {
   get bot() { return realTelegramRuntime?.bot; },
@@ -88,7 +88,7 @@ app.use("/api", router);
 
 const serveDashboard = (_req: Request, res: Response): void => {
   const html = renderDashboardHtml();
-  const enhanced = html.replace("</body>", `${renderDashboardModelControls()}${renderDashboardControlPlane()}${renderDashboardBotSimulator()}</body>`);
+  const enhanced = html.replace("</body>", `${renderDashboardModelControls()}${renderDashboardControlPlane()}${renderDashboardBotSimulator()}${renderDashboardBehaviorControls()}</body>`);
   res.type("html").send(enhanced);
 };
 app.get("/", serveDashboard);
