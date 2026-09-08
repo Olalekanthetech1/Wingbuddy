@@ -56,10 +56,7 @@ export class ModelRegistryService {
     ].filter(Boolean));
     const now = new Date().toISOString();
     return ids.map((modelId, priority) => ({
-      id: makeId(modelId),
-      provider: "gemini",
-      modelId,
-      name: modelId,
+      id: makeId(modelId), provider: "gemini", modelId, name: modelId,
       roles: unique([
         modelId === primary ? "primary" : undefined,
         modelId === process.env.GEMINI_MODEL_FAST?.trim() ? "fast" : undefined,
@@ -67,35 +64,30 @@ export class ModelRegistryService {
         modelId === process.env.GEMINI_MODEL_EXTRACTION?.trim() ? "extraction" : undefined,
         modelId === process.env.GEMINI_EMBEDDING_MODEL?.trim() ? "embedding" : undefined,
       ].filter((v): v is ModelRole => typeof v === "string")),
-      enabled: true,
-      priority,
+      enabled: true, priority,
       capabilities: modelId === process.env.GEMINI_EMBEDDING_MODEL?.trim() ? ["embedding"] : ["generate"],
-      createdAt: now,
-      updatedAt: now,
+      createdAt: now, updatedAt: now,
     }));
-  }
-
-  private merge(environmentModels: ManagedModel[], storedModels: ManagedModel[]): ManagedModel[] {
-    const merged = new Map(environmentModels.map((model) => [model.id, model]));
-    for (const model of storedModels) {
-      merged.set(model.id, { ...merged.get(model.id), ...model });
-    }
-    return [...merged.values()].sort((a, b) => a.priority - b.priority);
   }
 
   private async read(): Promise<ManagedModel[]> {
     if (this.cache && Date.now() - this.cacheAt < this.cacheTtlMs) return this.cache;
-    let stored: ManagedModel[] = [];
     try {
       const rows = await db.select({ value: systemSettingsTable.value })
         .from(systemSettingsTable)
         .where(eq(systemSettingsTable.key, REGISTRY_KEY))
         .limit(1);
-      if (rows[0]?.value) stored = normalizeStoredModels(JSON.parse(rows[0].value));
+      if (rows[0]?.value) {
+        // Once persisted, PostgreSQL is authoritative. Environment values are
+        // only the bootstrap source for first initialization/migration.
+        this.cache = normalizeStoredModels(JSON.parse(rows[0].value)).sort((a, b) => a.priority - b.priority);
+        this.cacheAt = Date.now();
+        return this.cache;
+      }
     } catch (error) {
       logger.warn({ error: String(error) }, "Failed to read Gemini model registry from PostgreSQL");
     }
-    this.cache = this.merge(this.buildEnvironmentRegistry(), stored);
+    this.cache = this.buildEnvironmentRegistry();
     this.cacheAt = Date.now();
     return this.cache;
   }
@@ -121,7 +113,7 @@ export class ModelRegistryService {
     const embedding = first("embedding");
     const executable = enabled.filter((m) => !m.roles.includes("embedding"));
 
-    if (primary) process.env.GEMINI_MODEL = primary.modelId;
+    process.env.GEMINI_MODEL = primary?.modelId || "";
     process.env.GEMINI_MODEL_POOL = executable.map((m) => m.modelId).join(",");
     process.env.GEMINI_MODEL_FALLBACKS = executable.filter((m) => m.id !== primary?.id).map((m) => m.modelId).join(",");
     process.env.GEMINI_MODEL_FAST = fast?.modelId || "";
@@ -131,7 +123,8 @@ export class ModelRegistryService {
   }
 
   async list(): Promise<ManagedModel[]> {
-    return this.read();
+    const models = await this.read();
+    return models.map((m) => ({ ...m, roles: [...m.roles], capabilities: [...m.capabilities] }));
   }
 
   async add(input: { modelId: string; name?: string; roles?: ModelRole[]; priority?: number; capabilities?: string[] }): Promise<ManagedModel> {
@@ -150,9 +143,7 @@ export class ModelRegistryService {
       createdAt: now, updatedAt: now,
     };
     const next = [...models, model].sort((a, b) => a.priority - b.priority);
-    await this.persist(next);
-    this.syncRuntime(next);
-    return model;
+    await this.persist(next); this.syncRuntime(next); return model;
   }
 
   async update(id: string, patch: Partial<Pick<ManagedModel, "name" | "roles" | "enabled" | "priority" | "capabilities">>): Promise<ManagedModel> {
@@ -160,23 +151,19 @@ export class ModelRegistryService {
     const index = models.findIndex((m) => m.id === id);
     if (index < 0) throw new Error("Model not found");
     const updated: ManagedModel = {
-      ...models[index],
-      ...patch,
+      ...models[index], ...patch,
       roles: patch.roles ? unique(patch.roles.filter((role) => ROLES.includes(role))) : models[index].roles,
       updatedAt: new Date().toISOString(),
     };
     const next = models.map((m, i) => i === index ? updated : m).sort((a, b) => a.priority - b.priority);
-    await this.persist(next);
-    this.syncRuntime(next);
-    return updated;
+    await this.persist(next); this.syncRuntime(next); return updated;
   }
 
   async remove(id: string): Promise<void> {
     const models = await this.read();
     const next = models.filter((m) => m.id !== id);
     if (next.length === models.length) throw new Error("Model not found");
-    await this.persist(next);
-    this.syncRuntime(next);
+    await this.persist(next); this.syncRuntime(next);
   }
 
   async test(modelId: string): Promise<{ ok: boolean; latencyMs: number; error?: string }> {
@@ -185,11 +172,7 @@ export class ModelRegistryService {
     const start = Date.now();
     try {
       const client = new GoogleGenAI({ apiKey: key });
-      await client.models.generateContent({
-        model: modelId,
-        contents: [{ role: "user", parts: [{ text: "ping" }] }],
-        config: { maxOutputTokens: 4 },
-      });
+      await client.models.generateContent({ model: modelId, contents: [{ role: "user", parts: [{ text: "ping" }] }], config: { maxOutputTokens: 4 } });
       return { ok: true, latencyMs: Date.now() - start };
     } catch (error) {
       return { ok: false, latencyMs: Date.now() - start, error: error instanceof Error ? error.message : String(error) };
