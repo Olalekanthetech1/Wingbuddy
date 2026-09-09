@@ -9,10 +9,9 @@ import type {
   AIUsage,
 } from "./ai-provider.types";
 import type { AIProviderId } from "./ai-provider.types";
-import { getRequestScopedProviderApiKey } from "./ai-provider-key-context.service";
 
 function requireApiKey(provider: AIProviderRecord, apiKey?: string): string {
-  const value = apiKey?.trim() || getRequestScopedProviderApiKey(provider.id)?.trim() || process.env[provider.apiKeyEnv]?.trim();
+  const value = apiKey?.trim() || process.env[provider.apiKeyEnv]?.trim();
   if (!value) throw new Error(`${provider.apiKeyEnv} is not configured`);
   return value;
 }
