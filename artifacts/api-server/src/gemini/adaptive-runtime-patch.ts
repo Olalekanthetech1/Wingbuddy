@@ -4,7 +4,6 @@ import type { AIChatResponse, AIProviderId } from "../services/ai-provider.types
 import { GeminiService, type AssistantGuidance, type GenerateReplyOptions, type GeminiMessage } from "./gemini.service";
 
 const PATCH_FLAG = Symbol.for("wingbuddy.adaptive-gemini-service-patched");
-
 type PatchedGeminiService = GeminiService & { [PATCH_FLAG]?: boolean };
 
 function routingEnabled(): boolean {
@@ -35,7 +34,7 @@ function toRequest(history: GeminiMessage[], message: string, guidance?: Assista
 function routingContext(options?: GenerateReplyOptions) {
   return {
     mode: options?.mode,
-    isDeepReasoning: options?.isDeepReasoning,
+    isDeepReasoning: Boolean(options?.isDeepReasoning || options?.thinkingLevel),
     isExtraction: options?.isExtraction,
     enableSearch: false,
     requiresVision: false,
@@ -64,8 +63,11 @@ if (!prototype[PATCH_FLAG]) {
     const first = candidates[0];
 
     if (first?.model.provider === "gemini") {
+      const started = Date.now();
       try {
-        return await originalGenerateReplyStream.call(this, history, message, guidance, options, onChunk);
+        const result = await originalGenerateReplyStream.call(this, history, message, guidance, options, onChunk);
+        adaptiveAIRouterService.recordSuccess(first.model.id, Date.now() - started);
+        return result;
       } catch (error) {
         adaptiveAIRouterService.recordFailure(first.model.id, error);
         throw error;
