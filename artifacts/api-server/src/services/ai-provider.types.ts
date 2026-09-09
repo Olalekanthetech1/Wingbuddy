@@ -20,6 +20,16 @@ export interface AIProviderRecord {
   updatedAt: string;
 }
 
+export interface AIModelCatalogEntry {
+  provider: AIProviderId;
+  modelId: string;
+  name: string;
+  status: "active" | "inactive" | "unknown";
+  capabilities: string[];
+  contextWindow?: number;
+  source: "provider_api" | "registry";
+}
+
 export interface AIMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
