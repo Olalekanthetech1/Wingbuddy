@@ -86,7 +86,9 @@ export class AdaptiveAIRouterService {
   }
 
   private normalizePolicy(raw: Partial<AIRoutingPolicy>): AIRoutingPolicy {
-    const strategy: AIRoutingStrategy = raw.strategy === "primary_first" || raw.strategy === "priority_only" ? raw.strategy : "adaptive";
+    // primary_first is retained only as a backward-compatible read value; it is normalized
+    // to adaptive so persisted legacy settings cannot privilege one provider/model.
+    const strategy: AIRoutingStrategy = raw.strategy === "priority_only" ? "priority_only" : "adaptive";
     return {
       strategy,
       capabilityWeight: clamp(finite(raw.capabilityWeight, DEFAULT_POLICY.capabilityWeight), 0, 100),
@@ -139,7 +141,6 @@ export class AdaptiveAIRouterService {
       const latencyScore = this.latencyScore(model);
       const totalWeight = Math.max(1, policy.capabilityWeight + policy.healthWeight + policy.latencyWeight + policy.priorityWeight);
       let score = (capabilityMatch * policy.capabilityWeight + healthScore * policy.healthWeight + latencyScore * policy.latencyWeight + priorityScore * policy.priorityWeight) / totalWeight;
-      if (policy.strategy === "primary_first" && hasRole(model, "primary")) score += 100;
       if (policy.strategy === "priority_only") score = priorityScore;
       score += roleBonus;
       const reasons: string[] = [];
