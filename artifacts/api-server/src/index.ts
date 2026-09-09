@@ -5,6 +5,7 @@ import { hydrateEnvFromDatabase } from "./routes/env";
 import { getExecutionConfig } from "./execution/config";
 import { apiKeyPoolService } from "./services/api-key-pool.service";
 import { runtimeBehaviorConfigService } from "./services/runtime-behavior-config.service";
+import { modelRegistryService } from "./services/model-registry.service";
 
 const port = 3000;
 let startupStateReady = false;
@@ -19,6 +20,8 @@ const server = app.listen(port, "0.0.0.0", async () => {
     await apiKeyPoolService.initializeDb();
     await apiKeyPoolService.hydrateFromDatabase();
     await runtimeBehaviorConfigService.initialize();
+    const registeredModels = await modelRegistryService.list();
+    logger.info({ modelRegistryCount: registeredModels.length, primaryModel: registeredModels.find((model) => model.enabled && model.roles.includes("primary"))?.modelId || process.env.GEMINI_MODEL || "" }, "Gemini model registry hydrated before Telegram initialization");
 
     startupStateReady = true;
     setRuntimeHydrationReady(true);

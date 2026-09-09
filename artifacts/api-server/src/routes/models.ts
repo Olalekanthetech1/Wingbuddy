@@ -45,6 +45,7 @@ router.patch("/models/:id", async (req: Request, res: Response) => {
     const id = Array.isArray(rawId) ? rawId[0] : rawId;
     const patch = req.body ?? {};
     const model = await modelRegistryService.update(id, {
+      ...(typeof patch.modelId === "string" ? { modelId: patch.modelId } : {}),
       ...(typeof patch.name === "string" ? { name: patch.name } : {}),
       ...(typeof patch.enabled === "boolean" ? { enabled: patch.enabled } : {}),
       ...(typeof patch.priority === "number" ? { priority: patch.priority } : {}),
@@ -52,6 +53,17 @@ router.patch("/models/:id", async (req: Request, res: Response) => {
       ...(Array.isArray(patch.capabilities) ? { capabilities: patch.capabilities.filter((v: unknown): v is string => typeof v === "string") } : {}),
     });
     res.json({ message: "Model updated and saved to PostgreSQL", model });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+router.post("/models/:id/primary", async (req: Request, res: Response) => {
+  try {
+    const rawId = req.params.id;
+    const id = Array.isArray(rawId) ? rawId[0] : rawId;
+    const model = await modelRegistryService.setPrimary(id);
+    res.json({ message: "Primary model updated and saved to PostgreSQL", model });
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
   }

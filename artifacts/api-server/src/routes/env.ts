@@ -5,8 +5,20 @@ import { logger } from "../lib/logger";
 import { apiKeyPoolService } from "../services/api-key-pool.service";
 import { db, getPool, systemSettingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
+import { modelRegistryService } from "../services/model-registry.service";
 
 const router: IRouter = Router();
+
+const MODEL_REGISTRY_MANAGED_KEYS = new Set([
+  "GEMINI_MODEL",
+  "GEMINI_DEFAULT_MODEL",
+  "GEMINI_MODEL_POOL",
+  "GEMINI_MODEL_FALLBACKS",
+  "GEMINI_MODEL_FAST",
+  "GEMINI_MODEL_REASONING",
+  "GEMINI_MODEL_EXTRACTION",
+  "GEMINI_EMBEDDING_MODEL",
+]);
 
 // Hydrate process.env from PostgreSQL database on startup
 export async function hydrateEnvFromDatabase(): Promise<void> {
@@ -98,9 +110,9 @@ const ENV_SPECS: EnvVariableSpec[] = [
     key: "GEMINI_MODEL",
     category: "access",
     isSensitive: false,
-    description: "Gemini model override (e.g. gemini-2.5-flash, gemini-2.5-pro)",
+    description: "Runtime-managed Gemini primary model. Configure it from Model Registry; environment value is bootstrap-only.",
     required: false,
-    defaultValue: "gemini-2.5-flash",
+    defaultValue: "",
   },
   {
     key: "KEY_ROTATION_MODE",
@@ -200,20 +212,13 @@ function updateDotEnvFile(key: string, value: string): void {
   try {
     const envPath = path.resolve(process.cwd(), ".env");
     let content = "";
-    if (fs.existsSync(envPath)) {
-      content = fs.readFileSync(envPath, "utf-8");
-    }
-
+    if (fs.existsSync(envPath)) content = fs.readFileSync(envPath, "utf-8");
     const keyRegex = new RegExp(`^${key}=.*$`, "m");
-    if (keyRegex.test(content)) {
-      content = content.replace(keyRegex, `${key}=${value}`);
-    } else {
-      if (content && !content.endsWith("\n")) {
-        content += "\n";
-      }
+    if (keyRegex.test(content)) content = content.replace(keyRegex, `${key}=${value}`);
+    else {
+      if (content && !content.endsWith("\n")) content += "\n";
       content += `${key}=${value}\n`;
     }
-
     fs.writeFileSync(envPath, content, "utf-8");
     logger.info({ key }, "Successfully persisted variable to .env file");
   } catch (err) {
@@ -221,7 +226,7 @@ function updateDotEnvFile(key: string, value: string): void {
   }
 }
 
-// GET /api/env - Retrieve full environment variables schema & runtime status
+// GET /api/env - Retrieve environment variables schema & runtime status
 router.get("/env", (_req: Request, res: Response) => {
   const IGNORED_SYSTEM_PREFIXES = [
     "npm_", "BUN_", "PATH", "PWD", "HOME", "SHLVL", "_", "CNB_", "K_", "NGINX_",
@@ -229,22 +234,20 @@ router.get("/env", (_req: Request, res: Response) => {
     "INIT_CWD", "GOMEMLIMIT", "NEXT_TELEMETRY_DISABLED", "CSP_HEADER_VALUE",
     "AUTHORIZED_SERVICE_ACCOUNT_EMAIL", "CLOUD_RUN_", "GOOGLE_RUNTIME", "NO_UPDATE_NOTIFIER", "HOST"
   ];
-
-  const customKeys = Object.keys(process.env).filter(
-    (k) => !ENV_SPECS.some((spec) => spec.key === k) && !IGNORED_SYSTEM_PREFIXES.some((prefix) => k.startsWith(prefix) || k === prefix),
+  const customKeys = Object.keys(process.env).filter((k) =>
+    !ENV_SPECS.some((spec) => spec.key === k) &&
+    !IGNORED_SYSTEM_PREFIXES.some((prefix) => k.startsWith(prefix) || k === prefix),
   );
-
   const variables = ENV_SPECS.map((spec) => {
     const rawValue = process.env[spec.key] || "";
     const isSet = Boolean(rawValue.trim());
     return {
       ...spec,
       isSet,
-      value: rawValue,
-      maskedValue: spec.isSensitive ? maskValue(rawValue) : rawValue,
+      value: MODEL_REGISTRY_MANAGED_KEYS.has(spec.key) ? "" : rawValue,
+      maskedValue: MODEL_REGISTRY_MANAGED_KEYS.has(spec.key) ? "Runtime-managed" : spec.isSensitive ? maskValue(rawValue) : rawValue,
     };
   });
-
   const customVariables = customKeys.map((k) => {
     const rawValue = process.env[k] || "";
     const isSensitive = k.includes("KEY") || k.includes("TOKEN") || k.includes("SECRET") || k.includes("PASS");
@@ -259,7 +262,6 @@ router.get("/env", (_req: Request, res: Response) => {
       maskedValue: isSensitive ? maskValue(rawValue) : rawValue,
     };
   });
-
   res.json({
     timestamp: new Date().toISOString(),
     totalConfigured: variables.filter((v) => v.isSet).length + customVariables.filter((v) => v.isSet).length,
@@ -267,7 +269,7 @@ router.get("/env", (_req: Request, res: Response) => {
   });
 });
 
-// POST /api/env - Bulk or single variable update with dynamic hot-reload & database persistence
+// POST /api/env - Bulk or single variable update with dynamic persistence
 router.post("/env", async (req: Request, res: Response) => {
   try {
     const { updates } = req.body;
@@ -275,55 +277,36 @@ router.post("/env", async (req: Request, res: Response) => {
       res.status(400).json({ error: "Missing required 'updates' object" });
       return;
     }
-
     const updatedKeys: string[] = [];
-
     for (const [key, value] of Object.entries(updates)) {
       if (typeof value !== "string") continue;
-
       const trimmedKey = key.trim();
+      if (MODEL_REGISTRY_MANAGED_KEYS.has(trimmedKey)) {
+        throw new Error(`${trimmedKey} is managed by the Gemini Model Registry. Change it from the Model Registry, not Environment Variables.`);
+      }
       const trimmedVal = value.trim();
-
       process.env[trimmedKey] = trimmedVal;
       updateDotEnvFile(trimmedKey, trimmedVal);
-
-      // Persist directly to PostgreSQL database
       try {
-        await db
-          .insert(systemSettingsTable)
-          .values({ key: trimmedKey, value: trimmedVal, updatedAt: new Date() })
-          .onConflictDoUpdate({
-            target: systemSettingsTable.key,
-            set: { value: trimmedVal, updatedAt: new Date() },
-          });
+        await db.insert(systemSettingsTable).values({ key: trimmedKey, value: trimmedVal, updatedAt: new Date() }).onConflictDoUpdate({ target: systemSettingsTable.key, set: { value: trimmedVal, updatedAt: new Date() } });
       } catch (dbErr) {
         logger.warn({ key: trimmedKey, error: String(dbErr) }, "Failed to persist setting to systemSettingsTable (non-fatal)");
       }
-
       updatedKeys.push(trimmedKey);
-
-      // Hot-reload specific services
       if (trimmedKey === "GEMINI_API_KEY") {
         apiKeyPoolService.reloadFromEnv(trimmedVal);
         import("../app").then((m) => m.initOrReloadTelegramBot?.()).catch(() => {});
       } else if (trimmedKey === "KEY_ROTATION_MODE") {
-        if (trimmedVal === "round_robin" || trimmedVal === "failover") {
-          apiKeyPoolService.setRotationMode(trimmedVal);
-        }
+        if (trimmedVal === "round_robin" || trimmedVal === "failover") apiKeyPoolService.setRotationMode(trimmedVal);
       } else if (trimmedKey === "TELEGRAM_BOT_TOKEN" || trimmedKey === "TELEGRAM_WEBHOOK_URL" || trimmedKey === "TELEGRAM_WEBHOOK_SECRET") {
         import("../app").then((m) => m.initOrReloadTelegramBot?.()).catch(() => {});
       }
     }
-
-    res.json({
-      message: "Environment variables saved to database and runtime successfully",
-      updatedKeys,
-      timestamp: new Date().toISOString(),
-    });
+    res.json({ message: "Environment variables saved to database and runtime successfully", updatedKeys, timestamp: new Date().toISOString() });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error({ error: msg }, "Failed to update environment variables");
-    res.status(500).json({ error: msg });
+    res.status(400).json({ error: msg });
   }
 });
 
@@ -334,83 +317,55 @@ router.post("/env/test", async (req: Request, res: Response) => {
     res.status(400).json({ error: "Missing 'key' parameter" });
     return;
   }
-
   const testVal = (typeof value === "string" && value.trim()) ? value.trim() : process.env[key] || "";
-
   if (!testVal) {
     res.status(400).json({ ok: false, error: `No value set for ${key}` });
     return;
   }
-
   const startTime = Date.now();
-
   try {
     if (key === "GEMINI_API_KEY") {
       const result = await apiKeyPoolService.testRawKey(testVal);
-      res.json({
-        ok: result.valid,
-        latencyMs: Date.now() - startTime,
-        message: result.valid ? "Gemini API connection healthy!" : result.error,
-        details: result,
-      });
+      res.json({ ok: result.valid, latencyMs: Date.now() - startTime, message: result.valid ? "Gemini API connection healthy!" : result.error, details: result });
       return;
     }
-
+    if (key === "GEMINI_MODEL") {
+      const models = await modelRegistryService.list();
+      const target = models.find((m) => m.modelId === testVal);
+      if (!target) {
+        res.status(400).json({ ok: false, error: "Model is not registered. Add it through Model Registry first." });
+        return;
+      }
+      const result = await modelRegistryService.test(target.modelId);
+      res.json({ ...result, managedBy: "model-registry" });
+      return;
+    }
+    if (MODEL_REGISTRY_MANAGED_KEYS.has(key)) {
+      res.status(400).json({ ok: false, error: `${key} is managed by the Gemini Model Registry.` });
+      return;
+    }
     if (key === "TELEGRAM_BOT_TOKEN") {
       const response = await fetch(`https://api.telegram.org/bot${testVal}/getMe`);
       const data = (await response.json()) as { ok: boolean; result?: { username?: string; first_name?: string }; description?: string };
       const latencyMs = Date.now() - startTime;
-
-      if (data.ok && data.result) {
-        res.json({
-          ok: true,
-          latencyMs,
-          message: `Telegram Bot connected: @${data.result.username || "bot"} (${data.result.first_name || "Bot"})`,
-          details: data.result,
-        });
-      } else {
-        res.json({
-          ok: false,
-          latencyMs,
-          error: data.description || "Invalid Telegram Bot Token",
-        });
-      }
+      if (data.ok && data.result) res.json({ ok: true, latencyMs, message: `Telegram Bot connected: @${data.result.username || "bot"} (${data.result.first_name || "Bot"})`, details: data.result });
+      else res.json({ ok: false, latencyMs, error: data.description || "Invalid Telegram Bot Token" });
       return;
     }
-
     if (key === "DATABASE_URL") {
       try {
         const pool = getPool();
         const startDb = Date.now();
         const result = await pool.query("SELECT NOW() as now, current_database() as db_name;");
-        const latencyMs = Date.now() - startDb;
-        res.json({
-          ok: true,
-          latencyMs,
-          message: `PostgreSQL connection healthy! Database: ${result.rows[0]?.db_name || "active"}`,
-          details: result.rows[0],
-        });
+        res.json({ ok: true, latencyMs: Date.now() - startDb, message: `PostgreSQL connection healthy! Database: ${result.rows[0]?.db_name || "active"}`, details: result.rows[0] });
       } catch (dbErr) {
-        res.json({
-          ok: false,
-          latencyMs: Date.now() - startTime,
-          error: dbErr instanceof Error ? dbErr.message : String(dbErr),
-        });
+        res.json({ ok: false, latencyMs: Date.now() - startTime, error: dbErr instanceof Error ? dbErr.message : String(dbErr) });
       }
       return;
     }
-
-    res.json({
-      ok: true,
-      latencyMs: Date.now() - startTime,
-      message: `Variable '${key}' exists and is set (${testVal.length} chars)`,
-    });
+    res.json({ ok: true, latencyMs: Date.now() - startTime, message: `Variable '${key}' exists and is set (${testVal.length} chars)` });
   } catch (err) {
-    res.status(500).json({
-      ok: false,
-      latencyMs: Date.now() - startTime,
-      error: err instanceof Error ? err.message : String(err),
-    });
+    res.status(500).json({ ok: false, latencyMs: Date.now() - startTime, error: err instanceof Error ? err.message : String(err) });
   }
 });
 
@@ -422,17 +377,18 @@ router.delete("/env/:key", async (req: Request, res: Response) => {
     res.status(400).json({ error: "Missing key" });
     return;
   }
-
+  if (MODEL_REGISTRY_MANAGED_KEYS.has(key)) {
+    res.status(400).json({ error: `${key} is managed by the Gemini Model Registry. Remove or change it through Model Registry.` });
+    return;
+  }
   delete process.env[key];
   updateDotEnvFile(key, "");
-
   try {
     await db.delete(systemSettingsTable).where(eq(systemSettingsTable.key, key));
+    res.json({ message: `Environment variable '${key}' removed`, key });
   } catch (err) {
-    logger.warn({ key, error: String(err) }, "Could not remove setting from systemSettingsTable");
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
-
-  res.json({ message: `Variable ${key} removed from database and runtime process`, key });
 });
 
 export default router;
