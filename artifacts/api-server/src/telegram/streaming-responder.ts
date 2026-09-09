@@ -3,9 +3,19 @@ import { AdaptiveEngineService } from "../services/adaptive-engine.service";
 import { safeErrorMetadata } from "../utils/safe-error";
 import { formatTelegramMessage, stripTelegramHtml } from "../utils/telegram-formatter";
 import { logger } from "../lib/logger";
+import {
+  interactionPresentationService,
+  type InteractionRuntimeEvent,
+} from "./interaction-presentation.service";
 
 export interface StreamingResponderOptions {
+  /**
+   * Deprecated compatibility escape hatch. New callers should provide a
+   * presentationEvent so the visible placeholder is derived from runtime
+   * state rather than a hard-coded task label.
+   */
   placeholderText?: string;
+  presentationEvent?: InteractionRuntimeEvent;
 }
 
 const DEFAULT_STREAM_PLACEHOLDER = "…";
@@ -25,15 +35,15 @@ export class StreamingResponder {
     private readonly ctx: Context,
     options: StreamingResponderOptions = {},
   ) {
-    // The placeholder is intentionally neutral. Human-readable progress must
-    // come from an actual resolved/executing stage rather than a generic
-    // "thinking" claim that is inaccurate for some message types.
-    this.placeholderText = options.placeholderText ?? DEFAULT_STREAM_PLACEHOLDER;
+    const runtimePlaceholder = options.presentationEvent
+      ? interactionPresentationService.decide(options.presentationEvent).visibleProgressText
+      : undefined;
+
+    // Runtime presentation is authoritative. The legacy placeholder is retained
+    // only for backwards compatibility; the neutral fallback remains "…".
+    this.placeholderText = runtimePlaceholder ?? options.placeholderText ?? DEFAULT_STREAM_PLACEHOLDER;
   }
 
-  /**
-   * Sends the initial placeholder message that will be progressively updated.
-   */
   async init(): Promise<number | undefined> {
     try {
       this.streamStartTime = Date.now();
@@ -52,9 +62,6 @@ export class StreamingResponder {
     }
   }
 
-  /**
-   * Feeds accumulated token text into the dynamic adaptive streaming engine.
-   */
   async onChunk(accumulatedText: string): Promise<void> {
     if (this.isFinalized || !this.messageId) return;
 
@@ -63,7 +70,6 @@ export class StreamingResponder {
     const elapsedSinceStart = Math.max(1, (now - (this.streamStartTime || now)) / 1000);
     const velocityCharsPerSec = Math.round(accumulatedText.length / elapsedSinceStart);
 
-    // Compute dynamic adaptive throttle interval
     const dynamicIntervalMs = AdaptiveEngineService.computeAdaptiveStreamingInterval({
       characterLength: accumulatedText.length,
       velocityCharsPerSec,
@@ -86,9 +92,6 @@ export class StreamingResponder {
     }
   }
 
-  /**
-   * Finalizes the streaming response with semantic HTML-aware splitting and formatting.
-   */
   async finalize(fullText: string): Promise<void> {
     this.isFinalized = true;
     if (this.pendingTimer) {
@@ -101,11 +104,10 @@ export class StreamingResponder {
     const chunks = rawChunks.map((chunk, idx) => formatTelegramMessage(chunk, {
       telegramUserId: this.ctx.from?.id,
       chunkIndex: idx,
-      source: "StreamingResponder.finalize"
+      source: "StreamingResponder.finalize",
     }));
 
     if (!this.messageId) {
-      // If initial placeholder failed, send standard split messages
       for (const chunk of chunks) {
         await this.ctx.reply(chunk, { parse_mode: "HTML" }).catch(async () => {
           await this.ctx.reply(stripTelegramHtml(chunk));
@@ -124,7 +126,6 @@ export class StreamingResponder {
         { parse_mode: "HTML" },
       );
     } catch {
-      // Fallback without HTML if parsing fails
       try {
         await this.ctx.api.editMessageText(
           this.ctx.chat!.id,
@@ -136,7 +137,6 @@ export class StreamingResponder {
       }
     }
 
-    // If response was larger than single Telegram message, send remaining semantic chunks
     for (let i = 1; i < chunks.length; i++) {
       const chunk = chunks[i];
       await this.ctx.reply(chunk, { parse_mode: "HTML" }).catch(async () => {
@@ -151,7 +151,6 @@ export class StreamingResponder {
     this.isFlushInProgress = true;
     const startCall = Date.now();
 
-    // Prepare adaptive preview snippet
     const rawSnippet = isFinal
       ? this.latestText
       : `${this.latestText.slice(0, 3800)} ▍`;
@@ -164,7 +163,7 @@ export class StreamingResponder {
     const formattedSnippet = formatTelegramMessage(rawSnippet, {
       telegramUserId: this.ctx.from?.id,
       source: `StreamingResponder.flushEdit(isFinal=${isFinal})`,
-      isStreaming: !isFinal
+      isStreaming: !isFinal,
     });
 
     try {
@@ -174,7 +173,7 @@ export class StreamingResponder {
         formattedSnippet,
         { parse_mode: "HTML" },
       );
-    } catch (err: unknown) {
+    } catch (err) {
       const errMsg = String(err);
       if (
         errMsg.includes("message is not modified") ||
@@ -182,7 +181,6 @@ export class StreamingResponder {
       ) {
         // Safe no-op
       } else {
-        // If HTML fails during mid-stream unclosed tags, retry with stripped plain text
         try {
           await this.ctx.api.editMessageText(
             this.ctx.chat.id,
