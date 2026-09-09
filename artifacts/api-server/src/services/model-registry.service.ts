@@ -37,18 +37,21 @@ function normalizeStoredModels(value: unknown): ManagedModel[] {
   if (!Array.isArray(value)) return [];
   return value
     .filter((item): item is ManagedModel => Boolean(item && typeof item === "object" && typeof (item as ManagedModel).modelId === "string"))
-    .map((item) => ({
-      ...item,
-      id: item.id || makeId(item.modelId),
-      provider: "gemini",
-      name: item.name || item.modelId,
-      roles: unique((Array.isArray(item.roles) ? item.roles : []).filter((role): role is ModelRole => ROLES.includes(role))),
-      enabled: item.enabled !== false,
-      priority: Number.isFinite(item.priority) ? item.priority : 0,
-      capabilities: unique(Array.isArray(item.capabilities) ? item.capabilities.filter((v): v is string => typeof v === "string") : ["generate"]),
-      createdAt: item.createdAt || new Date().toISOString(),
-      updatedAt: item.updatedAt || new Date().toISOString(),
-    }));
+    .map((item) => {
+      const roles = unique((Array.isArray(item.roles) ? item.roles : []).filter((role): role is ModelRole => ROLES.includes(role)));
+      return {
+        ...item,
+        id: item.id || makeId(item.modelId),
+        provider: "gemini",
+        name: item.name || item.modelId,
+        roles: roles.includes("embedding") ? roles.filter((role) => role !== "primary") : roles,
+        enabled: item.enabled !== false,
+        priority: Number.isFinite(item.priority) ? item.priority : 0,
+        capabilities: unique(Array.isArray(item.capabilities) ? item.capabilities.filter((v): v is string => typeof v === "string") : ["generate"]),
+        createdAt: item.createdAt || new Date().toISOString(),
+        updatedAt: item.updatedAt || new Date().toISOString(),
+      };
+    });
 }
 
 export class ModelRegistryService {
@@ -76,7 +79,7 @@ export class ModelRegistryService {
         modelId === process.env.GEMINI_MODEL_REASONING?.trim() ? "reasoning" : undefined,
         modelId === process.env.GEMINI_MODEL_EXTRACTION?.trim() ? "extraction" : undefined,
         modelId === process.env.GEMINI_EMBEDDING_MODEL?.trim() ? "embedding" : undefined,
-      ].filter((v): v is ModelRole => typeof v === "string")),
+      ].filter((v): v is ModelRole => typeof v === "string")).filter((role) => !(modelId === process.env.GEMINI_EMBEDDING_MODEL?.trim() && role === "primary")),
       enabled: true, priority,
       capabilities: modelId === process.env.GEMINI_EMBEDDING_MODEL?.trim() ? ["embedding"] : ["generate"],
       createdAt: now, updatedAt: now,
@@ -108,10 +111,11 @@ export class ModelRegistryService {
   private ensureSinglePrimary(models: ManagedModel[]): ManagedModel[] {
     let foundPrimary = false;
     return models.map((model) => {
-      if (!model.roles.includes("primary")) return model;
-      if (foundPrimary || !model.enabled) return { ...model, roles: model.roles.filter((role) => role !== "primary") };
+      const cleanRoles = model.roles.filter((role) => !(model.roles.includes("embedding") && role === "primary"));
+      if (!cleanRoles.includes("primary")) return { ...model, roles: cleanRoles };
+      if (foundPrimary || !model.enabled) return { ...model, roles: cleanRoles.filter((role) => role !== "primary") };
       foundPrimary = true;
-      return model;
+      return { ...model, roles: cleanRoles };
     });
   }
 
@@ -129,14 +133,14 @@ export class ModelRegistryService {
   }
 
   private syncRuntime(models: ManagedModel[]): void {
-    const enabled = models.filter((m) => m.enabled && m.provider === "gemini");
+    const enabled = models.filter((m) => m.enabled && m.provider === "gemini" && !m.roles.includes("embedding"));
     const first = (role: ModelRole) => enabled.filter((m) => m.roles.includes(role)).sort((a, b) => a.priority - b.priority)[0];
     const primary = first("primary") || enabled[0];
     const fast = first("fast");
     const reasoning = first("reasoning");
     const extraction = first("extraction");
-    const embedding = first("embedding");
-    const executable = enabled.filter((m) => !m.roles.includes("embedding"));
+    const embedding = models.filter((m) => m.enabled && m.provider === "gemini" && m.roles.includes("embedding")).sort((a, b) => a.priority - b.priority)[0];
+    const executable = enabled;
 
     process.env.GEMINI_MODEL = primary?.modelId || "";
     process.env.GEMINI_MODEL_POOL = executable.map((m) => m.modelId).join(",");
@@ -160,14 +164,15 @@ export class ModelRegistryService {
     const now = new Date().toISOString();
     const hasPrimary = models.some((m) => m.enabled && m.roles.includes("primary"));
     const requestedRoles = unique((input.roles || []).filter((role): role is ModelRole => ROLES.includes(role)));
-    if (!hasPrimary) requestedRoles.push("primary");
+    if (!hasPrimary && !requestedRoles.includes("embedding")) requestedRoles.push("primary");
+    if (requestedRoles.includes("primary") && requestedRoles.includes("embedding")) throw new Error("Embedding models cannot be primary.");
     const model: ManagedModel = {
       id: makeId(modelId), provider: "gemini", modelId,
       name: input.name?.trim() || modelId,
       roles: unique(requestedRoles),
       enabled: true,
       priority: Number.isFinite(input.priority) ? Number(input.priority) : models.length,
-      capabilities: unique(input.capabilities?.length ? input.capabilities : ["generate"]),
+      capabilities: unique(input.capabilities?.length ? input.capabilities : (requestedRoles.includes("embedding") ? ["embedding"] : ["generate"])),
       createdAt: now, updatedAt: now,
     };
     const base = model.roles.includes("primary")
@@ -187,6 +192,7 @@ export class ModelRegistryService {
     if (!nextModelId) throw new Error("modelId is required");
     if (models.some((m, i) => i !== index && m.modelId === nextModelId)) throw new Error(`Model ${nextModelId} is already registered.`);
     const roles = patch.roles ? unique(patch.roles.filter((role): role is ModelRole => ROLES.includes(role))) : current.roles;
+    if (roles.includes("primary") && roles.includes("embedding")) throw new Error("Embedding models cannot be primary.");
     if (roles.includes("primary") && patch.enabled === false) throw new Error("The primary model must remain enabled.");
     if (current.roles.includes("primary") && !roles.includes("primary")) throw new Error("Select another primary model before removing the primary role.");
     if (current.roles.includes("primary") && patch.enabled === false) throw new Error("Select another primary model before disabling the current primary.");
@@ -210,6 +216,7 @@ export class ModelRegistryService {
     const target = models.find((m) => m.id === id);
     if (!target) throw new Error("Model not found");
     if (!target.enabled) throw new Error("Enable the model before making it primary.");
+    if (target.roles.includes("embedding")) throw new Error("Embedding models cannot be primary.");
     const next = models.map((m) => ({ ...m, roles: m.id === id ? unique([...m.roles.filter((r) => r !== "primary"), "primary"]) : m.roles.filter((r) => r !== "primary") }));
     await this.persist(next);
     return next.find((m) => m.id === id)!;
