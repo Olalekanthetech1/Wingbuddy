@@ -20,6 +20,8 @@ import { splitTelegramMessage } from "../utils/split-message";
 import { formatTelegramMessage, stripTelegramHtml } from "../utils/telegram-formatter";
 import { safeErrorMetadata } from "../utils/safe-error";
 import { startTypingIndicator } from "./typing-indicator";
+import { interactionPresentationService } from "./interaction-presentation.service";
+import { adaptiveStartExperienceService } from "./adaptive-start-experience.service";
 import {
   PERSONALITIES,
   PERSONALITY_KEYS,
@@ -67,16 +69,12 @@ import {
 } from "../services/reminder.service";
 import { StreamingResponder } from "./streaming-responder";
 
-
 const PRIVATE_MESSAGE = "Sorry, this bot is currently private.";
 const GENERIC_ERROR_MESSAGE =
   "I’m sorry, I couldn’t complete that request right now. Please try again in a moment.";
 
 function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 export interface TelegramBotRuntime {
@@ -137,9 +135,7 @@ export function createTelegramBot(): TelegramBotRuntime {
     );
   };
 
-  const requireAuthorized = async (
-    ctx: Context,
-  ): Promise<boolean> => {
+  const requireAuthorized = async (ctx: Context): Promise<boolean> => {
     if (!ctx.from || !authorized(ctx.from.id)) {
       logger.warn(
         { stage: "authorization", telegramUserId: ctx.from?.id },
@@ -151,29 +147,21 @@ export function createTelegramBot(): TelegramBotRuntime {
     return true;
   };
 
-  const personalityMenu = async (
-    ctx: Context,
-  ): Promise<void> => {
+  const personalityMenu = async (ctx: Context): Promise<void> => {
     if (!ctx.from) return;
     await upsertUser(ctx);
     const current = await conversations.getUserPersonality(ctx.from.id);
-    await ctx.reply(personalityText(current), {
-      reply_markup: personalityKeyboard(current),
-    });
+    await ctx.reply(personalityText(current), { reply_markup: personalityKeyboard(current) });
   };
 
-  const modeMenu = async (
-    ctx: Context,
-  ): Promise<void> => {
+  const modeMenu = async (ctx: Context): Promise<void> => {
     if (!ctx.from) return;
     await upsertUser(ctx);
     const current = await conversations.getUserMode(ctx.from.id);
     await ctx.reply(modeText(current), { reply_markup: modeKeyboard(current) });
   };
 
-  const clearConversation = async (
-    ctx: Context,
-  ): Promise<void> => {
+  const clearConversation = async (ctx: Context): Promise<void> => {
     if (!ctx.from || !ctx.chat) return;
     await conversations.clearConversation(ctx.from.id, ctx.chat.id);
     rateLimiter.clear(ctx.from.id);
@@ -185,10 +173,42 @@ export function createTelegramBot(): TelegramBotRuntime {
   bot.command("start", async (ctx) => {
     if (!(await requireAuthorized(ctx))) return;
     await upsertUser(ctx);
-    await ctx.reply(
-      "Hello! I’m your personal AI assistant. I’m playful and chatty by default, and you can change both my tone and task mode from the menu.\n\nSend me a message anytime—I’ll keep normal conversation working without requiring a button.",
-      { reply_markup: mainMenuKeyboard() },
-    );
+    if (!ctx.from) return;
+
+    const userContext = await conversations.getUserWithFullContext(ctx.from.id);
+    const rawPersonality = (userContext?.personality as PersonalityKey) || "playful";
+    const rawMode = (userContext?.mode as ModeKey) || "general";
+    const personality = isPersonalityKey(rawPersonality) ? rawPersonality : "playful";
+    const mode = isModeKey(rawMode) ? rawMode : "general";
+    const activeTasks = await taskService.getActiveTasksForUser(ctx.from.id);
+    const activeReminders = await reminderService.getActiveUserReminders(ctx.from.id);
+    const sessions = userContext?.conversations?.length ?? 0;
+    const isReturningUser = sessions > 0 || (userContext?.memories?.length ?? 0) > 0;
+    const capabilities = [
+      "Context-aware conversation",
+      "Long-term memory",
+      "Task workflows",
+      "Reminders",
+      "Image generation",
+      "Video generation",
+      ...(getExecutionConfig().enabled ? ["Autonomous tool execution"] : []),
+    ];
+
+    const welcome = adaptiveStartExperienceService.build({
+      displayName: ctx.from.first_name || ctx.from.username || "there",
+      isReturningUser,
+      mode,
+      personality,
+      activeTaskCount: activeTasks.length,
+      activeReminderCount: activeReminders.length,
+      activeSessionCount: sessions,
+      capabilities,
+    });
+
+    await ctx.reply(welcome, {
+      parse_mode: "HTML",
+      reply_markup: mainMenuKeyboard(),
+    });
   });
 
   bot.command("help", async (ctx) => {
@@ -212,7 +232,6 @@ export function createTelegramBot(): TelegramBotRuntime {
     );
   });
 
-
   bot.command("reset", async (ctx) => {
     if (!(await requireAuthorized(ctx))) return;
     if (!ctx.from || !ctx.chat) return;
@@ -222,9 +241,7 @@ export function createTelegramBot(): TelegramBotRuntime {
       const summary = await gemini.summarizeSession(
         recent.map((m) => ({ role: m.role as "user" | "model", content: m.content })),
       );
-      if (summary) {
-        await conversations.setSessionSummary(conversationId, summary);
-      }
+      if (summary) await conversations.setSessionSummary(conversationId, summary);
     }
     await conversations.resetConversation(ctx.from.id, ctx.chat.id);
     rateLimiter.clear(ctx.from.id);
@@ -238,9 +255,7 @@ export function createTelegramBot(): TelegramBotRuntime {
     if (!ctx.from) return;
     await upsertUser(ctx);
     const memories = await conversations.getUserMemories(ctx.from.id);
-    await ctx.reply(formatMemoriesMenuText(memories), {
-      reply_markup: memoriesKeyboard(memories),
-    });
+    await ctx.reply(formatMemoriesMenuText(memories), { reply_markup: memoriesKeyboard(memories) });
   });
 
   bot.command("remember", async (ctx) => {
@@ -249,16 +264,13 @@ export function createTelegramBot(): TelegramBotRuntime {
     await upsertUser(ctx);
     const rawText = ctx.match?.trim();
     if (!rawText) {
-      await ctx.reply(
-        "Please provide what you want me to remember.\n\nExamples:\n/remember stack: TypeScript, PostgreSQL\n/remember I prefer concise bullet points",
-      );
+      await ctx.reply("Please provide what you want me to remember.\n\nExamples:\n/remember stack: TypeScript, PostgreSQL\n/remember I prefer concise bullet points");
       return;
     }
 
     let key: string;
     let content: string;
     let category = "fact";
-
     if (rawText.includes(":")) {
       const parts = rawText.split(":");
       key = parts[0].trim().toLowerCase().replace(/\s+/g, "_");
@@ -268,9 +280,7 @@ export function createTelegramBot(): TelegramBotRuntime {
       const words = sanitized.split(/\s+/).slice(0, 3);
       key = words.join("_") || "user_fact";
       content = rawText;
-      if (rawText.toLowerCase().includes("prefer") || rawText.toLowerCase().includes("like")) {
-        category = "preference";
-      }
+      if (/\b(prefer|like)\b/i.test(rawText)) category = "preference";
     }
 
     let embedding: number[] | undefined;
@@ -295,10 +305,8 @@ export function createTelegramBot(): TelegramBotRuntime {
     if (!(await requireAuthorized(ctx))) return;
     if (!ctx.from) return;
     await upsertUser(ctx);
-
     const activeTasks = await taskService.getActiveTasksForUser(ctx.from.id);
     let messageText = "<b>🎯 Active Tasks & Workflows</b>\n\n";
-
     if (activeTasks.length === 0) {
       messageText += "No active tasks currently running.\nTo start a task, say e.g.:\n<i>'Start a task to write a market analysis report'</i>";
     } else {
@@ -310,17 +318,11 @@ export function createTelegramBot(): TelegramBotRuntime {
           await chatDatabaseService.updateTask(t.id, { currentStep: derived.currentStep });
           t.currentStep = derived.currentStep;
         }
-        taskLines.push(
-          `• <b>#${t.id}</b>: ${escapeHtml(t.title)}\n  Status: <code>${t.status.toUpperCase()}</code> | Step ${t.currentStep}`,
-        );
+        taskLines.push(`• <b>#${t.id}</b>: ${escapeHtml(t.title)}\n  Status: <code>${t.status.toUpperCase()}</code> | Step ${t.currentStep}`);
       }
       messageText += taskLines.join("\n\n");
     }
-
-    await ctx.reply(messageText, {
-      parse_mode: "HTML",
-      reply_markup: tasksKeyboard(activeTasks),
-    });
+    await ctx.reply(messageText, { parse_mode: "HTML", reply_markup: tasksKeyboard(activeTasks) });
   });
 
   bot.callbackQuery(/^task:(view|cancel|continue):(\d+)$/, async (ctx) => {
@@ -328,11 +330,9 @@ export function createTelegramBot(): TelegramBotRuntime {
       await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
       return;
     }
-
     const action = ctx.match[1];
     const taskId = parseInt(ctx.match[2], 10);
     await ctx.answerCallbackQuery();
-
     if (action === "cancel") {
       await taskService.updateTaskStatus(taskId, "cancelled");
       await ctx.reply(`❌ Task #${taskId} has been cancelled.`);
@@ -340,10 +340,7 @@ export function createTelegramBot(): TelegramBotRuntime {
       const activeTasks = await taskService.getActiveTasksForUser(ctx.from.id);
       const target = activeTasks.find((t) => t.id === taskId);
       if (target) {
-        await ctx.reply(
-          `▶️ <b>Task #${target.id}: ${escapeHtml(target.title)}</b>\nGoal: ${escapeHtml(target.goal)}\nStatus: <code>${target.status.toUpperCase()}</code> | Current Step: ${target.currentStep}`,
-          { parse_mode: "HTML" },
-        );
+        await ctx.reply(`▶️ <b>Task #${target.id}: ${escapeHtml(target.title)}</b>\nGoal: ${escapeHtml(target.goal)}\nStatus: <code>${target.status.toUpperCase()}</code> | Current Step: ${target.currentStep}`, { parse_mode: "HTML" });
       }
     }
   });
@@ -353,10 +350,7 @@ export function createTelegramBot(): TelegramBotRuntime {
     if (!ctx.from) return;
     await upsertUser(ctx);
     const active = await reminderService.getActiveUserReminders(ctx.from.id);
-    await ctx.reply(formatRemindersMenuText(active), {
-      parse_mode: "Markdown",
-      reply_markup: remindersKeyboard(active),
-    });
+    await ctx.reply(formatRemindersMenuText(active), { parse_mode: "Markdown", reply_markup: remindersKeyboard(active) });
   });
 
   bot.command("remind", async (ctx) => {
@@ -365,315 +359,145 @@ export function createTelegramBot(): TelegramBotRuntime {
     await upsertUser(ctx);
     const rawInput = ctx.match?.trim();
     if (!rawInput) {
-      await ctx.reply(
-        "Please provide a time and task description.\n\nExamples:\n• /remind in 15 mins to check deploy\n• /remind tomorrow at 9am standup meeting\n• /remind tonight at 8pm call team",
-      );
+      await ctx.reply("Please provide a time and task description.\n\nExamples:\n• /remind in 15 mins to check deploy\n• /remind tomorrow at 9am standup meeting\n• /remind tonight at 8pm call team");
       return;
     }
     const parsed = ReminderService.parseNaturalReminder(`remind me ${rawInput}`);
     if (!parsed) {
-      await ctx.reply(
-        "Could not parse that reminder time.\nTry formats like:\n• /remind in 20 minutes <task>\n• /remind tomorrow at 10am <task>\n• /remind at 4:30 pm <task>",
-      );
+      await ctx.reply("Could not parse that reminder time.\nTry formats like:\n• /remind in 20 minutes <task>\n• /remind tomorrow at 10am <task>\n• /remind at 4:30 pm <task>");
       return;
     }
-    const created = await reminderService.createReminder({
-      telegramUserId: ctx.from.id,
-      chatId: ctx.chat.id,
-      prompt: parsed.prompt,
-      dueAt: parsed.dueAt,
+    const created = await reminderService.createReminder({ telegramUserId: ctx.from.id, chatId: ctx.chat.id, prompt: parsed.prompt, dueAt: parsed.dueAt });
+    await ctx.reply(`⏰ <b>Reminder scheduled!</b>\n\n📌 <b>Task:</b> ${escapeHtml(parsed.prompt)}\n🕒 <b>Due:</b> ${parsed.humanReadableTime}`, {
+      parse_mode: "HTML",
+      reply_markup: new InlineKeyboard().text("❌ Cancel", `rem_cancel:${created.id}`),
     });
-    await ctx.reply(
-      `⏰ <b>Reminder scheduled!</b>\n\n📌 <b>Task:</b> ${escapeHtml(parsed.prompt)}\n🕒 <b>Due:</b> ${parsed.humanReadableTime}`,
-      {
-        parse_mode: "HTML",
-        reply_markup: new InlineKeyboard().text("❌ Cancel", `rem_cancel:${created.id}`),
-      },
-    );
   });
 
   bot.command("search", async (ctx) => {
     if (!(await requireAuthorized(ctx))) return;
-    if (!ctx.from) return;
+    if (!ctx.from || !ctx.chat) return;
     await upsertUser(ctx);
     const query = ctx.match?.trim();
     if (!query) {
-      await ctx.reply(
-        "Please provide a search topic or question.\nExample: /search Google I/O latest announcements",
-      );
+      await ctx.reply("Please provide a search topic or question.\nExample: /search Google I/O latest announcements");
       return;
     }
-    const stopTyping = startTypingIndicator(ctx);
+    const stopTyping = startTypingIndicator(ctx, { state: "searching", operationLabel: "web search", userFacingProgress: false });
     try {
-      const globalContextData = await globalContext.getContextForCompletion({
-        telegramUserId: ctx.from.id,
-        chatId: ctx.chat.id,
-        userProfile: {
-          id: ctx.from.id,
-          username: ctx.from.username,
-          firstName: ctx.from.first_name,
-          lastName: ctx.from.last_name,
-        },
-        maxHistoryMessages: config.maxHistoryMessages,
-        message: query,
-        geminiService: gemini,
-      });
-
-      const reply = await gemini.generateReply(
-        globalContextData.recentHistory,
-        query,
-        {
-          personalityInstruction: globalContextData.userProfile.personalityInstruction,
-          modeInstruction: MODES.research.instruction,
-          memoryInstruction: globalContextData.promptInstruction || undefined,
-        },
-        { enableSearch: true },
-      );
-
+      const globalContextData = await globalContext.getContextForCompletion({ telegramUserId: ctx.from.id, chatId: ctx.chat.id, userProfile: { id: ctx.from.id, username: ctx.from.username, firstName: ctx.from.first_name, lastName: ctx.from.last_name }, maxHistoryMessages: config.maxHistoryMessages, message: query, geminiService: gemini });
+      const reply = await gemini.generateReply(globalContextData.recentHistory, query, {
+        personalityInstruction: globalContextData.userProfile.personalityInstruction,
+        modeInstruction: MODES.research.instruction,
+        memoryInstruction: globalContextData.promptInstruction || undefined,
+      }, { enableSearch: true });
       await conversations.addMessage(globalContextData.conversationId, "user", `/search ${query}`);
       await conversations.addMessage(globalContextData.conversationId, "model", reply);
-
-      const chunks = splitTelegramMessage(reply).map((chunk, idx) => formatTelegramMessage(chunk, {
-        telegramUserId: ctx.from?.id,
-        chunkIndex: idx,
-        source: "bot.search_command"
-      }));
-      for (const [index, chunk] of chunks.entries()) {
-        await ctx.reply(chunk, {
-          parse_mode: "HTML",
-          reply_markup: index === chunks.length - 1 ? feedbackKeyboard() : undefined,
-        }).catch(async () => {
-          await ctx.reply(stripTelegramHtml(chunk), {
-            reply_markup: index === chunks.length - 1 ? feedbackKeyboard() : undefined,
-          });
-        });
-      }
+      const chunks = splitTelegramMessage(reply).map((chunk, idx) => formatTelegramMessage(chunk, { telegramUserId: ctx.from?.id, chunkIndex: idx, source: "bot.search_command" }));
+      for (const [index, chunk] of chunks.entries()) await ctx.reply(chunk, { parse_mode: "HTML", reply_markup: index === chunks.length - 1 ? feedbackKeyboard() : undefined }).catch(async () => ctx.reply(stripTelegramHtml(chunk), { reply_markup: index === chunks.length - 1 ? feedbackKeyboard() : undefined }));
     } catch (error) {
       logger.error({ stage: "search_command", error: safeErrorMetadata(error) }, "Search failed");
       await ctx.reply(GENERIC_ERROR_MESSAGE);
-    } finally {
-      stopTyping();
-    }
+    } finally { stopTyping(); }
   });
 
   bot.command("think", async (ctx) => {
     if (!(await requireAuthorized(ctx))) return;
-    if (!ctx.from) return;
+    if (!ctx.from || !ctx.chat) return;
     await upsertUser(ctx);
     const query = ctx.match?.trim();
     if (!query) {
-      await ctx.reply(
-        "Please provide a problem to reason through.\nExample: /think Design a distributed idempotency lock in Redis",
-      );
+      await ctx.reply("Please provide a problem to reason through.\nExample: /think Design a distributed idempotency lock in Redis");
       return;
     }
-    const stopTyping = startTypingIndicator(ctx);
+    const stopTyping = startTypingIndicator(ctx, { state: "reasoning", operationLabel: "reasoning", userFacingProgress: false });
     try {
-      const globalContextData = await globalContext.getContextForCompletion({
-        telegramUserId: ctx.from.id,
-        chatId: ctx.chat.id,
-        userProfile: {
-          id: ctx.from.id,
-          username: ctx.from.username,
-          firstName: ctx.from.first_name,
-          lastName: ctx.from.last_name,
-        },
-        maxHistoryMessages: config.maxHistoryMessages,
-        message: query,
-        geminiService: gemini,
-      });
-
-      const reply = await gemini.generateReply(
-        globalContextData.recentHistory,
-        query,
-        {
-          personalityInstruction: globalContextData.userProfile.personalityInstruction,
-          modeInstruction: MODES.reasoning.instruction,
-          memoryInstruction: globalContextData.promptInstruction || undefined,
-        },
-        { thinkingLevel: "LOW" },
-      );
-
+      const globalContextData = await globalContext.getContextForCompletion({ telegramUserId: ctx.from.id, chatId: ctx.chat.id, userProfile: { id: ctx.from.id, username: ctx.from.username, firstName: ctx.from.first_name, lastName: ctx.from.last_name }, maxHistoryMessages: config.maxHistoryMessages, message: query, geminiService: gemini });
+      const reply = await gemini.generateReply(globalContextData.recentHistory, query, {
+        personalityInstruction: globalContextData.userProfile.personalityInstruction,
+        modeInstruction: MODES.reasoning.instruction,
+        memoryInstruction: globalContextData.promptInstruction || undefined,
+      }, { thinkingLevel: "LOW" });
       await conversations.addMessage(globalContextData.conversationId, "user", `/think ${query}`);
       await conversations.addMessage(globalContextData.conversationId, "model", reply);
-
-      const chunks = splitTelegramMessage(reply).map((chunk, idx) => formatTelegramMessage(chunk, {
-        telegramUserId: ctx.from?.id,
-        chunkIndex: idx,
-        source: "bot.think_command"
-      }));
-      for (const [index, chunk] of chunks.entries()) {
-        await ctx.reply(chunk, {
-          parse_mode: "HTML",
-          reply_markup: index === chunks.length - 1 ? feedbackKeyboard() : undefined,
-        }).catch(async () => {
-          await ctx.reply(stripTelegramHtml(chunk), {
-            reply_markup: index === chunks.length - 1 ? feedbackKeyboard() : undefined,
-          });
-        });
-      }
+      const chunks = splitTelegramMessage(reply).map((chunk, idx) => formatTelegramMessage(chunk, { telegramUserId: ctx.from?.id, chunkIndex: idx, source: "bot.think_command" }));
+      for (const [index, chunk] of chunks.entries()) await ctx.reply(chunk, { parse_mode: "HTML", reply_markup: index === chunks.length - 1 ? feedbackKeyboard() : undefined }).catch(async () => ctx.reply(stripTelegramHtml(chunk), { reply_markup: index === chunks.length - 1 ? feedbackKeyboard() : undefined }));
     } catch (error) {
       logger.error({ stage: "think_command", error: safeErrorMetadata(error) }, "Thinking mode failed");
       await ctx.reply(GENERIC_ERROR_MESSAGE);
-    } finally {
-      stopTyping();
-    }
+    } finally { stopTyping(); }
   });
 
   bot.command(["image", "draw", "img"], async (ctx) => {
     if (!(await requireAuthorized(ctx))) return;
-    if (!ctx.from) return;
+    if (!ctx.from || !ctx.chat) return;
     await upsertUser(ctx);
     const rawPrompt = ctx.match?.trim();
     if (!rawPrompt) {
-      await ctx.reply(
-        "Please provide a prompt for the image!\nExample: /image a cybernetic tiger walking through rainy neon Tokyo, 8k render",
-      );
+      await ctx.reply("Please provide a prompt for the image!\nExample: /image a cybernetic tiger walking through rainy neon Tokyo, 8k render");
       return;
     }
-
     if (!await rateLimiter.consumeAsync(ctx.from.id)) {
       await ctx.reply("You’re sending requests a little too quickly. Please wait a moment and try again.");
       return;
     }
-
-    const stopTyping = startTypingIndicator(ctx);
-    await ctx.api.sendChatAction(ctx.chat.id, "upload_photo").catch(() => {});
+    const stopPresence = startTypingIndicator(ctx, { state: "generating", toolName: "image_generation", operationLabel: "image generation", chatAction: "upload_photo", userFacingProgress: false });
     try {
       const result = await ImageGenerationService.generate(rawPrompt, gemini);
-
       const conversationId = await conversations.getOrCreateConversation(ctx.from.id, ctx.chat.id);
       await conversations.addMessage(conversationId, "user", `/image ${rawPrompt}`);
-      await conversations.addMessage(
-        conversationId,
-        "model",
-        `[Generated Image for: "${rawPrompt}"] Enhanced: "${result.enhancedPrompt}"`,
-      );
-
+      await conversations.addMessage(conversationId, "model", `[Generated Image for: "${rawPrompt}"] Enhanced: "${result.enhancedPrompt}"`);
       const imageBadge = result.provider === "huggingface" ? "<i>Engine: 🤗 Hugging Face (FLUX.1)</i>" : "<i>Engine: 🌐 Free Community (FLUX.1)</i>";
-      const caption = [
-        `<b>🎨 Prompt:</b> ${escapeHtml(result.originalPrompt)}`,
-        result.enhancedPrompt.toLowerCase() !== result.originalPrompt.toLowerCase()
-          ? `<i>✨ Gemini Enhanced:</i> ${escapeHtml(result.enhancedPrompt)}`
-          : null,
-        imageBadge,
-      ]
-        .filter(Boolean)
-        .join("\n\n");
-
+      const caption = [`<b>🎨 Prompt:</b> ${escapeHtml(result.originalPrompt)}`, result.enhancedPrompt.toLowerCase() !== result.originalPrompt.toLowerCase() ? `<i>✨ Gemini Enhanced:</i> ${escapeHtml(result.enhancedPrompt)}` : null, imageBadge].filter(Boolean).join("\n\n");
       const safeCaption = caption.length > 1000 ? caption.slice(0, 995) + "..." : caption;
-
-      if (!result?.buffer || !Buffer.isBuffer(result.buffer) || result.buffer.length < 500) {
-        throw new Error("Image generation did not produce a valid image buffer");
-      }
-
-      await ctx.replyWithPhoto(
-        new InputFile(result.buffer, "image.jpg"),
-        {
-          caption: safeCaption,
-          parse_mode: "HTML",
-          reply_markup: feedbackKeyboard(),
-        },
-      );
+      if (!result?.buffer || !Buffer.isBuffer(result.buffer) || result.buffer.length < 500) throw new Error("Image generation did not produce a valid image buffer");
+      await ctx.replyWithPhoto(new InputFile(result.buffer, "image.jpg"), { caption: safeCaption, parse_mode: "HTML", reply_markup: feedbackKeyboard() });
     } catch (error) {
       logger.error({ stage: "image_generation", error: safeErrorMetadata(error) }, "Image generation failed");
       await ctx.reply("Sorry, I encountered an issue generating that image. Please try again or rephrase your prompt.");
-    } finally {
-      stopTyping();
-    }
+    } finally { stopPresence(); }
   });
 
   bot.command(["video", "vid", "clip"], async (ctx) => {
     if (!(await requireAuthorized(ctx))) return;
-    if (!ctx.from) return;
+    if (!ctx.from || !ctx.chat) return;
     await upsertUser(ctx);
     const rawPrompt = ctx.match?.trim();
     if (!rawPrompt) {
-      await ctx.reply(
-        "Please provide a prompt for the video!\nExample: /video a golden retriever running along a sunny beach, slow motion cinematography",
-      );
+      await ctx.reply("Please provide a prompt for the video!\nExample: /video a golden retriever running along a sunny beach, slow motion cinematography");
       return;
     }
-
     if (!await rateLimiter.consumeAsync(ctx.from.id)) {
-      await ctx.reply("You’re sending messages a little too quickly. Please wait a moment and try again.");
+      await ctx.reply("You’re sending requests a little too quickly. Please wait a moment and try again.");
       return;
     }
-
-    const stopTyping = startTypingIndicator(ctx);
-    await ctx.api.sendChatAction(ctx.chat.id, "upload_video").catch(() => {});
-    const progressMsg = await ctx.reply("🎬 Rendering your visual clip... this usually takes ~15-30s.").catch(() => null);
-
+    const stopPresence = startTypingIndicator(ctx, { state: "executing_tool", toolName: "video_generation", operationLabel: "video generation", chatAction: "upload_video", expectsLongRunning: true, userFacingProgress: false });
+    let progressMsg: number | undefined;
     try {
+      progressMsg = await interactionPresentationService.renderProgress(ctx, { state: "executing_tool", toolName: "video_generation", operationLabel: "video generation", chatAction: "upload_video", expectsLongRunning: true, userFacingProgress: true, elapsedMs: 0 });
+      const startedAt = Date.now();
       const result = await VideoGenerationService.generate(rawPrompt, gemini);
-
       const conversationId = await conversations.getOrCreateConversation(ctx.from.id, ctx.chat.id);
       await conversations.addMessage(conversationId, "user", `/video ${rawPrompt}`);
-      await conversations.addMessage(
-        conversationId,
-        "model",
-        `[Generated Visual (${result.provider}) for: "${rawPrompt}"] Enhanced: "${result.enhancedPrompt}"`,
-      );
-
+      await conversations.addMessage(conversationId, "model", `[Generated Visual (${result.provider}) for: "${rawPrompt}"] Enhanced: "${result.enhancedPrompt}"`);
       const providerBadge = result.provider === "huggingface" ? "🤗 Hugging Face" : "🌐 Free Community";
-      const caption = [
-        `<b>🎬 Prompt:</b> ${escapeHtml(result.originalPrompt)}`,
-        result.enhancedPrompt.toLowerCase() !== result.originalPrompt.toLowerCase()
-          ? `<i>✨ Gemini Enhanced:</i> ${escapeHtml(result.enhancedPrompt)}`
-          : null,
-        `<i>Engine: ${providerBadge}</i>`,
-      ]
-        .filter(Boolean)
-        .join("\n\n");
-
+      const caption = [`<b>🎬 Prompt:</b> ${escapeHtml(result.originalPrompt)}`, result.enhancedPrompt.toLowerCase() !== result.originalPrompt.toLowerCase() ? `<i>✨ Gemini Enhanced:</i> ${escapeHtml(result.enhancedPrompt)}` : null, `<i>Engine: ${providerBadge}</i>`].filter(Boolean).join("\n\n");
       const safeCaption = caption.length > 1000 ? caption.slice(0, 995) + "..." : caption;
-
-      if (progressMsg) {
-        await ctx.api.deleteMessage(ctx.chat.id, progressMsg.message_id).catch(() => {});
-      }
-
+      if (progressMsg) await ctx.api.deleteMessage(ctx.chat.id, progressMsg).catch(() => {});
       if (result.isVideo && Buffer.isBuffer(result.buffer) && result.buffer.length > 1000) {
-        await ctx.replyWithVideo(
-          new InputFile(result.buffer, "video.mp4"),
-          {
-            caption: safeCaption,
-            parse_mode: "HTML",
-            reply_markup: feedbackKeyboard(),
-          },
-        );
+        await ctx.replyWithVideo(new InputFile(result.buffer, "video.mp4"), { caption: safeCaption, parse_mode: "HTML", reply_markup: feedbackKeyboard() });
       } else if (Buffer.isBuffer(result.buffer) && result.buffer.length > 500) {
-        await ctx.replyWithPhoto(
-          new InputFile(result.buffer, "storyboard.jpg"),
-          {
-            caption: `${safeCaption}\n\n<i>(Rendered as a cinematic storyboard concept frame)</i>`,
-            parse_mode: "HTML",
-            reply_markup: feedbackKeyboard(),
-          },
-        );
-      } else {
-        throw new Error("Video service did not produce a valid visual buffer");
-      }
+        await ctx.replyWithPhoto(new InputFile(result.buffer, "storyboard.jpg"), { caption: `${safeCaption}\n\n<i>(Rendered as a cinematic storyboard concept frame)</i>`, parse_mode: "HTML", reply_markup: feedbackKeyboard() });
+      } else throw new Error("Video service did not produce a valid visual buffer");
+      logger.info({ stage: "video_generation", elapsedMs: Date.now() - startedAt }, "Video generation completed");
     } catch (error) {
       logger.error({ stage: "video_generation", error: safeErrorMetadata(error) }, "Video generation failed");
-      if (progressMsg) {
-        await ctx.api.editMessageText(
-          ctx.chat.id,
-          progressMsg.message_id,
-          "Sorry, video generation timed out or encountered an issue. Please try again with a shorter prompt.",
-        ).catch(() => {});
-      } else {
-        await ctx.reply("Sorry, I encountered an issue generating that visual. Please try again.");
-      }
-    } finally {
-      stopTyping();
-    }
+      if (progressMsg) await ctx.api.deleteMessage(ctx.chat.id, progressMsg).catch(() => {});
+      await ctx.reply("Sorry, I encountered an issue generating that visual. Please try again.");
+    } finally { stopPresence(); }
   });
 
-  bot.command("personality", async (ctx) => {
-    if (!(await requireAuthorized(ctx))) return;
-    await personalityMenu(ctx);
-  });
-
+  bot.command("personality", async (ctx) => { if (!(await requireAuthorized(ctx))) return; await personalityMenu(ctx); });
   bot.command("mode", async (ctx) => {
     if (!(await requireAuthorized(ctx))) return;
     if (!ctx.from) return;
@@ -682,16 +506,10 @@ export function createTelegramBot(): TelegramBotRuntime {
     if (rawArg) {
       try {
         const result = await modeService.switchMode(ctx.from.id, rawArg, "command");
-        await ctx.reply(result.confirmationMessage, {
-          parse_mode: "HTML",
-          reply_markup: modeKeyboard(result.activeMode),
-        });
-      } catch (err) {
+        await ctx.reply(result.confirmationMessage, { parse_mode: "HTML", reply_markup: modeKeyboard(result.activeMode) });
+      } catch {
         const currentMode = await conversations.getUserMode(ctx.from.id);
-        await ctx.reply(
-          `⚠️ Invalid or unrecognized mode: "${escapeHtml(rawArg)}".\n\nAvailable modes:\n• general\n• study\n• coding\n• research\n• reasoning\n• writing\n• brainstorming\n• travel`,
-          { reply_markup: modeKeyboard(currentMode) },
-        );
+        await ctx.reply(`⚠️ Invalid or unrecognized mode: "${escapeHtml(rawArg)}".\n\nAvailable modes:\n• general\n• study\n• coding\n• research\n• reasoning\n• writing\n• brainstorming\n• travel`, { reply_markup: modeKeyboard(currentMode) });
       }
       return;
     }
@@ -709,1054 +527,290 @@ export function createTelegramBot(): TelegramBotRuntime {
     const activeReminders = userContext?.reminders?.length ?? 0;
     const memoryCount = userContext?.memories?.length ?? 0;
     const activeSessions = userContext?.conversations?.length ?? 0;
-
-    await ctx.reply(
-      [
-        "🤖 <b>Bot status:</b> online",
-        "⚡ <b>Gemini status:</b> configured",
-        `🧠 <b>Current model:</b> ${config.geminiModel}`,
-        `💬 <b>Active sessions:</b> ${activeSessions}`,
-        `📚 <b>Long-term memories:</b> ${memoryCount} saved`,
-        `⏰ <b>Pending reminders:</b> ${activeReminders}`,
-        `🎭 <b>Personality:</b> ${PERSONALITIES[personality].label}`,
-        `🎯 <b>Assistant mode:</b> ${MODES[mode].label}`,
-      ].join("\n"),
-      { parse_mode: "HTML", reply_markup: mainMenuKeyboard() },
-    );
+    await ctx.reply(["🤖 <b>Bot status:</b> online", "⚡ <b>Gemini status:</b> configured", `🧠 <b>Current model:</b> ${config.geminiModel}`, `💬 <b>Active sessions:</b> ${activeSessions}`, `📚 <b>Long-term memories:</b> ${memoryCount} saved`, `⏰ <b>Pending reminders:</b> ${activeReminders}`, `🎭 <b>Personality:</b> ${PERSONALITIES[personality].label}`, `🎯 <b>Assistant mode:</b> ${MODES[mode].label}`].join("\n"), { parse_mode: "HTML", reply_markup: mainMenuKeyboard() });
   });
 
   bot.callbackQuery(/^menu:(main|chat|memory|modes|voice|reminders|settings|help)$/, async (ctx) => {
-    if (!ctx.from || !authorized(ctx.from.id)) {
-      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
-      return;
-    }
+    if (!ctx.from || !authorized(ctx.from.id)) { await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true }); return; }
     const destination = ctx.match[1];
     await ctx.answerCallbackQuery();
-    if (destination === "main") {
-      await ctx.editMessageText(MAIN_MENU_TEXT, { reply_markup: mainMenuKeyboard() });
-    } else if (destination === "chat") {
-      await ctx.editMessageText(CHAT_TEXT, { reply_markup: mainMenuKeyboard() });
-    } else if (destination === "memory") {
-      await upsertUser(ctx);
-      const memories = await conversations.getUserMemories(ctx.from.id);
-      await ctx.editMessageText(formatMemoriesMenuText(memories), {
-        reply_markup: memoriesKeyboard(memories),
-      });
-    } else if (destination === "modes") {
-      await upsertUser(ctx);
-      const current = await conversations.getUserMode(ctx.from.id);
-      await ctx.editMessageText(modeText(current), { reply_markup: modeKeyboard(current) });
-    } else if (destination === "voice") {
-      await ctx.editMessageText(VOICE_TEXT, {
-        reply_markup: new InlineKeyboard().text("◀️ Back", "menu:main"),
-      });
-    } else if (destination === "reminders") {
-      await upsertUser(ctx);
-      const active = await reminderService.getActiveUserReminders(ctx.from.id);
-      await ctx.editMessageText(formatRemindersMenuText(active), {
-        parse_mode: "Markdown",
-        reply_markup: remindersKeyboard(active),
-      });
-    } else if (destination === "settings") {
-      await ctx.editMessageText(SETTINGS_TEXT, { reply_markup: settingsKeyboard() });
-    } else {
-      await ctx.editMessageText(HELP_TEXT, { reply_markup: helpKeyboard() });
-    }
+    if (destination === "main") await ctx.editMessageText(MAIN_MENU_TEXT, { reply_markup: mainMenuKeyboard() });
+    else if (destination === "chat") await ctx.editMessageText(CHAT_TEXT, { reply_markup: mainMenuKeyboard() });
+    else if (destination === "memory") { await upsertUser(ctx); const memories = await conversations.getUserMemories(ctx.from.id); await ctx.editMessageText(formatMemoriesMenuText(memories), { reply_markup: memoriesKeyboard(memories) }); }
+    else if (destination === "modes") { await upsertUser(ctx); const current = await conversations.getUserMode(ctx.from.id); await ctx.editMessageText(modeText(current), { reply_markup: modeKeyboard(current) }); }
+    else if (destination === "voice") await ctx.editMessageText(VOICE_TEXT, { reply_markup: new InlineKeyboard().text("◀️ Back", "menu:main") });
+    else if (destination === "reminders") { await upsertUser(ctx); const active = await reminderService.getActiveUserReminders(ctx.from.id); await ctx.editMessageText(formatRemindersMenuText(active), { parse_mode: "Markdown", reply_markup: remindersKeyboard(active) }); }
+    else if (destination === "settings") await ctx.editMessageText(SETTINGS_TEXT, { reply_markup: settingsKeyboard() });
+    else await ctx.editMessageText(HELP_TEXT, { reply_markup: helpKeyboard() });
   });
 
   bot.callbackQuery(/^rem_done:(\d+)$/, async (ctx) => {
-    if (!ctx.from || !authorized(ctx.from.id)) {
-      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
-      return;
-    }
-    const reminderId = parseInt(ctx.match[1], 10);
-    await reminderService.completeReminder(reminderId, ctx.from.id);
-    await ctx.answerCallbackQuery({ text: "✅ Marked reminder as done!" });
-    await ctx.editMessageReplyMarkup({
-      reply_markup: new InlineKeyboard().text("✅ Completed", "feedback:no-op"),
-    });
+    if (!ctx.from || !authorized(ctx.from.id)) { await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true }); return; }
+    const reminderId = parseInt(ctx.match[1], 10); await reminderService.completeReminder(reminderId, ctx.from.id); await ctx.answerCallbackQuery({ text: "✅ Marked reminder as done!" }); await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard().text("✅ Completed", "feedback:no-op") });
   });
-
   bot.callbackQuery(/^rem_snooze:(\d+):(\d+)$/, async (ctx) => {
-    if (!ctx.from || !authorized(ctx.from.id)) {
-      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
-      return;
-    }
-    const reminderId = parseInt(ctx.match[1], 10);
-    const minutes = parseInt(ctx.match[2], 10) || 10;
-    const updated = await reminderService.snoozeReminder(reminderId, minutes, ctx.from.id);
-    if (updated) {
-      const timeStr = updated.dueAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      await ctx.answerCallbackQuery({ text: `⏰ Snoozed for ${minutes}m (until ${timeStr})` });
-      await ctx.editMessageReplyMarkup({
-        reply_markup: new InlineKeyboard().text(`⏰ Snoozed until ${timeStr}`, "feedback:no-op"),
-      });
-    } else {
-      await ctx.answerCallbackQuery({ text: "Reminder not found or already completed." });
-    }
+    if (!ctx.from || !authorized(ctx.from.id)) { await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true }); return; }
+    const reminderId = parseInt(ctx.match[1], 10); const minutes = parseInt(ctx.match[2], 10) || 10; const updated = await reminderService.snoozeReminder(reminderId, minutes, ctx.from.id);
+    if (updated) { const timeStr = updated.dueAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); await ctx.answerCallbackQuery({ text: `⏰ Snoozed for ${minutes}m (until ${timeStr})` }); await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard().text(`⏰ Snoozed until ${timeStr}`, "feedback:no-op") }); } else await ctx.answerCallbackQuery({ text: "Reminder not found or already completed." });
   });
-
   bot.callbackQuery(/^rem_cancel:(\d+)$/, async (ctx) => {
-    if (!ctx.from || !authorized(ctx.from.id)) {
-      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
-      return;
-    }
-    const reminderId = parseInt(ctx.match[1], 10);
-    await reminderService.cancelReminder(reminderId, ctx.from.id);
-    await ctx.answerCallbackQuery({ text: "❌ Reminder cancelled." });
-    const active = await reminderService.getActiveUserReminders(ctx.from.id);
-    await ctx.editMessageText(formatRemindersMenuText(active), {
-      parse_mode: "Markdown",
-      reply_markup: remindersKeyboard(active),
-    }).catch(async () => {
-      await ctx.editMessageReplyMarkup({
-        reply_markup: new InlineKeyboard().text("❌ Cancelled", "feedback:no-op"),
-      });
-    });
+    if (!ctx.from || !authorized(ctx.from.id)) { await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true }); return; }
+    const reminderId = parseInt(ctx.match[1], 10); await reminderService.cancelReminder(reminderId, ctx.from.id); await ctx.answerCallbackQuery({ text: "❌ Reminder cancelled." }); const active = await reminderService.getActiveUserReminders(ctx.from.id);
+    await ctx.editMessageText(formatRemindersMenuText(active), { parse_mode: "Markdown", reply_markup: remindersKeyboard(active) }).catch(async () => ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard().text("❌ Cancelled", "feedback:no-op") }));
   });
-
-
   bot.callbackQuery(/^memory:delete:(.+)$/, async (ctx) => {
-    if (!ctx.from || !authorized(ctx.from.id)) {
-      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
-      return;
-    }
-    const key = ctx.match[1];
-    await conversations.deleteUserMemory(ctx.from.id, key);
-    await ctx.answerCallbackQuery({ text: `Deleted memory: ${key}` });
-    const memories = await conversations.getUserMemories(ctx.from.id);
-    await ctx.editMessageText(formatMemoriesMenuText(memories), {
-      reply_markup: memoriesKeyboard(memories),
-    });
+    if (!ctx.from || !authorized(ctx.from.id)) { await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true }); return; }
+    const key = ctx.match[1]; await conversations.deleteUserMemory(ctx.from.id, key); await ctx.answerCallbackQuery({ text: `Deleted memory: ${key}` }); const memories = await conversations.getUserMemories(ctx.from.id); await ctx.editMessageText(formatMemoriesMenuText(memories), { reply_markup: memoriesKeyboard(memories) });
   });
-
   bot.callbackQuery("memory:clear_all", async (ctx) => {
-    if (!ctx.from || !authorized(ctx.from.id)) {
-      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
-      return;
-    }
-    await conversations.clearUserMemories(ctx.from.id);
-    await ctx.answerCallbackQuery({ text: "All long-term memories cleared." });
-    const memories = await conversations.getUserMemories(ctx.from.id);
-    await ctx.editMessageText(formatMemoriesMenuText(memories), {
-      reply_markup: memoriesKeyboard(memories),
-    });
+    if (!ctx.from || !authorized(ctx.from.id)) { await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true }); return; }
+    await conversations.clearUserMemories(ctx.from.id); await ctx.answerCallbackQuery({ text: "All long-term memories cleared." }); const memories = await conversations.getUserMemories(ctx.from.id); await ctx.editMessageText(formatMemoriesMenuText(memories), { reply_markup: memoriesKeyboard(memories) });
   });
-
   bot.callbackQuery("settings:personality", async (ctx) => {
-    if (!ctx.from || !authorized(ctx.from.id)) {
-      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
-      return;
-    }
-    await upsertUser(ctx);
-    const current = await conversations.getUserPersonality(ctx.from.id);
-    await ctx.answerCallbackQuery();
-    await ctx.editMessageText(personalityText(current), {
-      reply_markup: personalityKeyboard(current),
-    });
+    if (!ctx.from || !authorized(ctx.from.id)) { await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true }); return; }
+    await upsertUser(ctx); const current = await conversations.getUserPersonality(ctx.from.id); await ctx.answerCallbackQuery(); await ctx.editMessageText(personalityText(current), { reply_markup: personalityKeyboard(current) });
   });
-
   bot.callbackQuery("settings:mode", async (ctx) => {
-    if (!ctx.from || !authorized(ctx.from.id)) {
-      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
-      return;
-    }
-    await upsertUser(ctx);
-    const current = await conversations.getUserMode(ctx.from.id);
-    await ctx.answerCallbackQuery();
-    await ctx.editMessageText(modeText(current), {
-      reply_markup: modeKeyboard(current, "menu:settings"),
-    });
+    if (!ctx.from || !authorized(ctx.from.id)) { await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true }); return; }
+    await upsertUser(ctx); const current = await conversations.getUserMode(ctx.from.id); await ctx.answerCallbackQuery(); await ctx.editMessageText(modeText(current), { reply_markup: modeKeyboard(current, "menu:settings") });
   });
-
   bot.callbackQuery(/^personality:(playful|balanced|focused|professional)$/, async (ctx) => {
-    if (!ctx.from || !authorized(ctx.from.id)) {
-      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
-      return;
-    }
-    const personality = ctx.match[1] as PersonalityKey;
-    await upsertUser(ctx);
-    await conversations.setUserPersonality(ctx.from.id, personality);
-    await ctx.answerCallbackQuery({ text: `${PERSONALITIES[personality].label} selected` });
-    await ctx.editMessageText(personalityText(personality), {
-      reply_markup: personalityKeyboard(personality),
-    });
+    if (!ctx.from || !authorized(ctx.from.id)) { await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true }); return; }
+    const personality = ctx.match[1] as PersonalityKey; await upsertUser(ctx); await conversations.setUserPersonality(ctx.from.id, personality); await ctx.answerCallbackQuery({ text: `${PERSONALITIES[personality].label} selected` }); await ctx.editMessageText(personalityText(personality), { reply_markup: personalityKeyboard(personality) });
   });
-
   bot.callbackQuery(/^mode:(.+)$/, async (ctx) => {
-    if (!ctx.from || !authorized(ctx.from.id)) {
-      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
-      return;
-    }
-    const modeRaw = ctx.match[1];
-    await upsertUser(ctx);
-    try {
-      const result = await modeService.switchMode(ctx.from.id, modeRaw, "callback");
-      await ctx.answerCallbackQuery({ text: `${result.profile.label} active` });
-      await ctx.editMessageText(result.confirmationMessage, {
-        parse_mode: "HTML",
-        reply_markup: modeKeyboard(result.activeMode),
-      }).catch(() => {});
-    } catch (err) {
-      await ctx.answerCallbackQuery({ text: "Error switching mode", show_alert: true });
-    }
+    if (!ctx.from || !authorized(ctx.from.id)) { await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true }); return; }
+    const modeRaw = ctx.match[1]; await upsertUser(ctx);
+    try { const result = await modeService.switchMode(ctx.from.id, modeRaw, "callback"); await ctx.answerCallbackQuery({ text: `${result.profile.label} active` }); await ctx.editMessageText(result.confirmationMessage, { parse_mode: "HTML", reply_markup: modeKeyboard(result.activeMode) }).catch(() => {}); }
+    catch { await ctx.answerCallbackQuery({ text: "Error switching mode", show_alert: true }); }
   });
-
   bot.callbackQuery("action:clear", async (ctx) => {
-    if (!ctx.from || !ctx.chat || !authorized(ctx.from.id)) {
-      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
-      return;
-    }
-    await conversations.clearConversation(ctx.from.id, ctx.chat.id);
-    rateLimiter.clear(ctx.from.id);
-    await ctx.answerCallbackQuery({ text: "Conversation cleared" });
-    await ctx.editMessageText("Your conversation history has been cleared.", {
-      reply_markup: mainMenuKeyboard(),
-    });
+    if (!ctx.from || !ctx.chat || !authorized(ctx.from.id)) { await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true }); return; }
+    await conversations.clearConversation(ctx.from.id, ctx.chat.id); rateLimiter.clear(ctx.from.id); await ctx.answerCallbackQuery({ text: "Conversation cleared" }); await ctx.editMessageText("Your conversation history has been cleared.", { reply_markup: mainMenuKeyboard() });
   });
-
   bot.callbackQuery("feedback:helpful", async (ctx) => {
-    if (!ctx.from || !authorized(ctx.from.id)) {
-      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
-      return;
-    }
-    logger.info({ telegramUserId: ctx.from.id, feedback: "helpful" }, "Assistant feedback received");
-    await ctx.answerCallbackQuery({ text: "Thanks for the feedback!" });
-    await ctx.editMessageReplyMarkup({
-      reply_markup: new InlineKeyboard().text("✅ Helpful — thanks!", "feedback:no-op"),
-    });
+    if (!ctx.from || !authorized(ctx.from.id)) { await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true }); return; }
+    logger.info({ telegramUserId: ctx.from.id, feedback: "helpful" }, "Assistant feedback received"); await ctx.answerCallbackQuery({ text: "Thanks for the feedback!" }); await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard().text("✅ Helpful — thanks!", "feedback:no-op") });
   });
-
   bot.callbackQuery("feedback:not_quite", async (ctx) => {
-    if (!ctx.from || !authorized(ctx.from.id)) {
-      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
-      return;
-    }
-    await ctx.answerCallbackQuery({ text: "What should I improve?" });
-    await ctx.editMessageReplyMarkup({ reply_markup: feedbackReasonKeyboard() });
+    if (!ctx.from || !authorized(ctx.from.id)) { await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true }); return; }
+    await ctx.answerCallbackQuery({ text: "What should I improve?" }); await ctx.editMessageReplyMarkup({ reply_markup: feedbackReasonKeyboard() });
   });
-
   bot.callbackQuery(/^feedback:reason:(too_long|incorrect|unclear|tone|other)$/, async (ctx) => {
-    if (!ctx.from || !authorized(ctx.from.id)) {
-      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
-      return;
-    }
-    logger.info(
-      { telegramUserId: ctx.from.id, feedback: ctx.match[1] },
-      "Assistant feedback reason received",
-    );
-    await ctx.answerCallbackQuery({ text: "Thanks — I’ll keep that in mind." });
-    await ctx.editMessageReplyMarkup({
-      reply_markup: new InlineKeyboard().text("✅ Feedback received", "feedback:no-op"),
-    });
+    if (!ctx.from || !authorized(ctx.from.id)) { await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true }); return; }
+    logger.info({ telegramUserId: ctx.from.id, feedback: ctx.match[1] }, "Assistant feedback reason received"); await ctx.answerCallbackQuery({ text: "Thanks — I’ll keep that in mind." }); await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard().text("✅ Feedback received", "feedback:no-op") });
   });
-
-  bot.callbackQuery("feedback:no-op", async (ctx) => {
-    await ctx.answerCallbackQuery();
-  });
-
+  bot.callbackQuery("feedback:no-op", async (ctx) => { await ctx.answerCallbackQuery(); });
   bot.callbackQuery(/^exec_appr:(.+)$/, async (ctx) => {
-    if (!ctx.from || !authorized(ctx.from.id)) {
-      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
-      return;
-    }
-    const approvalId = ctx.match[1];
-    await ctx.answerCallbackQuery({ text: "Processing approval..." });
-    try {
-      const result = await executionEngine.submitApproval(approvalId, ctx.from.id, true);
-      if (result.success) {
-        await ctx.editMessageText(
-          `✅ <b>Approval Granted</b>\nExecution resumed for plan <code>${result.graphId}</code> (revision ${result.planRevision}).`,
-          { parse_mode: "HTML" },
-        );
-      } else {
-        await ctx.reply(`⚠️ Approval submission failed: ${result.error}`);
-      }
-    } catch (err: any) {
-      await ctx.reply(`⚠️ Approval failed: ${err.message}`);
-    }
+    if (!ctx.from || !authorized(ctx.from.id)) { await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true }); return; }
+    const approvalId = ctx.match[1]; await ctx.answerCallbackQuery({ text: "Processing approval..." });
+    try { const result = await executionEngine.submitApproval(approvalId, ctx.from.id, true); if (result.success) await ctx.editMessageText(`✅ <b>Approval Granted</b>\nExecution resumed for plan <code>${result.graphId}</code> (revision ${result.planRevision}).`, { parse_mode: "HTML" }); else await ctx.reply(`⚠️ Approval submission failed: ${result.error}`); }
+    catch (err: any) { await ctx.reply(`⚠️ Approval failed: ${err.message}`); }
   });
-
   bot.callbackQuery(/^exec_rejc:(.+)$/, async (ctx) => {
-    if (!ctx.from || !authorized(ctx.from.id)) {
-      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
-      return;
-    }
-    const approvalId = ctx.match[1];
-    await ctx.answerCallbackQuery({ text: "Processing rejection..." });
-    try {
-      const result = await executionEngine.submitApproval(approvalId, ctx.from.id, false);
-      if (result.success) {
-        await ctx.editMessageText(
-          `❌ <b>Execution Rejected</b>\nPlan <code>${result.graphId}</code> has been cancelled.`,
-          { parse_mode: "HTML" },
-        );
-      } else {
-        await ctx.reply(`⚠️ Rejection submission failed: ${result.error}`);
-      }
-    } catch (err: any) {
-      await ctx.reply(`⚠️ Rejection failed: ${err.message}`);
-    }
+    if (!ctx.from || !authorized(ctx.from.id)) { await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true }); return; }
+    const approvalId = ctx.match[1]; await ctx.answerCallbackQuery({ text: "Processing rejection..." });
+    try { const result = await executionEngine.submitApproval(approvalId, ctx.from.id, false); if (result.success) await ctx.editMessageText(`❌ <b>Execution Rejected</b>\nPlan <code>${result.graphId}</code> has been cancelled.`, { parse_mode: "HTML" }); else await ctx.reply(`⚠️ Rejection submission failed: ${result.error}`); }
+    catch (err: any) { await ctx.reply(`⚠️ Rejection failed: ${err.message}`); }
   });
 
-  async function handleIncomingTelegramMessage(
-    ctx: Context,
-    payload: {
-      rawText?: string;
-      media?: {
-        fileId: string;
-        mediaType: "image" | "document" | "voice" | "audio";
-        reportedMime?: string;
-        fileName?: string;
-        fileSize?: number;
-      };
-    },
-  ) {
+  async function handleIncomingTelegramMessage(ctx: Context, payload: { rawText?: string; media?: { fileId: string; mediaType: "image" | "document" | "voice" | "audio"; reportedMime?: string; fileName?: string; fileSize?: number; }; }) {
     if (!(await requireAuthorized(ctx))) return;
     if (!ctx.from || !ctx.chat) return;
-
-    if (!await rateLimiter.consumeAsync(ctx.from.id)) {
-      logger.warn(
-        { stage: "rate_limiting", telegramUserId: ctx.from.id },
-        "Telegram message rejected by rate limiter",
-      );
-      await ctx.reply("You’re sending messages a little too quickly. Please wait a moment and try again.");
-      return;
-    }
-
+    if (!await rateLimiter.consumeAsync(ctx.from.id)) { await ctx.reply("You’re sending messages a little too quickly. Please wait a moment and try again."); return; }
     const { rawText, media } = payload;
+    if (!media && (!rawText || !rawText.trim())) { await ctx.reply("Please send a message with some text or attach an image, document, or voice note."); return; }
+    const prompt = MediaProcessorService.buildMultimodalPrompt(rawText, media?.mediaType, media?.fileName);
 
-    // If text-only, check for empty string
-    if (!media && (!rawText || !rawText.trim())) {
-      await ctx.reply("Please send a message with some text or attach an image, document, or voice note.");
-      return;
-    }
-
-    const prompt = MediaProcessorService.buildMultimodalPrompt(
-      rawText,
-      media?.mediaType,
-      media?.fileName,
-    );
-
-    // Natural Reminder Detection: only for plain text messages without media attachments
     if (!media && rawText) {
       const naturalReminder = ReminderService.parseNaturalReminder(rawText);
       if (naturalReminder) {
         try {
-          const created = await reminderService.createReminder({
-            telegramUserId: ctx.from.id,
-            chatId: ctx.chat.id,
-            prompt: naturalReminder.prompt,
-            dueAt: naturalReminder.dueAt,
-          });
-          await ctx.reply(
-            `⏰ <b>Reminder scheduled!</b>\n\n📌 <b>Task:</b> ${escapeHtml(naturalReminder.prompt)}\n🕒 <b>Due:</b> ${naturalReminder.humanReadableTime}`,
-            {
-              parse_mode: "HTML",
-              reply_markup: new InlineKeyboard().text("❌ Cancel", `rem_cancel:${created.id}`),
-            },
-          );
+          const created = await reminderService.createReminder({ telegramUserId: ctx.from.id, chatId: ctx.chat.id, prompt: naturalReminder.prompt, dueAt: naturalReminder.dueAt });
+          await ctx.reply(`⏰ <b>Reminder scheduled!</b>\n\n📌 <b>Task:</b> ${escapeHtml(naturalReminder.prompt)}\n🕒 <b>Due:</b> ${naturalReminder.humanReadableTime}`, { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("❌ Cancel", `rem_cancel:${created.id}`) });
           return;
-        } catch (err) {
-          logger.warn({ error: safeErrorMetadata(err) }, "Failed saving natural reminder");
-        }
+        } catch (err) { logger.warn({ error: safeErrorMetadata(err) }, "Failed saving natural reminder"); }
       }
     }
 
-    const stopTyping = startTypingIndicator(ctx);
+    const stopTyping = startTypingIndicator(ctx, { state: "understanding", operationLabel: media ? "incoming media" : "request interpretation", userFacingProgress: false });
     try {
-      // 1. Download media if attached
       let processedMedia: ProcessedMedia | undefined;
       if (media) {
-        try {
-          processedMedia = await MediaProcessorService.downloadTelegramMedia(
-            ctx.api,
-            config.telegramBotToken,
-            media.fileId,
-            {
-              expectedType: media.mediaType,
-              reportedMime: media.reportedMime,
-              fileName: media.fileName,
-            },
-          );
-        } catch (mediaErr) {
-          logger.error(
-            { error: safeErrorMetadata(mediaErr), mediaType: media.mediaType },
-            "Failed downloading Telegram media for multimodal processing",
-          );
-          await ctx.reply("⚠️ Sorry, I could not download the attached media from Telegram. Please try sending it again.");
-          return;
-        }
+        try { processedMedia = await MediaProcessorService.downloadTelegramMedia(ctx.api, config.telegramBotToken, media.fileId, { expectedType: media.mediaType, reportedMime: media.reportedMime, fileName: media.fileName }); }
+        catch (mediaErr) { logger.error({ error: safeErrorMetadata(mediaErr), mediaType: media.mediaType }, "Failed downloading Telegram media for multimodal processing"); await ctx.reply("⚠️ Sorry, I could not download the attached media from Telegram. Please try sending it again."); return; }
       }
 
-      // 2. Automatically associate message with user ID and query Global Context with Semantic Vector Recall
-      const globalContextData = await runStage(
-        "global_context_retrieval",
-        { telegramUserId: ctx.from.id, chatId: ctx.chat.id },
-        () =>
-          globalContext.getContextForCompletion({
-            telegramUserId: ctx.from!.id,
-            chatId: ctx.chat!.id,
-            userProfile: {
-              id: ctx.from!.id,
-              username: ctx.from!.username,
-              firstName: ctx.from!.first_name,
-              lastName: ctx.from!.last_name,
-            },
-            maxHistoryMessages: config.maxHistoryMessages,
-            message: prompt,
-            geminiService: gemini,
-          }),
-      );
+      const globalContextData = await runStage("global_context_retrieval", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => globalContext.getContextForCompletion({ telegramUserId: ctx.from!.id, chatId: ctx.chat!.id, userProfile: { id: ctx.from!.id, username: ctx.from!.username, firstName: ctx.from!.first_name, lastName: ctx.from!.last_name }, maxHistoryMessages: config.maxHistoryMessages, message: prompt, geminiService: gemini }));
 
-      // 3. Dynamic Natural Language Mode Switch Intent Detection:
       let currentPrompt = prompt;
       const modeSwitchIntent = AdaptiveIntentService.detectModeSwitchIntent(currentPrompt, modeService);
-
       if (modeSwitchIntent.isModeSwitch && modeSwitchIntent.requestedMode) {
         try {
-          const switchResult = await modeService.switchMode(
-            ctx.from.id,
-            modeSwitchIntent.requestedMode,
-            media ? "voice" : "natural_language",
-          );
-
-          // Apply newly resolved mode directly into the current execution context immediately in the SAME turn!
+          const switchResult = await modeService.switchMode(ctx.from.id, modeSwitchIntent.requestedMode, media ? "voice" : "natural_language");
           globalContextData.userProfile.mode = switchResult.activeMode;
-
-          // Send Telegram confirmation card
-          await ctx.reply(switchResult.confirmationMessage, {
-            parse_mode: "HTML",
-            reply_markup: modeKeyboard(switchResult.activeMode),
-          });
-
-          if (!modeSwitchIntent.cleanedPrompt) {
-            // Pure mode switch request — turn complete!
-            return;
-          }
-
-          // User combined mode switch with an additional prompt
+          await ctx.reply(switchResult.confirmationMessage, { parse_mode: "HTML", reply_markup: modeKeyboard(switchResult.activeMode) });
+          if (!modeSwitchIntent.cleanedPrompt) return;
           currentPrompt = modeSwitchIntent.cleanedPrompt;
-        } catch (err) {
-          logger.warn({ error: safeErrorMetadata(err) }, "Failed executing natural language mode switch");
-        }
+        } catch (err) { logger.warn({ error: safeErrorMetadata(err) }, "Failed executing natural language mode switch"); }
       }
 
-      // 3b. Task Intent Detection & Processing:
       const taskIntent = taskService.detectTaskIntent(currentPrompt);
       let activeTaskContext: { task: any; steps: any[] } | null = null;
-
       if (taskIntent.intent === "NEW_TASK" && taskIntent.taskTitle) {
-        const created = await taskService.createTask({
-          telegramUserId: ctx.from.id,
-          conversationId: globalContextData.conversationId,
-          title: taskIntent.taskTitle,
-          goal: taskIntent.taskGoal || taskIntent.taskTitle,
-          steps: taskIntent.steps?.map((s) => ({ title: s })),
-        });
+        const created = await taskService.createTask({ telegramUserId: ctx.from.id, conversationId: globalContextData.conversationId, title: taskIntent.taskTitle, goal: taskIntent.taskGoal || taskIntent.taskTitle, steps: taskIntent.steps?.map((s) => ({ title: s })) });
         activeTaskContext = created;
-        await ctx.reply(
-          `🎯 <b>New Task Created (#${created.task.id})</b>\n<b>Title:</b> ${escapeHtml(created.task.title)}\n<b>Goal:</b> ${escapeHtml(created.task.goal)}`,
-          { parse_mode: "HTML", reply_markup: tasksKeyboard([created.task]) },
-        );
+        await ctx.reply(`🎯 <b>New Task Created (#${created.task.id})</b>\n<b>Title:</b> ${escapeHtml(created.task.title)}\n<b>Goal:</b> ${escapeHtml(created.task.goal)}`, { parse_mode: "HTML", reply_markup: tasksKeyboard([created.task]) });
       } else if (taskIntent.intent === "CANCEL_TASK") {
         const resolved = await taskService.resolveTargetTask(ctx.from.id, taskIntent.taskIdHint);
-        if (resolved.task) {
-          await taskService.updateTaskStatus(resolved.task.id, "cancelled");
-          await ctx.reply(`❌ Task #${resolved.task.id} (${escapeHtml(resolved.task.title)}) cancelled.`);
-          return;
-        }
+        if (resolved.task) { await taskService.updateTaskStatus(resolved.task.id, "cancelled"); await ctx.reply(`❌ Task #${resolved.task.id} (${escapeHtml(resolved.task.title)}) cancelled.`); return; }
       } else if (taskIntent.intent === "PAUSE_TASK") {
         const resolved = await taskService.resolveTargetTask(ctx.from.id, taskIntent.taskIdHint);
-        if (resolved.task) {
-          await taskService.updateTaskStatus(resolved.task.id, "paused");
-          await ctx.reply(`⏸️ Task #${resolved.task.id} (${escapeHtml(resolved.task.title)}) paused.`);
-          return;
-        }
+        if (resolved.task) { await taskService.updateTaskStatus(resolved.task.id, "paused"); await ctx.reply(`⏸️ Task #${resolved.task.id} (${escapeHtml(resolved.task.title)}) paused.`); return; }
       } else if (taskIntent.intent === "CONTINUE_TASK") {
         const resolved = await taskService.resolveTargetTask(ctx.from.id, taskIntent.taskIdHint);
-        if (resolved.status === "AMBIGUOUS" && resolved.activeTasks) {
-          await ctx.reply("Which task would you like to continue?", {
-            reply_markup: taskDisambiguationKeyboard(resolved.activeTasks),
-          });
-          return;
-        }
-        if (resolved.task) {
-          const steps = await chatDatabaseService.getTaskSteps(resolved.task.id);
-          activeTaskContext = { task: resolved.task, steps };
-        }
+        if (resolved.status === "AMBIGUOUS" && resolved.activeTasks) { await ctx.reply("Which task would you like to continue?", { reply_markup: taskDisambiguationKeyboard(resolved.activeTasks) }); return; }
+        if (resolved.task) { const steps = await chatDatabaseService.getTaskSteps(resolved.task.id); activeTaskContext = { task: resolved.task, steps }; }
       } else {
         const activeTasks = await taskService.getActiveTasksForUser(ctx.from.id);
-        if (activeTasks.length > 0) {
-          const primaryTask = activeTasks[0];
-          const steps = await chatDatabaseService.getTaskSteps(primaryTask.id);
-          activeTaskContext = { task: primaryTask, steps };
-        }
+        if (activeTasks.length > 0) { const primaryTask = activeTasks[0]; const steps = await chatDatabaseService.getTaskSteps(primaryTask.id); activeTaskContext = { task: primaryTask, steps }; }
       }
 
-      // 4. Systematic & Dynamic Adaptation via ExecutionPlanner:
-      const executionPlan = executionPlanner.plan(
-        currentPrompt,
-        globalContextData.userProfile.mode,
-        globalContextData.recentHistory,
-      );
-      const adaptivePlan = {
-        ...executionPlan,
-        effectiveModeInstruction: executionPlan.effectiveSystemPrompt,
-      };
+      const executionPlan = executionPlanner.plan(currentPrompt, globalContextData.userProfile.mode, globalContextData.recentHistory);
+      const adaptivePlan = { ...executionPlan, effectiveModeInstruction: executionPlan.effectiveSystemPrompt };
 
-      // 4a. Natural Video Generation Intent (text-only):
       if (!media && adaptivePlan.detectedIntent === "video_generation" && adaptivePlan.videoPrompt) {
-        await ctx.api.sendChatAction(ctx.chat.id, "upload_video").catch(() => {});
-        const progressMsg = await ctx.reply("🎬 Rendering your video clip... this usually takes ~30-50s.").catch(() => null);
+        const stopVideoPresence = startTypingIndicator(ctx, { state: "executing_tool", toolName: "video_generation", operationLabel: "video generation", chatAction: "upload_video", expectsLongRunning: true, userFacingProgress: false });
+        let progressMessageId: number | undefined;
         try {
-          const videoResult = await VideoGenerationService.generate(
-            adaptivePlan.videoPrompt,
-            gemini,
-          );
-
-          await runStage(
-            "user_message_save",
-            { telegramUserId: ctx.from.id, chatId: ctx.chat.id },
-            () => conversations.addMessage(globalContextData.conversationId, "user", prompt),
-          );
-          await runStage(
-            "model_response_save",
-            { telegramUserId: ctx.from.id, chatId: ctx.chat.id },
-            () =>
-              conversations.addMessage(
-                globalContextData.conversationId,
-                "model",
-                `[Generated Video (${videoResult.provider}) for: "${adaptivePlan.videoPrompt}"] Enhanced: "${videoResult.enhancedPrompt}"`,
-              ),
-          );
-
+          progressMessageId = await interactionPresentationService.renderProgress(ctx, { state: "executing_tool", toolName: "video_generation", operationLabel: "video generation", chatAction: "upload_video", expectsLongRunning: true, userFacingProgress: true, elapsedMs: 0 });
+          const startedAt = Date.now();
+          const videoResult = await VideoGenerationService.generate(adaptivePlan.videoPrompt, gemini);
+          await runStage("user_message_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => conversations.addMessage(globalContextData.conversationId, "user", prompt));
+          await runStage("model_response_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => conversations.addMessage(globalContextData.conversationId, "model", `[Generated Video (${videoResult.provider}) for: "${adaptivePlan.videoPrompt}"] Enhanced: "${videoResult.enhancedPrompt}"`));
           const providerBadge = videoResult.provider === "huggingface" ? "🤗 Hugging Face" : "🌐 Free Community";
-          const caption = [
-            `<b>🎬 Prompt:</b> ${escapeHtml(videoResult.originalPrompt)}`,
-            videoResult.enhancedPrompt.toLowerCase() !== videoResult.originalPrompt.toLowerCase()
-              ? `<i>✨ Gemini Enhanced:</i> ${escapeHtml(videoResult.enhancedPrompt)}`
-              : null,
-            `<i>Engine: ${providerBadge}</i>`,
-          ]
-            .filter(Boolean)
-            .join("\n\n");
-
+          const caption = [`<b>🎬 Prompt:</b> ${escapeHtml(videoResult.originalPrompt)}`, videoResult.enhancedPrompt.toLowerCase() !== videoResult.originalPrompt.toLowerCase() ? `<i>✨ Gemini Enhanced:</i> ${escapeHtml(videoResult.enhancedPrompt)}` : null, `<i>Engine: ${providerBadge}</i>`].filter(Boolean).join("\n\n");
           const safeCaption = caption.length > 1000 ? caption.slice(0, 995) + "..." : caption;
-
-          if (progressMsg) {
-            await ctx.api.deleteMessage(ctx.chat.id, progressMsg.message_id).catch(() => {});
-          }
-
-          if (videoResult.isVideo && Buffer.isBuffer(videoResult.buffer) && videoResult.buffer.length > 1000) {
-            await ctx.replyWithVideo(
-              new InputFile(videoResult.buffer, "video.mp4"),
-              {
-                caption: safeCaption,
-                parse_mode: "HTML",
-                reply_markup: feedbackKeyboard(),
-              },
-            );
-          } else if (Buffer.isBuffer(videoResult.buffer) && videoResult.buffer.length > 500) {
-            await ctx.replyWithPhoto(
-              new InputFile(videoResult.buffer, "concept_frame.jpg"),
-              {
-                caption: `${safeCaption}\n\n<i>(Rendered as a cinematic storyboard concept frame)</i>`,
-                parse_mode: "HTML",
-                reply_markup: feedbackKeyboard(),
-              },
-            );
-          } else {
-            throw new Error("Natural video generation did not produce a valid buffer");
-          }
+          if (progressMessageId) await ctx.api.deleteMessage(ctx.chat.id, progressMessageId).catch(() => {});
+          if (videoResult.isVideo && Buffer.isBuffer(videoResult.buffer) && videoResult.buffer.length > 1000) await ctx.replyWithVideo(new InputFile(videoResult.buffer, "video.mp4"), { caption: safeCaption, parse_mode: "HTML", reply_markup: feedbackKeyboard() });
+          else if (Buffer.isBuffer(videoResult.buffer) && videoResult.buffer.length > 500) await ctx.replyWithPhoto(new InputFile(videoResult.buffer, "concept_frame.jpg"), { caption: `${safeCaption}\n\n<i>(Rendered as a cinematic storyboard concept frame)</i>`, parse_mode: "HTML", reply_markup: feedbackKeyboard() });
+          else throw new Error("Natural video generation did not produce a valid buffer");
+          logger.info({ stage: "video_generation", elapsedMs: Date.now() - startedAt }, "Natural video generation completed");
           return;
         } catch (vidError) {
-          logger.warn(
-            { vidError: safeErrorMetadata(vidError) },
-            "Natural video generation failed; falling back to conversational Gemini reply",
-          );
-          if (progressMsg) {
-            await ctx.api.deleteMessage(ctx.chat.id, progressMsg.message_id).catch(() => {});
-          }
-          // Falls through to standard text reply
-        }
+          logger.warn({ vidError: safeErrorMetadata(vidError) }, "Natural video generation failed; falling back to conversational Gemini reply");
+          if (progressMessageId) await ctx.api.deleteMessage(ctx.chat.id, progressMessageId).catch(() => {});
+        } finally { stopVideoPresence(); }
       }
 
-      // 4b. Natural Image Generation Intent (text-only):
       if (!media && adaptivePlan.detectedIntent === "image_generation" && adaptivePlan.imagePrompt) {
-        await ctx.api.sendChatAction(ctx.chat.id, "upload_photo").catch(() => {});
+        const stopImagePresence = startTypingIndicator(ctx, { state: "generating", toolName: "image_generation", operationLabel: "image generation", chatAction: "upload_photo", userFacingProgress: false });
         try {
-          const imageResult = await ImageGenerationService.generate(
-            adaptivePlan.imagePrompt,
-            gemini,
-          );
-
-          await runStage(
-            "user_message_save",
-            { telegramUserId: ctx.from.id, chatId: ctx.chat.id },
-            () => conversations.addMessage(globalContextData.conversationId, "user", prompt),
-          );
-          await runStage(
-            "model_response_save",
-            { telegramUserId: ctx.from.id, chatId: ctx.chat.id },
-            () =>
-              conversations.addMessage(
-                globalContextData.conversationId,
-                "model",
-                `[Generated Image for: "${adaptivePlan.imagePrompt}"] Enhanced: "${imageResult.enhancedPrompt}"`,
-              ),
-          );
-
+          const imageResult = await ImageGenerationService.generate(adaptivePlan.imagePrompt, gemini);
+          await runStage("user_message_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => conversations.addMessage(globalContextData.conversationId, "user", prompt));
+          await runStage("model_response_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => conversations.addMessage(globalContextData.conversationId, "model", `[Generated Image for: "${adaptivePlan.imagePrompt}"] Enhanced: "${imageResult.enhancedPrompt}"`));
           const imageBadge = imageResult.provider === "huggingface" ? "<i>Engine: 🤗 Hugging Face (FLUX.1)</i>" : "<i>Engine: 🌐 Free Community (FLUX.1)</i>";
-          const caption = [
-            `<b>🎨 Prompt:</b> ${escapeHtml(imageResult.originalPrompt)}`,
-            imageResult.enhancedPrompt.toLowerCase() !== imageResult.originalPrompt.toLowerCase()
-              ? `<i>✨ Gemini Enhanced:</i> ${escapeHtml(imageResult.enhancedPrompt)}`
-              : null,
-            imageBadge,
-          ]
-            .filter(Boolean)
-            .join("\n\n");
-
+          const caption = [`<b>🎨 Prompt:</b> ${escapeHtml(imageResult.originalPrompt)}`, imageResult.enhancedPrompt.toLowerCase() !== imageResult.originalPrompt.toLowerCase() ? `<i>✨ Gemini Enhanced:</i> ${escapeHtml(imageResult.enhancedPrompt)}` : null, imageBadge].filter(Boolean).join("\n\n");
           const safeCaption = caption.length > 1000 ? caption.slice(0, 995) + "..." : caption;
-
-          if (!Buffer.isBuffer(imageResult.buffer) || imageResult.buffer.length < 500) {
-            throw new Error("Natural image generation did not produce a valid image buffer");
-          }
-
-          await ctx.replyWithPhoto(
-            new InputFile(imageResult.buffer, "image.jpg"),
-            {
-              caption: safeCaption,
-              parse_mode: "HTML",
-              reply_markup: feedbackKeyboard(),
-            },
-          );
+          if (!Buffer.isBuffer(imageResult.buffer) || imageResult.buffer.length < 500) throw new Error("Natural image generation did not produce a valid image buffer");
+          await ctx.replyWithPhoto(new InputFile(imageResult.buffer, "image.jpg"), { caption: safeCaption, parse_mode: "HTML", reply_markup: feedbackKeyboard() });
           return;
-        } catch (imgError) {
-          logger.warn(
-            { imgError: safeErrorMetadata(imgError) },
-            "Natural image generation failed; falling back to conversational Gemini reply",
-          );
-          // Falls through to standard text reply
-        }
+        } catch (imgError) { logger.warn({ imgError: safeErrorMetadata(imgError) }, "Natural image generation failed; falling back to conversational Gemini reply"); }
+        finally { stopImagePresence(); }
       }
 
-      // 5. Assemble dynamic, token-budgeted, prioritized context payload
-      const assembledContext = await contextManagerService.assembleContext({
-        telegramUserId: ctx.from.id,
-        conversationId: globalContextData.conversationId,
-        userMessage: currentPrompt,
-        effectiveModeInstruction: adaptivePlan.effectiveModeInstruction,
-        activeTask: activeTaskContext,
-        history: globalContextData.recentHistory,
-      });
-
-      // 5a. Autonomous Execution Engine is only eligible for an explicit/active task.
-      // Normal conversational requests must never be promoted to a task merely because
-      // they are long or contain incidental words such as “research”, “step”, or “plan”.
+      const assembledContext = await contextManagerService.assembleContext({ telegramUserId: ctx.from.id, conversationId: globalContextData.conversationId, userMessage: currentPrompt, effectiveModeInstruction: adaptivePlan.effectiveModeInstruction, activeTask: activeTaskContext, history: globalContextData.recentHistory });
       const execConfig = getExecutionConfig();
       if (!media && execConfig.enabled) {
         try {
-          let taskId = activeTaskContext?.task?.id;
-
-          const planResult = await agentPlannerService.planAndCompile({
-            telegramUserId: ctx.from.id,
-            goal: currentPrompt,
-            taskId,
-            context: {
-              capabilities: adaptivePlan.requiredCapabilities,
-              conversationHistory: globalContextData.recentHistory,
-              activeTask: activeTaskContext?.task ? { id: activeTaskContext.task.id, goal: activeTaskContext.task.goal } : undefined,
-            },
-          });
-
-          // A direct response is intentionally handled by the normal conversational
-          // streaming path. Only a validated non-direct graph may enter autonomous execution.
+          const taskId = activeTaskContext?.task?.id;
+          const planResult = await agentPlannerService.planAndCompile({ telegramUserId: ctx.from.id, goal: currentPrompt, taskId, context: { capabilities: adaptivePlan.requiredCapabilities, conversationHistory: globalContextData.recentHistory, activeTask: activeTaskContext?.task ? { id: activeTaskContext.task.id, goal: activeTaskContext.task.goal } : undefined } });
           if (planResult.success && planResult.graph && !planResult.isDirectResponse) {
-            logger.info(
-              {
-                graphId: planResult.graph.graphId,
-                nodesCount: planResult.graph.nodes.length,
-                telegramUserId: ctx.from.id,
-                hasExplicitOrActiveTask: Boolean(taskId),
-              },
-              "TELEGRAM_AUTONOMOUS_EXECUTION_DISPATCHED",
-            );
-
-            const session = await executionEngine.startExecution({
-              graphId: planResult.graph.graphId,
-              planRevision: 1,
-              requestId: `req_${Date.now()}_${ctx.from.id}`,
-              taskId,
-              executionContext: {
-                telegramUserId: ctx.from.id,
-                chatId: ctx.chat.id,
-                conversationId: globalContextData.conversationId,
-              },
-            });
-
+            logger.info({ graphId: planResult.graph.graphId, nodesCount: planResult.graph.nodes.length, telegramUserId: ctx.from.id, hasExplicitOrActiveTask: Boolean(taskId) }, "TELEGRAM_AUTONOMOUS_EXECUTION_DISPATCHED");
+            const session = await executionEngine.startExecution({ graphId: planResult.graph.graphId, planRevision: 1, requestId: `req_${Date.now()}_${ctx.from.id}`, taskId, executionContext: { telegramUserId: ctx.from.id, chatId: ctx.chat.id, conversationId: globalContextData.conversationId } });
             if (session.status === "waiting_approval" || (session.status as string) === "WAITING_APPROVAL") {
               const pendingApproval = await executionPersistence.getPendingApprovalForGraph(planResult.graph.graphId, 1);
-              if (pendingApproval) {
-                await ctx.reply(
-                  `⚠️ <b>Approval Required</b>\n\n<b>Node:</b> <code>${escapeHtml(pendingApproval.nodeId)}</code>\n<b>Reason:</b> ${escapeHtml(pendingApproval.reason || "Action requires explicit user confirmation")}`,
-                  {
-                    parse_mode: "HTML",
-                    reply_markup: executionApprovalKeyboard(pendingApproval.approvalId),
-                  },
-                );
-                return;
-              }
+              if (pendingApproval) { await ctx.reply(`⚠️ <b>Approval Required</b>\n\n<b>Node:</b> <code>${escapeHtml(pendingApproval.nodeId)}</code>\n<b>Reason:</b> ${escapeHtml(pendingApproval.reason || "Action requires explicit user confirmation")}`, { parse_mode: "HTML", reply_markup: executionApprovalKeyboard(pendingApproval.approvalId) }); return; }
             }
-
             if (session.status === "completed" || (session.status as string) === "COMPLETED") {
-              const completedAttempts = await executionPersistence.getCompletedExecutionsForGraph(
-                planResult.graph.graphId,
-                1,
-              );
-
+              const completedAttempts = await executionPersistence.getCompletedExecutionsForGraph(planResult.graph.graphId, 1);
               const nodeResults: Record<string, any> = {};
-              for (const att of completedAttempts) {
-                if (att.result) {
-                  nodeResults[att.nodeId] = att.result;
-                }
-              }
-
+              for (const att of completedAttempts) if (att.result) nodeResults[att.nodeId] = att.result;
               let finalAnswer = "";
-              const graphNodeIds = Object.keys(planResult.graph.nodes);
-              const reverseNodeIds = [...graphNodeIds].reverse();
-
+              const reverseNodeIds = [...Object.keys(planResult.graph.nodes)].reverse();
               for (const nodeId of reverseNodeIds) {
-                const res = nodeResults[nodeId];
-                if (res?.output) {
-                  const out = res.output;
-                  if (typeof out === "string") {
-                    finalAnswer = out;
-                    break;
-                  } else if (out.response && typeof out.response === "string") {
-                    finalAnswer = out.response;
-                    break;
-                  } else if (out.summary && typeof out.summary === "string") {
-                    finalAnswer = out.summary;
-                    break;
-                  } else if (out.formatted && typeof out.formatted === "string") {
-                    finalAnswer = out.formatted;
-                    break;
-                  } else if (out.conclusion && typeof out.conclusion === "string") {
-                    finalAnswer = out.conclusion;
-                    break;
-                  }
-                }
+                const res = nodeResults[nodeId]; if (!res?.output) continue; const out = res.output;
+                if (typeof out === "string") { finalAnswer = out; break; }
+                if (out.response && typeof out.response === "string") { finalAnswer = out.response; break; }
+                if (out.summary && typeof out.summary === "string") { finalAnswer = out.summary; break; }
+                if (out.formatted && typeof out.formatted === "string") { finalAnswer = out.formatted; break; }
+                if (out.conclusion && typeof out.conclusion === "string") { finalAnswer = out.conclusion; break; }
               }
-
-              if (!finalAnswer) {
-                for (const nodeId of reverseNodeIds) {
-                  const res = nodeResults[nodeId];
-                  if (res?.output) {
-                    finalAnswer = typeof res.output === "string" ? res.output : JSON.stringify(res.output, null, 2);
-                    break;
-                  }
-                }
-              }
-
-              if (!finalAnswer) {
-                finalAnswer = `Execution plan ${planResult.graph.graphId} completed successfully.`;
-              }
-
-              await runStage(
-                "telegram_reply",
-                { telegramUserId: ctx.from.id, chatId: ctx.chat.id },
-                () => ctx.reply(finalAnswer, { reply_markup: feedbackKeyboard() }),
-              );
-
+              if (!finalAnswer) for (const nodeId of reverseNodeIds) { const res = nodeResults[nodeId]; if (res?.output) { finalAnswer = typeof res.output === "string" ? res.output : JSON.stringify(res.output, null, 2); break; } }
+              if (!finalAnswer) finalAnswer = `Execution plan ${planResult.graph.graphId} completed successfully.`;
+              await runStage("telegram_reply", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => ctx.reply(finalAnswer, { reply_markup: feedbackKeyboard() }));
               await conversations.addMessage(globalContextData.conversationId, "user", currentPrompt);
               await conversations.addMessage(globalContextData.conversationId, "model", finalAnswer);
-
-              if (activeTaskContext) {
-                const stepCount = activeTaskContext.steps.length;
-                const stepUpdates = activeTaskContext.steps.map((s) => ({
-                  stepOrder: s.stepOrder,
-                  status: "completed",
-                  resultSummary: `Completed in autonomous plan ${planResult.graph.graphId}`,
-                }));
-                await taskService.updateTaskAndStepsAtomic({
-                  taskId: activeTaskContext.task.id,
-                  stepUpdates,
-                  taskStatus: "completed",
-                  currentStep: stepCount,
-                });
-              }
-
+              if (activeTaskContext) { const stepCount = activeTaskContext.steps.length; const stepUpdates = activeTaskContext.steps.map((s) => ({ stepOrder: s.stepOrder, status: "completed", resultSummary: `Completed in autonomous plan ${planResult.graph.graphId}` })); await taskService.updateTaskAndStepsAtomic({ taskId: activeTaskContext.task.id, stepUpdates, taskStatus: "completed", currentStep: stepCount }); }
               return;
             }
           }
-        } catch (planExecErr: any) {
-          logger.warn(
-            { error: safeErrorMetadata(planExecErr) },
-            "Autonomous execution path failed; falling through to conversational streaming",
-          );
-        }
-      }
-
-      let initialPlaceholder = "💭 <i>Thinking...</i>";
-      if (media?.mediaType === "voice" || media?.mediaType === "audio") {
-        initialPlaceholder = "🎧 <i>Transcribing and understanding voice note...</i>";
-      } else if (media?.mediaType === "image") {
-        initialPlaceholder = "🔍 <i>Analyzing visual image...</i>";
-      } else if (media?.mediaType === "document") {
-        initialPlaceholder = `📄 <i>Reading document (${escapeHtml(media.fileName || "attachment")})...</i>`;
+        } catch (planExecErr) { logger.warn({ error: safeErrorMetadata(planExecErr) }, "Autonomous execution path failed; falling through to conversational streaming"); }
       }
 
       const streamingResponder = new StreamingResponder(ctx, {
-        placeholderText: initialPlaceholder,
+        presentationEvent: {
+          state: media ? "generating" : "generating",
+          toolName: media ? `${media.mediaType}_input` : "assistant_response",
+          operationLabel: media ? `${media.mediaType} response` : "assistant response",
+          userFacingProgress: true,
+          expectsLongRunning: Boolean(media),
+        },
       });
       await streamingResponder.init();
-
-      const normalizedHistory: GeminiMessage[] = assembledContext.history
-        .filter((m) => m.role === "user" || m.role === "model" || m.role === "assistant")
-        .map((m) => ({
-          role: (m.role === "assistant" ? "model" : m.role) as "user" | "model",
-          content: m.content,
-        }));
-
-      const reply = await runStage(
-        "gemini_request",
-        { telegramUserId: ctx.from.id, chatId: ctx.chat.id },
-        () =>
-          gemini.generateReplyStream(
-            normalizedHistory,
-            currentPrompt,
-            {
-              personalityInstruction: globalContextData.userProfile.personalityInstruction,
-              modeInstruction: assembledContext.effectiveSystemPrompt,
-              memoryInstruction: globalContextData.promptInstruction || undefined,
-            },
-            {
-              enableSearch: adaptivePlan.enableSearch,
-              thinkingLevel: adaptivePlan.thinkingLevel,
-              attachments: processedMedia
-                ? [
-                    {
-                      mimeType: processedMedia.mimeType,
-                      data: processedMedia.data,
-                      fileName: processedMedia.fileName,
-                    },
-                  ]
-                : undefined,
-              hasAudio: media?.mediaType === "voice" || media?.mediaType === "audio",
-              hasVisionOrDocument: media?.mediaType === "image" || media?.mediaType === "document",
-              mediaSizeBytes: processedMedia?.sizeBytes,
-            },
-            async (accumulated) => {
-              await streamingResponder.onChunk(accumulated);
-            },
-          ),
-      );
-
-      await runStage(
-        "telegram_streaming_finalize",
-        { telegramUserId: ctx.from.id, chatId: ctx.chat.id },
-        () => streamingResponder.finalize(reply),
-      );
-
-      // 6. Save message pair associated with user conversation
-      const persistentUserMessage = media
-        ? `[Attached ${media.mediaType}: ${media.fileName || media.reportedMime || "file"}]\n${prompt}`
-        : prompt;
-
-      await runStage(
-        "user_message_save",
-        { telegramUserId: ctx.from.id, chatId: ctx.chat.id },
-        () => conversations.addMessage(globalContextData.conversationId, "user", persistentUserMessage),
-      );
-      await runStage(
-        "model_response_save",
-        { telegramUserId: ctx.from.id, chatId: ctx.chat.id },
-        () => conversations.addMessage(globalContextData.conversationId, "model", reply),
-      );
-
-      // Synchronize task progress atomically from model response
-      if (activeTaskContext) {
-        await taskService.syncTaskProgressFromResponse(activeTaskContext.task.id, reply);
-      }
-
-      // Asynchronous passive memory acquisition (background fact extraction)
-      void memoryService.processBackgroundExtraction(
-        ctx.from.id,
-        currentPrompt,
-        globalContextData.conversationId,
-      );
+      const normalizedHistory: GeminiMessage[] = assembledContext.history.filter((m) => m.role === "user" || m.role === "model" || m.role === "assistant").map((m) => ({ role: (m.role === "assistant" ? "model" : m.role) as "user" | "model", content: m.content }));
+      const reply = await runStage("gemini_request", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => gemini.generateReplyStream(normalizedHistory, currentPrompt, { personalityInstruction: globalContextData.userProfile.personalityInstruction, modeInstruction: assembledContext.effectiveSystemPrompt, memoryInstruction: globalContextData.promptInstruction || undefined }, { enableSearch: adaptivePlan.enableSearch, thinkingLevel: adaptivePlan.thinkingLevel, attachments: processedMedia ? [{ mimeType: processedMedia.mimeType, data: processedMedia.data, fileName: processedMedia.fileName }] : undefined, hasAudio: media?.mediaType === "voice" || media?.mediaType === "audio", hasVisionOrDocument: media?.mediaType === "image" || media?.mediaType === "document", mediaSizeBytes: processedMedia?.sizeBytes }, async (accumulated) => streamingResponder.onChunk(accumulated)));
+      await runStage("telegram_streaming_finalize", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => streamingResponder.finalize(reply));
+      const persistentUserMessage = media ? `[Attached ${media.mediaType}: ${media.fileName || media.reportedMime || "file"}]\n${prompt}` : prompt;
+      await runStage("user_message_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => conversations.addMessage(globalContextData.conversationId, "user", persistentUserMessage));
+      await runStage("model_response_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => conversations.addMessage(globalContextData.conversationId, "model", reply));
+      if (activeTaskContext) await taskService.syncTaskProgressFromResponse(activeTaskContext.task.id, reply);
+      void memoryService.processBackgroundExtraction(ctx.from.id, currentPrompt, globalContextData.conversationId);
     } catch (error) {
-      logger.error(
-        {
-          stage: "telegram_message_handling",
-          telegramUserId: ctx.from.id,
-          chatId: ctx.chat.id,
-          error: safeErrorMetadata(error),
-        },
-        "Telegram message handling failed",
-      );
+      logger.error({ stage: "telegram_message_handling", telegramUserId: ctx.from.id, chatId: ctx.chat.id, error: safeErrorMetadata(error) }, "Telegram message handling failed");
       await ctx.reply(GENERIC_ERROR_MESSAGE).catch(() => {});
-    } finally {
-      stopTyping();
-    }
+    } finally { stopTyping(); }
   }
 
-  bot.on("message:text", async (ctx) => {
-    await handleIncomingTelegramMessage(ctx, {
-      rawText: ctx.message.text,
-    });
-  });
+  bot.on("message:text", async (ctx) => { await handleIncomingTelegramMessage(ctx, { rawText: ctx.message.text }); });
+  bot.on("message:photo", async (ctx) => { const photos = ctx.message.photo; const highestResPhoto = photos[photos.length - 1]; await handleIncomingTelegramMessage(ctx, { rawText: ctx.message.caption, media: { fileId: highestResPhoto.file_id, mediaType: "image", reportedMime: "image/jpeg", fileSize: highestResPhoto.file_size } }); });
+  bot.on("message:document", async (ctx) => { const doc = ctx.message.document; await handleIncomingTelegramMessage(ctx, { rawText: ctx.message.caption, media: { fileId: doc.file_id, mediaType: "document", reportedMime: doc.mime_type, fileName: doc.file_name, fileSize: doc.file_size } }); });
+  bot.on("message:voice", async (ctx) => { const voice = ctx.message.voice; await handleIncomingTelegramMessage(ctx, { rawText: ctx.message.caption, media: { fileId: voice.file_id, mediaType: "voice", reportedMime: voice.mime_type || "audio/ogg", fileSize: voice.file_size } }); });
+  bot.on("message:audio", async (ctx) => { const audio = ctx.message.audio; await handleIncomingTelegramMessage(ctx, { rawText: ctx.message.caption, media: { fileId: audio.file_id, mediaType: "audio", reportedMime: audio.mime_type || "audio/mpeg", fileName: audio.file_name, fileSize: audio.file_size } }); });
 
-  bot.on("message:photo", async (ctx) => {
-    const photos = ctx.message.photo;
-    const highestResPhoto = photos[photos.length - 1];
-    await handleIncomingTelegramMessage(ctx, {
-      rawText: ctx.message.caption,
-      media: {
-        fileId: highestResPhoto.file_id,
-        mediaType: "image",
-        reportedMime: "image/jpeg",
-        fileSize: highestResPhoto.file_size,
-      },
-    });
-  });
-
-  bot.on("message:document", async (ctx) => {
-    const doc = ctx.message.document;
-    await handleIncomingTelegramMessage(ctx, {
-      rawText: ctx.message.caption,
-      media: {
-        fileId: doc.file_id,
-        mediaType: "document",
-        reportedMime: doc.mime_type,
-        fileName: doc.file_name,
-        fileSize: doc.file_size,
-      },
-    });
-  });
-
-  bot.on("message:voice", async (ctx) => {
-    const voice = ctx.message.voice;
-    await handleIncomingTelegramMessage(ctx, {
-      rawText: ctx.message.caption,
-      media: {
-        fileId: voice.file_id,
-        mediaType: "voice",
-        reportedMime: voice.mime_type || "audio/ogg",
-        fileSize: voice.file_size,
-      },
-    });
-  });
-
-  bot.on("message:audio", async (ctx) => {
-    const audio = ctx.message.audio;
-    await handleIncomingTelegramMessage(ctx, {
-      rawText: ctx.message.caption,
-      media: {
-        fileId: audio.file_id,
-        mediaType: "audio",
-        reportedMime: audio.mime_type || "audio/mpeg",
-        fileName: audio.file_name,
-        fileSize: audio.file_size,
-      },
-    });
-  });
-
-  bot.catch((error) => {
-    logger.error(
-      {
-        stage: "telegram_update",
-        updateId: error.ctx.update.update_id,
-        error: safeErrorMetadata(error.error),
-      },
-      "Telegram update failed",
-    );
-  });
-
-  // Wire up the asynchronous worker queue handler
-  telegramWorkerQueue.setUpdateHandler(async (update) => {
-    if (!bot.isInited()) {
-      await bot.init();
-    }
-    await bot.handleUpdate(update);
-  });
+  bot.catch((error) => { logger.error({ stage: "telegram_update", updateId: error.ctx.update.update_id, error: safeErrorMetadata(error.error) }, "Telegram update failed"); });
+  telegramWorkerQueue.setUpdateHandler(async (update) => { if (!bot.isInited()) await bot.init(); await bot.handleUpdate(update); });
 
   return {
     bot,
     async start() {
-    await rateLimiter.initializeDb();
-      if (!bot.isInited()) {
-        try {
-          await bot.init();
-        } catch (err) {
-          logger.warn({ error: safeErrorMetadata(err) }, "Failed to initialize bot during start()");
-        }
-      }
+      await rateLimiter.initializeDb();
+      if (!bot.isInited()) { try { await bot.init(); } catch (err) { logger.warn({ error: safeErrorMetadata(err) }, "Failed to initialize bot during start()"); } }
       reminderScheduler.start(bot);
-      if (config.usePolling) {
-        await bot.api.deleteWebhook();
-        await bot.start({
-          onStart: (botInfo) => {
-            logger.info(
-              { username: botInfo.username, model: config.geminiModel },
-              "Telegram polling started",
-            );
-          },
-        });
-        return;
-      }
-      await bot.api.setWebhook(config.telegramWebhookUrl!, {
-        secret_token: config.telegramWebhookSecret,
-      });
+      if (config.usePolling) { await bot.api.deleteWebhook(); await bot.start({ onStart: (botInfo) => logger.info({ username: botInfo.username, model: config.geminiModel }, "Telegram polling started") }); return; }
+      await bot.api.setWebhook(config.telegramWebhookUrl!, { secret_token: config.telegramWebhookSecret });
       logger.info({ webhookUrlConfigured: true }, "Telegram webhook configured");
     },
-    async stop() {
-      reminderScheduler.stop();
-      await telegramWorkerQueue.drain(3000);
-      await bot.stop();
-      logger.info("Telegram bot stopped");
-    },
+    async stop() { reminderScheduler.stop(); await telegramWorkerQueue.drain(3000); await bot.stop(); logger.info("Telegram bot stopped"); },
     mountWebhook(app) {
-      // Metrics endpoint for real-time queue observability
-      app.get("/api/telegram/queue-metrics", (_req: Request, res: Response) => {
-        res.json({
-          status: "ok",
-          workerQueue: telegramWorkerQueue.getMetrics(),
-        });
-      });
-
+      app.get("/api/telegram/queue-metrics", (_req: Request, res: Response) => { res.json({ status: "ok", workerQueue: telegramWorkerQueue.getMetrics() }); });
       if (config.usePolling) return;
-
-      // Webhook Ingestion + Asynchronous Worker Queue (Fast-Ack pattern)
       app.post("/api/telegram/webhook", (req: Request, res: Response) => {
-        // 1. Verify secret token if configured
-        if (config.telegramWebhookSecret) {
-          const secretHeader = req.header("X-Telegram-Bot-Api-Secret-Token");
-          if (secretHeader !== config.telegramWebhookSecret) {
-            logger.warn("Telegram webhook received update with invalid secret token");
-            res.status(403).json({ error: "Unauthorized" });
-            return;
-          }
-        }
-
-        // 2. Validate payload structure
+        if (config.telegramWebhookSecret) { const secretHeader = req.header("X-Telegram-Bot-Api-Secret-Token"); if (secretHeader !== config.telegramWebhookSecret) { logger.warn("Telegram webhook received update with invalid secret token"); res.status(403).json({ error: "Unauthorized" }); return; } }
         const update = req.body;
-        if (!update || typeof update !== "object" || typeof update.update_id !== "number") {
-          res.status(400).json({ error: "Invalid Telegram update payload" });
-          return;
-        }
-
-        // 3. Fast-Ack: Immediately return 200 OK to Telegram in <5ms to prevent timeout retries
+        if (!update || typeof update !== "object" || typeof update.update_id !== "number") { res.status(400).json({ error: "Invalid Telegram update payload" }); return; }
         res.status(200).json({ ok: true });
-
-        // 4. Enqueue into the adaptive concurrency worker pool
-        try {
-          telegramWorkerQueue.enqueue(update);
-        } catch (err) {
-          logger.error({ error: safeErrorMetadata(err), updateId: update.update_id }, "Failed to enqueue update");
-        }
+        try { telegramWorkerQueue.enqueue(update); } catch (err) { logger.error({ error: safeErrorMetadata(err), updateId: update.update_id }, "Failed to enqueue update"); }
       });
     },
   };
