@@ -43,6 +43,27 @@ export class TaskService {
     return { currentStep: sorted[sorted.length - 1].stepOrder, activeStep: sorted[sorted.length - 1], isAllCompleted: false };
   }
 
+  formatTaskForPrompt(task: AgentTaskRecord, steps: AgentTaskStepRecord[]): string {
+    const state = this.deriveCurrentStep(steps);
+    const sorted = [...(steps || [])].sort((a, b) => a.stepOrder - b.stepOrder);
+    const stepLines = sorted.map((step) => {
+      const status = String(step.status || "pending");
+      const summary = step.resultSummary ? ` — ${step.resultSummary}` : "";
+      return `${step.stepOrder}. [${status}] ${step.title}${summary}`;
+    });
+
+    return [
+      "[ACTIVE TASK]",
+      `Task #${task.id}: ${task.title}`,
+      `Goal: ${task.goal}`,
+      `Status: ${task.status}`,
+      `Current step: ${state.currentStep}`,
+      "Steps:",
+      ...(stepLines.length ? stepLines : ["1. [pending] No task steps recorded"]),
+      "Task context is background state. Continue the tracked task only when the user's current request is actually about this task; otherwise answer the user's current request normally.",
+    ].join("\n");
+  }
+
   validateStatusTransition(currentStatus: TaskStatus, newStatus: TaskStatus): void {
     if (currentStatus === newStatus) return;
     const allowed = TaskService.VALID_TRANSITIONS[currentStatus] || [];
