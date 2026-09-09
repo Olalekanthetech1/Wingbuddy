@@ -6,6 +6,7 @@ import envRouter from "./env";
 import executionRouter from "./execution";
 import modelsRouter from "./models";
 import providersRouter from "./providers";
+import aiRoutingRouter from "./ai-routing";
 import simulatorRouter from "./simulator";
 import behaviorConfigRouter from "./behavior-config";
 
@@ -18,6 +19,7 @@ router.use(envRouter);
 router.use(executionRouter);
 router.use(modelsRouter);
 router.use(providersRouter);
+router.use(aiRoutingRouter);
 router.use(simulatorRouter);
 router.use(behaviorConfigRouter);
 
