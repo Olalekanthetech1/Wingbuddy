@@ -25,45 +25,29 @@ export interface AssembledContext {
 }
 
 export class ContextManagerService {
-  private static readonly DEFAULT_MAX_CHAR_BUDGET = 120_000; // ~30k tokens
+  private static readonly DEFAULT_MAX_CHAR_BUDGET = 120_000;
   private gemini?: GeminiService;
 
   private getGemini(): GeminiService {
     if (!this.gemini) {
       const config = getConfig();
-      this.gemini = new GeminiService(
-        config.geminiApiKey,
-        config.geminiModel,
-        config.geminiTimeoutMs,
-      );
+      this.gemini = new GeminiService(config.geminiApiKey, config.geminiModel, config.geminiTimeoutMs);
     }
     return this.gemini;
   }
 
-  /**
-   * Resolves long-term memory for the current turn without ever falling back to the full corpus.
-   * Callers may provide pre-filtered memories from GlobalContextService; otherwise this layer
-   * performs the same adaptive vector/lexical retrieval locally.
-   */
   private async resolveRelevantMemories(
     telegramUserId: number,
     userMessage: string,
     provided?: UserMemoryRecord[],
   ): Promise<UserMemoryRecord[]> {
     if (provided !== undefined) return provided;
-
     const query = userMessage.trim();
     if (query.length <= 3) return [];
 
     try {
       const queryVec = await this.getGemini().embedText(query);
-      if (queryVec.length > 0) {
-        return await chatDatabaseService.searchSimilarMemories(
-          telegramUserId,
-          queryVec,
-        );
-      }
-
+      if (queryVec.length > 0) return await chatDatabaseService.searchSimilarMemories(telegramUserId, queryVec);
       return await chatDatabaseService.searchMemories(telegramUserId, query);
     } catch (error) {
       logger.debug?.(
@@ -74,10 +58,6 @@ export class ContextManagerService {
     }
   }
 
-  /**
-   * Assembles a complete, budgeted, context-aware prompt payload for Gemini using dynamic instruction precedence and semantic conversation state.
-   * Long-term memory is relevance-gated and remains silent unless memory itself is the user's topic.
-   */
   async assembleContext(options: {
     telegramUserId: number | bigint;
     conversationId?: number;
@@ -91,17 +71,9 @@ export class ContextManagerService {
   }): Promise<AssembledContext> {
     const telegramUserId = Number(options.telegramUserId);
     const maxBudget = options.maxCharBudget ?? ContextManagerService.DEFAULT_MAX_CHAR_BUDGET;
-
-    // Relevance is decided upstream when supplied. If omitted, retrieve only semantic/lexical matches.
-    const memories = await this.resolveRelevantMemories(
-      telegramUserId,
-      options.userMessage,
-      options.relevantMemories,
-    );
+    const memories = await this.resolveRelevantMemories(telegramUserId, options.userMessage, options.relevantMemories);
     const formattedMemories = memories.length > 0
-      ? `\n\n[RELEVANT LONG-TERM MEMORY]\n${memories
-          .map((m) => `- ${m.content}`)
-          .join("\n")}\n\nUse only when relevant. Do not mention the memory system to the user.`
+      ? `\n\n[RELEVANT LONG-TERM MEMORY]\n${memories.map((m) => `- ${m.content}`).join("\n")}\n\nUse only when relevant. Do not mention the memory system to the user.`
       : "";
 
     let activeTaskData = options.activeTask || null;
@@ -119,7 +91,7 @@ export class ContextManagerService {
     }
 
     let conversationSummary = "";
-    let sessionSummaries: Array<{ summary: string }> = [];
+    const sessionSummaries: Array<{ summary: string }> = [];
     if (options.conversationId) {
       const summaryRecord = await chatDatabaseService.getLatestSummaryForConversation(options.conversationId);
       if (summaryRecord) {
@@ -130,38 +102,35 @@ export class ContextManagerService {
 
     let rawHistory = options.history || [];
     let isTruncated = false;
-
     let semanticState = options.semanticState || null;
+
     if (!semanticState && rawHistory.length > 0 && options.userMessage.trim()) {
       try {
         semanticState = await conversationIntelligenceService.analyzeSemanticState(
           options.userMessage,
           rawHistory,
-          async (history, analysisPrompt) =>
-            this.getGemini().generateReply(
-              history,
-              analysisPrompt,
-              "Act as the conversation-state interpreter. Return the exact JSON requested by the user prompt. Do not answer the underlying user request.",
-            ),
+          async (history, analysisPrompt) => this.getGemini().generateReply(
+            history,
+            analysisPrompt,
+            "Act as the conversation-state interpreter. Return only the exact JSON object requested.",
+          ),
         );
       } catch (error) {
         logger.debug?.(
           { telegramUserId, error: error instanceof Error ? error.message : String(error) },
-          "Semantic conversation analysis fell back to deterministic continuity state",
+          "Semantic conversation analysis unavailable; continuing without semantic continuity enrichment",
         );
       }
     }
 
-    const continuity = conversationIntelligenceService.resolve(options.userMessage, rawHistory);
+    const continuity = conversationIntelligenceService.resolve(options.userMessage, rawHistory, semanticState);
     const continuityInstruction = conversationIntelligenceService.buildContextInstruction(continuity);
     const semanticInstruction = semanticState
       ? conversationIntelligenceService.buildSemanticContextInstruction(semanticState)
       : "";
 
-    const calculateLength = (hist: Array<{ role: string; content: string }>, sysPromptLength: number) => {
-      const histLength = hist.reduce((sum, h) => sum + h.content.length, 0);
-      return sysPromptLength + options.userMessage.length + histLength;
-    };
+    const calculateLength = (hist: Array<{ role: string; content: string }>, sysPromptLength: number) =>
+      sysPromptLength + options.userMessage.length + hist.reduce((sum, h) => sum + h.content.length, 0);
 
     const resolution = instructionResolutionService.resolvePrecedence({
       effectiveModeInstruction: options.effectiveModeInstruction,
@@ -173,62 +142,38 @@ export class ContextManagerService {
     });
 
     let fullSystemPrompt = resolution.effectiveSystemPrompt + conversationSummary;
-    if (continuityInstruction) {
-      fullSystemPrompt += `\n\n${continuityInstruction}`;
-    }
-    if (semanticInstruction) {
-      fullSystemPrompt += `\n\n${semanticInstruction}`;
-    }
-    if (formattedMemories) {
-      fullSystemPrompt += formattedMemories;
-    }
-
-    // Memory is an internal personalization mechanism. The model may apply relevant
-    // preferences/facts silently, but must not narrate or expose memory retrieval.
+    if (continuityInstruction) fullSystemPrompt += `\n\n${continuityInstruction}`;
+    if (semanticInstruction) fullSystemPrompt += `\n\n${semanticInstruction}`;
+    if (formattedMemories) fullSystemPrompt += formattedMemories;
     fullSystemPrompt +=
       "\n\n[MEMORY SILENCE POLICY]\nTreat long-term memory as silent background context. Never say that you remember something, never list stored memories, never reveal memory keys or retrieval details, and never attribute an answer to a stored memory unless the user explicitly asks about memory itself.";
 
-    let currentLength = calculateLength(rawHistory, fullSystemPrompt.length);
-    if (currentLength > maxBudget && rawHistory.length > 2) {
+    if (calculateLength(rawHistory, fullSystemPrompt.length) > maxBudget && rawHistory.length > 2) {
       isTruncated = true;
-      logger.info({ telegramUserId, currentLength, maxBudget, originalTurns: rawHistory.length }, "CONTEXT_TRUNCATED");
-      while (rawHistory.length > 2 && calculateLength(rawHistory, fullSystemPrompt.length) > maxBudget) {
-        rawHistory = rawHistory.slice(1);
-      }
+      while (rawHistory.length > 2 && calculateLength(rawHistory, fullSystemPrompt.length) > maxBudget) rawHistory = rawHistory.slice(1);
     }
 
-    // Continuity targets must survive history pruning. If a follow-up is detected,
-    // preserve a bounded recent window containing the target before trimming.
-    if ((continuity.isFollowUp || semanticState?.isFollowUp) && rawHistory.length > 0) {
-      const recentWindow = rawHistory.slice(-6);
-      if (recentWindow.length < rawHistory.length) {
-        rawHistory = recentWindow;
-        isTruncated = true;
-      }
+    if (semanticState?.isFollowUp && rawHistory.length > 6) {
+      rawHistory = rawHistory.slice(-6);
+      isTruncated = true;
     }
 
-    const finalLength = fullSystemPrompt.length + options.userMessage.length + rawHistory.reduce((a, b) => a + b.content.length, 0);
+    const finalLength = fullSystemPrompt.length + options.userMessage.length + rawHistory.reduce((sum, item) => sum + item.content.length, 0);
     const tokenCountEstimate = Math.ceil(finalLength / 4);
 
-    logger.info(
-      {
-        telegramUserId,
-        tokenCountEstimate,
-        isTruncated,
-        historyLength: rawHistory.length,
-        relevantMemoryCount: memories.length,
-        appliedPreferencesCount: resolution.appliedPreferences.length,
-        suppressedCount: resolution.suppressedInstructions.length,
-        continuityFollowUp: continuity.isFollowUp,
-        continuityConfidence: continuity.confidence,
-        continuityReferenceType: continuity.referenceType,
-        semanticFollowUp: semanticState?.isFollowUp ?? false,
-        semanticOperation: semanticState?.operation,
-        semanticConfidence: semanticState?.confidence,
-        semanticUnresolvedReference: Boolean(semanticState?.unresolvedReference),
-      },
-      "CONTEXT_ASSEMBLED_WITH_PRECEDENCE",
-    );
+    logger.info({
+      telegramUserId,
+      tokenCountEstimate,
+      isTruncated,
+      historyLength: rawHistory.length,
+      relevantMemoryCount: memories.length,
+      appliedPreferencesCount: resolution.appliedPreferences.length,
+      suppressedCount: resolution.suppressedInstructions.length,
+      semanticFollowUp: semanticState?.isFollowUp ?? false,
+      semanticOperation: semanticState?.operation,
+      semanticConfidence: semanticState?.confidence,
+      semanticUnresolvedReference: Boolean(semanticState?.unresolvedReference),
+    }, "CONTEXT_ASSEMBLED_WITH_PRECEDENCE");
 
     return {
       effectiveSystemPrompt: fullSystemPrompt,
