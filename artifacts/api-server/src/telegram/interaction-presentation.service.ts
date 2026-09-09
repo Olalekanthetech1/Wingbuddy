@@ -30,6 +30,7 @@ export interface InteractionRuntimeEvent {
   reaction?: string | null;
   expectsLongRunning?: boolean;
   userFacingProgress?: boolean;
+  showThinking?: boolean;
   elapsedMs?: number;
 }
 
@@ -138,10 +139,7 @@ export class InteractionPresentationService {
     const explicit = event.progressText?.trim();
     if (explicit) return `${explicit}${this.latencySuffix(event)}`;
 
-    // "Thinking" is intentionally tied to a genuine reasoning stage rather
-    // than shown for every incoming message. The runtime must explicitly mark
-    // reasoning as user-facing before this becomes visible.
-    if (event.state === "reasoning") {
+    if (event.state === "reasoning" && event.showThinking !== false) {
       return `${this.thinkingText}${this.latencySuffix(event)}`;
     }
 
