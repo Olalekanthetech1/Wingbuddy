@@ -62,7 +62,7 @@ export interface AIStreamChunk {
 
 export interface AIProviderAdapter {
   readonly providerId: AIProviderId;
-  chat(request: AIChatRequest, provider: AIProviderRecord): Promise<AIChatResponse>;
-  stream(request: AIChatRequest, provider: AIProviderRecord): AsyncGenerator<AIStreamChunk>;
-  test(model: string, provider: AIProviderRecord): Promise<{ ok: boolean; latencyMs: number; error?: string }>;
+  chat(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIChatResponse>;
+  stream(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): AsyncGenerator<AIStreamChunk>;
+  test(model: string, provider: AIProviderRecord, apiKey?: string): Promise<{ ok: boolean; latencyMs: number; error?: string }>;
 }
