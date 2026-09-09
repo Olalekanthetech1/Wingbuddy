@@ -30,6 +30,7 @@ const server = app.listen(port, "0.0.0.0", async () => {
     const registeredModels = await modelRegistryService.list();
     const unifiedModels = await unifiedModelRegistryService.initialize();
     const routingPolicy = await adaptiveAIRouterService.getPolicy();
+    await adaptiveAIRouterService.initializeHealth();
     logger.info({
       providerCount: providers.length,
       enabledProviders: providers.filter((provider) => provider.enabled && provider.configured).map((provider) => provider.id),
@@ -52,7 +53,7 @@ const server = app.listen(port, "0.0.0.0", async () => {
   }
 
   const execConfig = getExecutionConfig();
-  logger.info({ enabled: execConfig.enabled, maxConcurrency: execConfig.maxConcurrency, maxPerUser: execConfig.maxPerUser, maxPerGraph: execConfig.maxPerGraph, maxPerTool: execConfig.maxPerTool, leaseDurationMs: execConfig.leaseDurationMs, staleLeaseThresholdMs: execConfig.staleLeaseThresholdMs, defaultTimeoutMs: execConfig.defaultTimeoutMs, maxRetries: execConfig.maxRetries }, "AUTONOMOUS_EXECUTION_ENGINE_STATUS");
+  logger.info({ enabled: execConfig.enabled, maxConcurrency: execConfig.maxConcurrency, maxPerUser: execConfig.maxPerUser, maxPerGraph: execConfig.maxPerGraph, leaseDurationMs: execConfig.leaseDurationMs, staleLeaseThresholdMs: execConfig.staleLeaseThresholdMs, defaultTimeoutMs: execConfig.defaultTimeoutMs, maxRetries: execConfig.maxRetries }, "AUTONOMOUS_EXECUTION_ENGINE_STATUS");
 
   if (startupStateReady) {
     void telegramRuntime.start().catch((error: unknown) => logger.error({ err: error }, "Telegram bot failed to start"));
