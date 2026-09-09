@@ -43,13 +43,16 @@ function fingerprint(text: string, mode: string, history: Array<{ role: string; 
 
 class SemanticInteractionCacheService {
   private readonly entries = new Map<string, CacheEntry>();
+  private readonly latestByText = new Map<string, CacheEntry>();
 
   key(text: string, mode: string, history: Array<{ role: string; content: string }>): string {
     return fingerprint(text, mode, history);
   }
 
   set(text: string, mode: string, history: Array<{ role: string; content: string }>, decision: SemanticInteractionDecision): void {
-    this.entries.set(this.key(text, mode, history), { decision, expiresAt: Date.now() + ttlMs() });
+    const entry = { decision, expiresAt: Date.now() + ttlMs() };
+    this.entries.set(this.key(text, mode, history), entry);
+    this.latestByText.set(text.trim(), entry);
     this.prune();
   }
 
@@ -64,14 +67,29 @@ class SemanticInteractionCacheService {
     return entry.decision;
   }
 
+  getLatestForText(text: string): SemanticInteractionDecision | undefined {
+    const key = text.trim();
+    const entry = this.latestByText.get(key);
+    if (!entry) return undefined;
+    if (entry.expiresAt <= Date.now()) {
+      this.latestByText.delete(key);
+      return undefined;
+    }
+    return entry.decision;
+  }
+
   clear(): void {
     this.entries.clear();
+    this.latestByText.clear();
   }
 
   private prune(): void {
     const now = Date.now();
     for (const [key, entry] of this.entries) {
       if (entry.expiresAt <= now) this.entries.delete(key);
+    }
+    for (const [key, entry] of this.latestByText) {
+      if (entry.expiresAt <= now) this.latestByText.delete(key);
     }
   }
 }
