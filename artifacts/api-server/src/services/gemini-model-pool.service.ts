@@ -18,15 +18,19 @@ function unique(models: string[]): string[] {
 
 /**
  * Runtime-configured Gemini model routing.
- * No model ID is baked into the execution service. The deployment decides
- * which stable models are primary, role-specific, and fallback candidates.
+ * The persisted Model Registry is reflected into process.env by the registry
+ * service after startup and on every Dashboard mutation. Model identity is
+ * therefore never fixed inside this selection layer.
  */
 export class GeminiModelPoolService {
   getCandidates(
     configuredModel: string,
     context: GeminiModelSelectionContext = {},
   ): string[] {
-    const primary = configuredModel?.trim();
+    // GEMINI_MODEL is the current runtime primary selected by the authoritative
+    // registry. The constructor value is retained only as a bootstrap fallback
+    // for callers created before registry synchronization.
+    const primary = process.env.GEMINI_MODEL?.trim() || configuredModel?.trim();
     const globalPool = parseModels(process.env.GEMINI_MODEL_POOL);
     const fast = process.env.GEMINI_MODEL_FAST?.trim();
     const reasoning = process.env.GEMINI_MODEL_REASONING?.trim();
@@ -35,14 +39,14 @@ export class GeminiModelPoolService {
 
     const preferred = context.isExtraction
       ? extraction
-      : context.isDeepReasoning || context.mode === "deep_research" || context.mode === "coder" || context.mode === "math"
+      : context.isDeepReasoning
         ? reasoning
-        : context.enableSearch || context.mode === "general" || context.mode === "study" || context.mode === "creative"
+        : context.enableSearch && fast
           ? fast
           : undefined;
 
     return unique([
-      preferred || primary,
+      preferred,
       primary,
       ...globalPool,
       ...configuredFallbacks,
