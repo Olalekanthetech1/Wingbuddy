@@ -10,6 +10,7 @@ import { modelRegistryService } from "./services/model-registry.service";
 import { aiProviderRegistryService } from "./services/ai-provider-registry.service";
 import { unifiedModelRegistryService } from "./services/unified-model-registry.service";
 import { adaptiveAIRouterService } from "./services/adaptive-ai-router.service";
+import { aiObservabilityService } from "./services/ai-observability.service";
 
 const port = 3000;
 let startupStateReady = false;
@@ -24,6 +25,7 @@ const server = app.listen(port, "0.0.0.0", async () => {
     await apiKeyPoolService.initializeDb();
     await apiKeyPoolService.hydrateFromDatabase();
     await runtimeBehaviorConfigService.initialize();
+    await aiObservabilityService.initialize();
     const providers = await aiProviderRegistryService.list();
     const registeredModels = await modelRegistryService.list();
     const unifiedModels = await unifiedModelRegistryService.initialize();
@@ -35,7 +37,8 @@ const server = app.listen(port, "0.0.0.0", async () => {
       unifiedModelRegistryCount: unifiedModels.length,
       unifiedPrimaryModel: unifiedModels.find((model) => model.enabled && model.roles.includes("primary"))?.modelId || "",
       routingStrategy: routingPolicy.strategy,
-    }, "Unified AI model registry and adaptive routing hydrated before Telegram initialization");
+      observabilityWindowStartedAt: aiObservabilityService.snapshot().windowStartedAt,
+    }, "Unified AI model registry, adaptive routing, and observability hydrated before Telegram initialization");
 
     startupStateReady = true;
     setRuntimeHydrationReady(true);
@@ -60,7 +63,7 @@ const server = app.listen(port, "0.0.0.0", async () => {
 
 const shutdown = (signal: string): void => {
   logger.info({ signal }, "Shutdown requested");
-  void telegramRuntime.stop().finally(() => server.close(() => process.exit(0)));
+  void aiObservabilityService.flush().finally(() => telegramRuntime.stop().finally(() => server.close(() => process.exit(0))));
 };
 process.once("SIGINT", () => shutdown("SIGINT"));
 process.once("SIGTERM", () => shutdown("SIGTERM"));
