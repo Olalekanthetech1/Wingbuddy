@@ -10,6 +10,7 @@ import { modelRegistryService } from "./services/model-registry.service";
 import { aiProviderRegistryService } from "./services/ai-provider-registry.service";
 import { unifiedModelRegistryService } from "./services/unified-model-registry.service";
 import { adaptiveAIRouterService } from "./services/adaptive-ai-router.service";
+import { aiObservabilityService } from "./services/ai-observability.service";
 
 const port = 3000;
 let startupStateReady = false;
@@ -24,10 +25,12 @@ const server = app.listen(port, "0.0.0.0", async () => {
     await apiKeyPoolService.initializeDb();
     await apiKeyPoolService.hydrateFromDatabase();
     await runtimeBehaviorConfigService.initialize();
+    await aiObservabilityService.initialize();
     const providers = await aiProviderRegistryService.list();
     const registeredModels = await modelRegistryService.list();
     const unifiedModels = await unifiedModelRegistryService.initialize();
     const routingPolicy = await adaptiveAIRouterService.getPolicy();
+    await adaptiveAIRouterService.initializeHealth();
     logger.info({
       providerCount: providers.length,
       enabledProviders: providers.filter((provider) => provider.enabled && provider.configured).map((provider) => provider.id),
@@ -35,7 +38,8 @@ const server = app.listen(port, "0.0.0.0", async () => {
       unifiedModelRegistryCount: unifiedModels.length,
       unifiedPrimaryModel: unifiedModels.find((model) => model.enabled && model.roles.includes("primary"))?.modelId || "",
       routingStrategy: routingPolicy.strategy,
-    }, "Unified AI model registry and adaptive routing hydrated before Telegram initialization");
+      observabilityWindowStartedAt: aiObservabilityService.snapshot().windowStartedAt,
+    }, "Unified AI model registry, adaptive routing, and observability hydrated before Telegram initialization");
 
     startupStateReady = true;
     setRuntimeHydrationReady(true);
@@ -49,18 +53,28 @@ const server = app.listen(port, "0.0.0.0", async () => {
   }
 
   const execConfig = getExecutionConfig();
-  logger.info({ enabled: execConfig.enabled, maxConcurrency: execConfig.maxConcurrency, maxPerUser: execConfig.maxPerUser, maxPerGraph: execConfig.maxPerGraph, maxPerTool: execConfig.maxPerTool, leaseDurationMs: execConfig.leaseDurationMs, staleLeaseThresholdMs: execConfig.staleLeaseThresholdMs, defaultTimeoutMs: execConfig.defaultTimeoutMs, maxRetries: execConfig.maxRetries }, "AUTONOMOUS_EXECUTION_ENGINE_STATUS");
+  logger.info({
+    enabled: execConfig.enabled,
+    maxConcurrency: execConfig.maxConcurrency,
+    maxPerUser: execConfig.maxPerUser,
+    maxPerGraph: execConfig.maxPerGraph,
+    maxPerTool: execConfig.maxPerTool,
+    leaseDurationMs: execConfig.leaseDurationMs,
+    staleLeaseThresholdMs: execConfig.staleLeaseThresholdMs,
+    defaultTimeoutMs: execConfig.defaultTimeoutMs,
+    maxRetries: execConfig.maxRetries,
+  }, "AUTONOMOUS_EXECUTION_ENGINE_STATUS");
 
   if (startupStateReady) {
     void telegramRuntime.start().catch((error: unknown) => logger.error({ err: error }, "Telegram bot failed to start"));
   } else {
-    logger.error("Telegram bot startup skipped because authoritative runtime hydration did not complete");
+    logger.error("Telegram bot startup skipped because authoritative PostgreSQL state did not complete hydration");
   }
 });
 
 const shutdown = (signal: string): void => {
   logger.info({ signal }, "Shutdown requested");
-  void telegramRuntime.stop().finally(() => server.close(() => process.exit(0)));
+  void aiObservabilityService.flush().finally(() => telegramRuntime.stop().finally(() => server.close(() => process.exit(0))));
 };
 process.once("SIGINT", () => shutdown("SIGINT"));
 process.once("SIGTERM", () => shutdown("SIGTERM"));

@@ -18,6 +18,7 @@ import { apiKeyPoolService } from "./services/api-key-pool.service";
 import { aiProviderRegistryService } from "./services/ai-provider-registry.service";
 import { unifiedModelRegistryService } from "./services/unified-model-registry.service";
 import { adaptiveAIRouterService } from "./services/adaptive-ai-router.service";
+import { aiObservabilityService } from "./services/ai-observability.service";
 
 const app: Express = express();
 app.use(pinoHttp({ logger, serializers: { req(req) { return { id: req.id, method: req.method, url: req.url?.split("?")[0] }; }, res(res) { return { statusCode: res.statusCode }; } } }));
@@ -87,6 +88,7 @@ app.get("/api/dashboard/runtime", async (_req: Request, res: Response) => {
     adaptiveAIRouterService.getPolicy(),
     adaptiveAIRouterService.healthSnapshot(),
   ]);
+  await aiObservabilityService.initialize();
   const primary = models.find((model) => model.enabled && model.roles.includes("primary"));
   res.json({
     controlPlane: "postgresql-authoritative",
@@ -100,6 +102,7 @@ app.get("/api/dashboard/runtime", async (_req: Request, res: Response) => {
     models,
     routingPolicy,
     routingHealth,
+    observability: aiObservabilityService.snapshot(),
     webResearchProvider: process.env.TAVILY_API_KEY?.trim() ? "Tavily" : "",
     webResearchConfigured: Boolean(process.env.TAVILY_API_KEY?.trim()),
     executionEngineEnabled: String(process.env.EXECUTION_ENGINE_ENABLED ?? "").toLowerCase() === "true",

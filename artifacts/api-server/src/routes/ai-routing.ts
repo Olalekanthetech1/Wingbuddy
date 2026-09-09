@@ -1,5 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { adaptiveAIRouterService } from "../services/adaptive-ai-router.service";
+import { aiObservabilityService } from "../services/ai-observability.service";
 import type { AIProviderId } from "../services/ai-provider.types";
 
 const router: IRouter = Router();
@@ -51,6 +52,31 @@ router.get("/ai/routing/candidates", async (req: Request, res: Response) => {
 
 router.get("/ai/routing/health", async (_req: Request, res: Response) => {
   res.json({ timestamp: new Date().toISOString(), health: await adaptiveAIRouterService.healthSnapshot() });
+});
+
+router.get("/ai/observability", async (_req: Request, res: Response) => {
+  await aiObservabilityService.initialize();
+  res.json({ timestamp: new Date().toISOString(), observability: aiObservabilityService.snapshot() });
+});
+
+router.post("/ai/observability/flush", async (_req: Request, res: Response) => {
+  await aiObservabilityService.flush();
+  res.json({ message: "AI observability metrics flushed", observability: aiObservabilityService.snapshot() });
+});
+
+router.post("/ai/health/reset", async (req: Request, res: Response) => {
+  const providerId = provider(req.body?.provider);
+  const modelId = typeof req.body?.modelId === "string" ? req.body.modelId.trim() : "";
+  if (req.body?.provider && !providerId) {
+    res.status(400).json({ error: "Unknown provider" });
+    return;
+  }
+  const current = await adaptiveAIRouterService.healthSnapshot();
+  const targets = current.filter((item) => (!providerId || item.provider === providerId) && (!modelId || item.modelId === modelId));
+  for (const item of targets) adaptiveAIRouterService.resetHealth(item.id);
+  aiObservabilityService.reset(providerId, modelId || undefined);
+  await aiObservabilityService.flush();
+  res.json({ message: targets.length ? "AI health state reset" : "No matching health state found", reset: targets.map((item) => ({ provider: item.provider, modelId: item.modelId })) });
 });
 
 export default router;
