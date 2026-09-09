@@ -5,6 +5,7 @@ import dashboardRouter from "./dashboard";
 import envRouter from "./env";
 import executionRouter from "./execution";
 import modelsRouter from "./models";
+import providersRouter from "./providers";
 import simulatorRouter from "./simulator";
 import behaviorConfigRouter from "./behavior-config";
 
@@ -16,6 +17,7 @@ router.use(dashboardRouter);
 router.use(envRouter);
 router.use(executionRouter);
 router.use(modelsRouter);
+router.use(providersRouter);
 router.use(simulatorRouter);
 router.use(behaviorConfigRouter);
 
