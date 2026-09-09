@@ -23,15 +23,6 @@ function configuredTimeZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 }
 
-function hourInTimeZone(date: Date, timeZone: string): number {
-  const value = new Intl.DateTimeFormat("en-US", {
-    hour: "numeric",
-    hour12: false,
-    timeZone,
-  }).format(date);
-  return Number.parseInt(value, 10) % 24;
-}
-
 function resolveTimeOfDay(hour: number): TimeOfDay {
   const morningStart = Number.parseInt(process.env.TEMPORAL_MORNING_START_HOUR ?? "5", 10);
   const afternoonStart = Number.parseInt(process.env.TEMPORAL_AFTERNOON_START_HOUR ?? "12", 10);
