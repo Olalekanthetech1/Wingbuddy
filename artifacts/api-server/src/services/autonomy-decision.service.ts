@@ -2,6 +2,7 @@ import type { GeminiMessage } from "../gemini/gemini.service";
 import type { Capability } from "../config/mode";
 import { logger } from "../lib/logger";
 import { safeErrorMetadata } from "../utils/safe-error";
+import { semanticInteractionCache } from "./semantic-interaction-cache.service";
 
 export type AutonomyRoute = "direct" | "autonomous" | "clarify" | "fallback";
 
@@ -37,6 +38,21 @@ export class AutonomyDecisionService {
     const message = input.userMessage.trim();
     if (!message) return { route: "direct", confidence: 1, rationale: "Empty conversational turn does not require execution.", executionReasons: [] };
 
+    const semanticDecision = this.getSemanticFastPath(input);
+    if (semanticDecision) {
+      logger.info(
+        {
+          route: "direct",
+          confidence: semanticDecision.confidence,
+          semanticIntent: semanticDecision.intent,
+          complexity: semanticDecision.complexity,
+          reasonCount: 1,
+        },
+        "AUTONOMY_DECISION_FAST_PATH",
+      );
+      return semanticDecision;
+    }
+
     try {
       const history = (input.history || [])
         .filter((turn) => /^(user|model|assistant)$/i.test(turn.role) && turn.content?.trim())
@@ -47,9 +63,36 @@ export class AutonomyDecisionService {
       logger.info({ route: parsed.route, confidence: parsed.confidence, reasonCount: parsed.executionReasons.length, activeTask: Boolean(input.activeTask), mediaPresent: Boolean(input.mediaPresent) }, "AUTONOMY_DECISION_COMPLETED");
       return parsed;
     } catch (error) {
-      logger.warn({ error: safeErrorMetadata(error) }, "Autonomy decision model unavailable; deferring to existing planner path");
-      return { route: "fallback", confidence: 0, rationale: "Dynamic autonomy classification was unavailable; preserve existing planner behavior rather than inventing a route.", executionReasons: [] };
+      logger.warn({ error: safeErrorMetadata(error) }, "Autonomy decision model unavailable; preserving planner fallback safety");
+      return { route: "fallback", confidence: 0, rationale: "Dynamic autonomy classification was unavailable; no autonomous action is authorized by the fallback.", executionReasons: [] };
     }
+  }
+
+  private getSemanticFastPath(input: AutonomyDecisionInput): AutonomyDecision | undefined {
+    if (input.mediaPresent || input.activeTask) return undefined;
+
+    const semantic = semanticInteractionCache.getLatestForText(input.userMessage);
+    if (!semantic) return undefined;
+
+    const autonomousIntents = new Set([
+      "image_generation",
+      "video_generation",
+      "search_grounding",
+      "deep_reasoning",
+    ]);
+    if (autonomousIntents.has(semantic.intent)) return undefined;
+    if (semantic.enableSearch || semantic.thinkingLevel) return undefined;
+    if (semantic.isModeSwitch || semantic.unresolvedReference) return undefined;
+    if (semantic.taskIntent && semantic.taskIntent !== "NO_TASK") return undefined;
+    if (semantic.conversationOperation && semantic.conversationOperation !== "new_request") return undefined;
+    if (semantic.complexity !== "simple") return undefined;
+
+    return {
+      route: "direct",
+      confidence: semantic.confidence,
+      rationale: "Semantic interaction resolution identified a simple non-durable conversational turn; autonomous planning is unnecessary.",
+      executionReasons: ["No durable action, tool execution, external evidence retrieval, or multi-step workflow is required."],
+    };
   }
 
   private buildDecisionPrompt(input: AutonomyDecisionInput): string {
@@ -57,7 +100,7 @@ export class AutonomyDecisionService {
     return [
       "Classify the user's CURRENT turn for an AI assistant with direct conversation and durable autonomous execution.",
       "Return ONLY valid JSON. No markdown, code fences, commentary, or additional keys.",
-      'Schema: {"route":"direct|autonomous|clarify","confidence":0,"rationale":"...","executionReasons":["..."]}',
+      '{"route":"direct|autonomous|clarify","confidence":0,"rationale":"...","executionReasons":["..."]}',
       "",
       "Decision semantics:",
       "- direct: answer conversationally. No durable multi-step orchestration or persistent external action is required.",
@@ -65,11 +108,11 @@ export class AutonomyDecisionService {
       "- clarify: required information or a material ambiguity is missing and executing now could create the wrong task, wrong schedule, wrong recipient, wrong artifact, or another irreversible/incorrect action.",
       "",
       "Safety and truthfulness rules:",
-      "- Do not classify from message length, sentence count, or isolated keywords.",
+      "- Do not classify from message length, sentence count, isolated keywords, regex, or vocabulary rules.",
       "- Long explanations, stories, essays, lessons and brainstorming can remain direct.",
       "- Short requests can be autonomous when they require real durable action.",
       "- An active task supports autonomous continuation only when the current turn actually requests execution or progression.",
-      "- When a durable action needs factual parameters that the assistant does not have (for example the exact items, dates, times, recipients, destination, or scope), choose clarify rather than inventing values.",
+      "- When a durable action needs factual parameters that the assistant does not have, choose clarify rather than inventing values.",
       "- Never claim an action was persisted, scheduled, sent, completed, or saved unless the execution layer returns a verified successful tool result.",
       "- Never infer destructive authorization; approvals and capabilities are enforced outside this classifier.",
       "",
