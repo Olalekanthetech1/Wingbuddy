@@ -8,53 +8,20 @@ export type ProviderKeyStatus = "healthy" | "cooldown" | "disabled" | "invalid";
 export type ProviderKeyRotationMode = "round_robin" | "failover";
 
 export interface ProviderManagedKey {
-  id: string;
-  provider: AIProviderId;
-  name: string;
-  key: string;
-  status: ProviderKeyStatus;
-  cooldownUntil?: number;
-  lastError?: string;
-  totalSuccess: number;
-  totalErrors: number;
-  lastUsedAt?: string;
-  source: "env" | "dashboard";
-  createdAt: string;
-  avgLatencyMs?: number;
+  id: string; provider: AIProviderId; name: string; key: string; status: ProviderKeyStatus; cooldownUntil?: number; lastError?: string; totalSuccess: number; totalErrors: number; lastUsedAt?: string; source: "env" | "dashboard"; createdAt: string; avgLatencyMs?: number;
 }
-
 export interface ProviderManagedKeyPublicInfo {
-  id: string;
-  provider: AIProviderId;
-  name: string;
-  maskedKey: string;
-  status: ProviderKeyStatus;
-  cooldownSecondsLeft: number;
-  lastError?: string;
-  totalSuccess: number;
-  totalErrors: number;
-  lastUsedAt?: string;
-  source: "env" | "dashboard";
-  createdAt: string;
-  avgLatencyMs?: number;
+  id: string; provider: AIProviderId; name: string; maskedKey: string; status: ProviderKeyStatus; cooldownSecondsLeft: number; lastError?: string; totalSuccess: number; totalErrors: number; lastUsedAt?: string; source: "env" | "dashboard"; createdAt: string; avgLatencyMs?: number;
 }
-
 export interface ProviderKeyPoolSummary {
-  provider: AIProviderId;
-  rotationMode: ProviderKeyRotationMode;
-  totalKeys: number;
-  healthyKeys: number;
-  inCooldownKeys: number;
-  disabledKeys: number;
-  invalidKeys: number;
-  keys: ProviderManagedKeyPublicInfo[];
+  provider: AIProviderId; rotationMode: ProviderKeyRotationMode; totalKeys: number; healthyKeys: number; inCooldownKeys: number; disabledKeys: number; invalidKeys: number; keys: ProviderManagedKeyPublicInfo[];
 }
 
 type DbRow = Record<string, unknown>;
 const TABLE = "ai_managed_api_keys";
 const MODE_KEY = "AI_KEY_ROTATION_MODE";
 const DEFAULT_COOLDOWN_MS = 45_000;
-
+const HYDRATION_TTL_MS = 5_000;
 const asText = (v: unknown) => (typeof v === "string" ? v : "");
 const asNumber = (v: unknown, fallback = 0) => { const n = Number(v); return Number.isFinite(n) ? n : fallback; };
 const asIso = (v: unknown) => v instanceof Date ? v.toISOString() : (asText(v) ? new Date(asText(v)).toISOString() : new Date().toISOString());
@@ -62,6 +29,7 @@ const asIso = (v: unknown) => v instanceof Date ? v.toISOString() : (asText(v) ?
 export class AIProviderKeyPoolService {
   private readonly keys = new Map<string, ProviderManagedKey>();
   private readonly providerIndexes = new Map<AIProviderId, number>();
+  private readonly hydratedAt = new Map<AIProviderId, number>();
   private initialized = false;
   private rotationMode: ProviderKeyRotationMode = "round_robin";
 
@@ -70,184 +38,73 @@ export class AIProviderKeyPoolService {
     if (!secret) throw new Error("Managed API-key encryption secret is not configured");
     return createHash("sha256").update(secret).digest();
   }
-
-  private encrypt(value: string): string {
-    const iv = randomBytes(12);
-    const cipher = createCipheriv("aes-256-gcm", this.encryptionKey(), iv);
-    const ciphertext = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
-    return `v1:${iv.toString("base64url")}:${cipher.getAuthTag().toString("base64url")}:${ciphertext.toString("base64url")}`;
-  }
-
-  private decrypt(value: string): string {
-    const [version, iv, tag, ciphertext] = value.split(":");
-    if (version !== "v1" || !iv || !tag || !ciphertext) throw new Error("Unsupported managed API-key format");
-    const decipher = createDecipheriv("aes-256-gcm", this.encryptionKey(), Buffer.from(iv, "base64url"));
-    decipher.setAuthTag(Buffer.from(tag, "base64url"));
-    return Buffer.concat([decipher.update(Buffer.from(ciphertext, "base64url")), decipher.final()]).toString("utf8");
-  }
-
+  private encrypt(value: string): string { const iv = randomBytes(12); const cipher = createCipheriv("aes-256-gcm", this.encryptionKey(), iv); const ciphertext = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]); return `v1:${iv.toString("base64url")}:${cipher.getAuthTag().toString("base64url")}:${ciphertext.toString("base64url")}`; }
+  private decrypt(value: string): string { const [version, iv, tag, ciphertext] = value.split(":"); if (version !== "v1" || !iv || !tag || !ciphertext) throw new Error("Unsupported managed API-key format"); const decipher = createDecipheriv("aes-256-gcm", this.encryptionKey(), Buffer.from(iv, "base64url")); decipher.setAuthTag(Buffer.from(tag, "base64url")); return Buffer.concat([decipher.update(Buffer.from(ciphertext, "base64url")), decipher.final()]).toString("utf8"); }
   private fingerprint(key: string): string { return createHash("sha256").update(key).digest("hex"); }
   private mask(key: string): string { return key.length < 8 ? "••••••••" : `${key.slice(0, 6)}...${key.slice(-4)}`; }
 
   async initializeDb(): Promise<void> {
-    await db.execute(sql`
-      CREATE TABLE IF NOT EXISTS ${sql.raw(TABLE)} (
-        id TEXT PRIMARY KEY,
-        provider TEXT NOT NULL DEFAULT 'gemini',
-        name TEXT NOT NULL,
-        secret_ciphertext TEXT NOT NULL,
-        fingerprint TEXT NOT NULL UNIQUE,
-        enabled BOOLEAN NOT NULL DEFAULT TRUE,
-        status TEXT NOT NULL DEFAULT 'healthy',
-        cooldown_until BIGINT,
-        total_success INTEGER NOT NULL DEFAULT 0,
-        total_errors INTEGER NOT NULL DEFAULT 0,
-        avg_latency_ms INTEGER,
-        last_error TEXT,
-        last_used_at TIMESTAMPTZ,
-        source TEXT NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        deleted_at TIMESTAMPTZ
-      );
-    `);
+    if (this.initialized) return;
+    await db.execute(sql`CREATE TABLE IF NOT EXISTS ${sql.raw(TABLE)} (id TEXT PRIMARY KEY, provider TEXT NOT NULL DEFAULT 'gemini', name TEXT NOT NULL, secret_ciphertext TEXT NOT NULL, fingerprint TEXT NOT NULL UNIQUE, enabled BOOLEAN NOT NULL DEFAULT TRUE, status TEXT NOT NULL DEFAULT 'healthy', cooldown_until BIGINT, total_success INTEGER NOT NULL DEFAULT 0, total_errors INTEGER NOT NULL DEFAULT 0, avg_latency_ms INTEGER, last_error TEXT, last_used_at TIMESTAMPTZ, source TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), deleted_at TIMESTAMPTZ);`);
     await db.execute(sql`CREATE INDEX IF NOT EXISTS ai_managed_api_keys_provider_idx ON ${sql.raw(TABLE)} (provider, enabled, deleted_at);`);
     this.initialized = true;
   }
 
   private envKeys(provider: AIProviderId, apiKeyEnv: string): Array<{ key: string; name: string }> {
-    const values: string[] = [];
-    const add = (raw?: string) => {
-      for (const item of (raw || "").split(/[,\s\n]+/).map((v) => v.trim()).filter(Boolean)) if (item.length >= 10 && !values.includes(item)) values.push(item);
-    };
-    add(process.env[apiKeyEnv]);
-    add(process.env[`${apiKeyEnv}S`]);
-    for (let i = 1; i <= 20; i += 1) add(process.env[`${apiKeyEnv}_${i}`]);
+    const values: string[] = []; const add = (raw?: string) => { for (const item of (raw || "").split(/[,\s\n]+/).map((v) => v.trim()).filter(Boolean)) if (item.length >= 10 && !values.includes(item)) values.push(item); };
+    add(process.env[apiKeyEnv]); add(process.env[`${apiKeyEnv}S`]); for (let i = 1; i <= 20; i += 1) add(process.env[`${apiKeyEnv}_${i}`]);
     return values.map((key, index) => ({ key, name: `${provider} environment key ${index + 1}` }));
   }
 
-  async hydrateProvider(provider: AIProviderId, apiKeyEnv: string): Promise<void> {
+  async hydrateProvider(provider: AIProviderId, apiKeyEnv: string, force = false): Promise<void> {
     if (!this.initialized) await this.initializeDb();
-    const envCandidates = this.envKeys(provider, apiKeyEnv);
-    for (const candidate of envCandidates) {
+    const hydrated = this.hydratedAt.get(provider) || 0;
+    if (!force && Date.now() - hydrated < HYDRATION_TTL_MS) return;
+    for (const candidate of this.envKeys(provider, apiKeyEnv)) {
       const fp = this.fingerprint(candidate.key);
       const existing = await db.execute(sql`SELECT id FROM ${sql.raw(TABLE)} WHERE provider = ${provider} AND fingerprint = ${fp} AND deleted_at IS NULL LIMIT 1`);
       if (!existing.rows.length) await this.insert(provider, candidate.key, candidate.name, "env");
     }
     const rows = await db.execute(sql`SELECT * FROM ${sql.raw(TABLE)} WHERE provider = ${provider} AND deleted_at IS NULL ORDER BY created_at ASC`);
+    const nextIds = new Set<string>();
     for (const row of rows.rows as DbRow[]) {
       try {
-        const key = this.decrypt(asText(row.secret_ciphertext));
-        const status = asText(row.status) as ProviderKeyStatus;
-        this.keys.set(asText(row.id), {
-          id: asText(row.id), provider, name: asText(row.name) || `${provider} key`, key,
-          status: ["healthy", "cooldown", "disabled", "invalid"].includes(status) ? status : "healthy",
-          cooldownUntil: row.cooldown_until ? asNumber(row.cooldown_until) : undefined,
-          lastError: asText(row.last_error) || undefined,
-          totalSuccess: asNumber(row.total_success), totalErrors: asNumber(row.total_errors),
-          lastUsedAt: row.last_used_at ? asIso(row.last_used_at) : undefined,
-          source: asText(row.source) === "dashboard" ? "dashboard" : "env",
-          createdAt: asIso(row.created_at), avgLatencyMs: row.avg_latency_ms ? asNumber(row.avg_latency_ms) : undefined,
-        });
-      } catch (error) {
-        logger.error({ provider, id: asText(row.id), error: error instanceof Error ? error.message : String(error) }, "Failed to hydrate managed provider API key");
-      }
+        const key = this.decrypt(asText(row.secret_ciphertext)); const id = asText(row.id); nextIds.add(id); const status = asText(row.status) as ProviderKeyStatus;
+        this.keys.set(id, { id, provider, name: asText(row.name) || `${provider} key`, key, status: ["healthy","cooldown","disabled","invalid"].includes(status) ? status : "healthy", cooldownUntil: row.cooldown_until ? asNumber(row.cooldown_until) : undefined, lastError: asText(row.last_error) || undefined, totalSuccess: asNumber(row.total_success), totalErrors: asNumber(row.total_errors), lastUsedAt: row.last_used_at ? asIso(row.last_used_at) : undefined, source: asText(row.source) === "dashboard" ? "dashboard" : "env", createdAt: asIso(row.created_at), avgLatencyMs: row.avg_latency_ms ? asNumber(row.avg_latency_ms) : undefined });
+      } catch (error) { logger.error({ provider, id: asText(row.id), error: error instanceof Error ? error.message : String(error) }, "Failed to hydrate managed provider API key"); }
     }
+    for (const [id, item] of this.keys) if (item.provider === provider && !nextIds.has(id)) this.keys.delete(id);
+    this.hydratedAt.set(provider, Date.now());
   }
 
   private async insert(provider: AIProviderId, key: string, name: string, source: "env" | "dashboard"): Promise<void> {
     const id = `key-${randomUUID()}`;
-    await db.execute(sql`
-      INSERT INTO ${sql.raw(TABLE)} (id, provider, name, secret_ciphertext, fingerprint, enabled, status, source)
-      VALUES (${id}, ${provider}, ${name}, ${this.encrypt(key)}, ${this.fingerprint(key)}, TRUE, 'healthy', ${source})
-      ON CONFLICT (fingerprint) DO UPDATE SET provider = EXCLUDED.provider, name = EXCLUDED.name, secret_ciphertext = EXCLUDED.secret_ciphertext, updated_at = NOW(), deleted_at = NULL
-    `);
+    await db.execute(sql`INSERT INTO ${sql.raw(TABLE)} (id, provider, name, secret_ciphertext, fingerprint, enabled, status, source) VALUES (${id}, ${provider}, ${name}, ${this.encrypt(key)}, ${this.fingerprint(key)}, TRUE, 'healthy', ${source}) ON CONFLICT (fingerprint) DO UPDATE SET provider = EXCLUDED.provider, name = EXCLUDED.name, secret_ciphertext = EXCLUDED.secret_ciphertext, enabled = TRUE, status = 'healthy', source = EXCLUDED.source, updated_at = NOW(), deleted_at = NULL`);
   }
 
   async addKey(provider: AIProviderId, key: string, name?: string): Promise<ProviderManagedKeyPublicInfo> {
-    if (!this.initialized) await this.initializeDb();
-    const clean = key.trim();
-    if (clean.length < 10) throw new Error("Invalid API key format");
-    const fp = this.fingerprint(clean);
-    const existing = await db.execute(sql`SELECT id, name, created_at, deleted_at FROM ${sql.raw(TABLE)} WHERE fingerprint = ${fp} LIMIT 1`);
-    if (existing.rows[0] && !existing.rows[0].deleted_at) throw new Error("This API key is already registered");
-    const id = asText(existing.rows[0]?.id) || `key-${randomUUID()}`;
-    const item: ProviderManagedKey = { id, provider, name: name?.trim() || `${provider} key`, key: clean, status: "healthy", totalSuccess: 0, totalErrors: 0, source: "dashboard", createdAt: existing.rows[0]?.created_at ? asIso(existing.rows[0].created_at) : new Date().toISOString() };
-    await db.execute(sql`
-      INSERT INTO ${sql.raw(TABLE)} (id, provider, name, secret_ciphertext, fingerprint, enabled, status, source, created_at, updated_at, deleted_at)
-      VALUES (${item.id}, ${item.provider}, ${item.name}, ${this.encrypt(item.key)}, ${fp}, TRUE, 'healthy', 'dashboard', ${new Date(item.createdAt)}, NOW(), NULL)
-      ON CONFLICT (fingerprint) DO UPDATE SET provider = EXCLUDED.provider, name = EXCLUDED.name, secret_ciphertext = EXCLUDED.secret_ciphertext, enabled = TRUE, status = 'healthy', source = 'dashboard', updated_at = NOW(), deleted_at = NULL
-    `);
-    this.keys.set(id, item);
-    return this.toPublic(item);
+    if (!this.initialized) await this.initializeDb(); const clean = key.trim(); if (clean.length < 10) throw new Error("Invalid API key format");
+    const fp = this.fingerprint(clean); const existing = await db.execute(sql`SELECT id, name, created_at, deleted_at FROM ${sql.raw(TABLE)} WHERE fingerprint = ${fp} LIMIT 1`); if (existing.rows[0] && !existing.rows[0].deleted_at) throw new Error("This API key is already registered");
+    const id = asText(existing.rows[0]?.id) || `key-${randomUUID()}`; const item: ProviderManagedKey = { id, provider, name: name?.trim() || `${provider} key`, key: clean, status: "healthy", totalSuccess: 0, totalErrors: 0, source: "dashboard", createdAt: existing.rows[0]?.created_at ? asIso(existing.rows[0].created_at) : new Date().toISOString() };
+    await db.execute(sql`INSERT INTO ${sql.raw(TABLE)} (id, provider, name, secret_ciphertext, fingerprint, enabled, status, source, created_at, updated_at, deleted_at) VALUES (${item.id}, ${item.provider}, ${item.name}, ${this.encrypt(item.key)}, ${fp}, TRUE, 'healthy', 'dashboard', ${new Date(item.createdAt)}, NOW(), NULL) ON CONFLICT (fingerprint) DO UPDATE SET provider = EXCLUDED.provider, name = EXCLUDED.name, secret_ciphertext = EXCLUDED.secret_ciphertext, enabled = TRUE, status = 'healthy', source = 'dashboard', updated_at = NOW(), deleted_at = NULL`);
+    this.keys.set(id, item); this.hydratedAt.set(provider, Date.now()); return this.toPublic(item);
   }
 
-  getOrderedKeys(provider: AIProviderId, apiKeyEnv: string): ProviderManagedKey[] {
-    const candidates = Array.from(this.keys.values()).filter((item) => item.provider === provider && item.status !== "disabled" && item.status !== "invalid");
-    const now = Date.now();
-    const healthy = candidates.filter((item) => item.status !== "cooldown" || !item.cooldownUntil || item.cooldownUntil <= now);
+  getOrderedKeys(provider: AIProviderId): ProviderManagedKey[] {
+    const candidates = Array.from(this.keys.values()).filter((item) => item.provider === provider && item.status !== "disabled" && item.status !== "invalid"); const now = Date.now(); const healthy = candidates.filter((item) => item.status !== "cooldown" || !item.cooldownUntil || item.cooldownUntil <= now);
     if (this.rotationMode === "failover") return healthy.length ? healthy : candidates;
-    if (!healthy.length) return candidates.sort((a, b) => (a.cooldownUntil || 0) - (b.cooldownUntil || 0));
-    const start = (this.providerIndexes.get(provider) || 0) % healthy.length;
-    this.providerIndexes.set(provider, (start + 1) % healthy.length);
-    return healthy.map((_, offset) => healthy[(start + offset) % healthy.length]);
+    if (!healthy.length) return candidates.sort((a,b) => (a.cooldownUntil || 0) - (b.cooldownUntil || 0));
+    const start = (this.providerIndexes.get(provider) || 0) % healthy.length; this.providerIndexes.set(provider, (start + 1) % healthy.length); return healthy.map((_, offset) => healthy[(start + offset) % healthy.length]);
   }
 
-  async setRotationMode(mode: ProviderKeyRotationMode): Promise<void> {
-    this.rotationMode = mode;
-    await db.execute(sql`INSERT INTO system_settings (key, value, updated_at) VALUES (${MODE_KEY}, ${mode}, NOW()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`);
-  }
+  async setRotationMode(mode: ProviderKeyRotationMode): Promise<void> { this.rotationMode = mode; await db.execute(sql`INSERT INTO system_settings (key, value, updated_at) VALUES (${MODE_KEY}, ${mode}, NOW()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`); }
   getRotationMode(): ProviderKeyRotationMode { return this.rotationMode; }
-
-  recordSuccess(id: string, latencyMs: number): void {
-    const item = this.keys.get(id); if (!item) return;
-    item.totalSuccess += 1; item.status = "healthy"; item.cooldownUntil = undefined; item.lastUsedAt = new Date().toISOString();
-    if (latencyMs > 0) item.avgLatencyMs = item.avgLatencyMs ? Math.round((item.avgLatencyMs * 9 + latencyMs) / 10) : latencyMs;
-    void this.persist(item);
-  }
-
-  recordFailure(id: string, error: unknown): void {
-    const item = this.keys.get(id); if (!item) return;
-    item.totalErrors += 1; item.lastError = (error instanceof Error ? error.message : String(error)).slice(0, 300);
-    const msg = item.lastError;
-    if (/429|rate.?limit|quota|resource.?exhausted/i.test(msg)) { item.status = "cooldown"; item.cooldownUntil = Date.now() + DEFAULT_COOLDOWN_MS; }
-    else if (/401|403|invalid.?api.?key|authentication/i.test(msg)) item.status = "invalid";
-    void this.persist(item);
-  }
-
-  private async persist(item: ProviderManagedKey): Promise<void> {
-    try { await db.execute(sql`UPDATE ${sql.raw(TABLE)} SET enabled = ${item.status !== "disabled"}, status = ${item.status}, cooldown_until = ${item.cooldownUntil || null}, total_success = ${item.totalSuccess}, total_errors = ${item.totalErrors}, avg_latency_ms = ${item.avgLatencyMs || null}, last_error = ${item.lastError || null}, last_used_at = ${item.lastUsedAt ? new Date(item.lastUsedAt) : null}, updated_at = NOW() WHERE id = ${item.id}`); }
-    catch (error) { logger.warn({ id: item.id, error: error instanceof Error ? error.message : String(error) }, "Failed to persist provider API-key health"); }
-  }
-
-  async removeKey(id: string): Promise<boolean> {
-    const item = this.keys.get(id);
-    if (!item) return false;
-    if (item.source === "env") await db.execute(sql`UPDATE ${sql.raw(TABLE)} SET enabled = FALSE, deleted_at = NOW(), updated_at = NOW() WHERE id = ${id}`);
-    else await db.execute(sql`DELETE FROM ${sql.raw(TABLE)} WHERE id = ${id}`);
-    this.keys.delete(id); return true;
-  }
-
-  async toggleKey(id: string): Promise<ProviderManagedKeyPublicInfo | null> {
-    const item = this.keys.get(id); if (!item) return null;
-    item.status = item.status === "disabled" ? "healthy" : "disabled"; item.cooldownUntil = undefined; await this.persist(item); return this.toPublic(item);
-  }
-
-  getSummary(provider: AIProviderId): ProviderKeyPoolSummary {
-    const items = Array.from(this.keys.values()).filter((item) => item.provider === provider);
-    let healthy = 0, cooldown = 0, disabled = 0, invalid = 0;
-    const now = Date.now();
-    const keys = items.map((item) => {
-      if (item.status === "cooldown" && item.cooldownUntil && item.cooldownUntil <= now) { item.status = "healthy"; item.cooldownUntil = undefined; void this.persist(item); }
-      if (item.status === "healthy") healthy += 1; else if (item.status === "cooldown") cooldown += 1; else if (item.status === "disabled") disabled += 1; else invalid += 1;
-      return this.toPublic(item);
-    });
-    return { provider, rotationMode: this.rotationMode, totalKeys: items.length, healthyKeys: healthy, inCooldownKeys: cooldown, disabledKeys: disabled, invalidKeys: invalid, keys };
-  }
-
-  private toPublic(item: ProviderManagedKey): ProviderManagedKeyPublicInfo {
-    return { id: item.id, provider: item.provider, name: item.name, maskedKey: this.mask(item.key), status: item.status, cooldownSecondsLeft: item.cooldownUntil ? Math.max(0, Math.ceil((item.cooldownUntil - Date.now()) / 1000)) : 0, lastError: item.lastError, totalSuccess: item.totalSuccess, totalErrors: item.totalErrors, lastUsedAt: item.lastUsedAt, source: item.source, createdAt: item.createdAt, avgLatencyMs: item.avgLatencyMs };
-  }
+  recordSuccess(id: string, latencyMs: number): void { const item = this.keys.get(id); if (!item) return; item.totalSuccess += 1; item.status = "healthy"; item.cooldownUntil = undefined; item.lastUsedAt = new Date().toISOString(); if (latencyMs > 0) item.avgLatencyMs = item.avgLatencyMs ? Math.round((item.avgLatencyMs * 9 + latencyMs) / 10) : latencyMs; void this.persist(item); }
+  recordFailure(id: string, error: unknown): void { const item = this.keys.get(id); if (!item) return; item.totalErrors += 1; item.lastError = (error instanceof Error ? error.message : String(error)).slice(0, 300); const msg = item.lastError; if (/429|rate.?limit|quota|resource.?exhausted/i.test(msg)) { item.status = "cooldown"; item.cooldownUntil = Date.now() + DEFAULT_COOLDOWN_MS; } else if (/401|403|invalid.?api.?key|authentication/i.test(msg)) item.status = "invalid"; void this.persist(item); }
+  private async persist(item: ProviderManagedKey): Promise<void> { try { await db.execute(sql`UPDATE ${sql.raw(TABLE)} SET enabled = ${item.status !== "disabled"}, status = ${item.status}, cooldown_until = ${item.cooldownUntil || null}, total_success = ${item.totalSuccess}, total_errors = ${item.totalErrors}, avg_latency_ms = ${item.avgLatencyMs || null}, last_error = ${item.lastError || null}, last_used_at = ${item.lastUsedAt ? new Date(item.lastUsedAt) : null}, updated_at = NOW() WHERE id = ${item.id}`); } catch (error) { logger.warn({ id: item.id, error: error instanceof Error ? error.message : String(error) }, "Failed to persist provider API-key health"); } }
+  async removeKey(id: string): Promise<boolean> { const item = this.keys.get(id); if (!item) return false; if (item.source === "env") await db.execute(sql`UPDATE ${sql.raw(TABLE)} SET enabled = FALSE, deleted_at = NOW(), updated_at = NOW() WHERE id = ${id}`); else await db.execute(sql`DELETE FROM ${sql.raw(TABLE)} WHERE id = ${id}`); this.keys.delete(id); this.hydratedAt.set(item.provider, Date.now()); return true; }
+  async toggleKey(id: string): Promise<ProviderManagedKeyPublicInfo | null> { const item = this.keys.get(id); if (!item) return null; item.status = item.status === "disabled" ? "healthy" : "disabled"; item.cooldownUntil = undefined; await this.persist(item); return this.toPublic(item); }
+  getSummary(provider: AIProviderId): ProviderKeyPoolSummary { const items = Array.from(this.keys.values()).filter((item) => item.provider === provider); let healthy = 0, cooldown = 0, disabled = 0, invalid = 0; const now = Date.now(); const keys = items.map((item) => { if (item.status === "cooldown" && item.cooldownUntil && item.cooldownUntil <= now) { item.status = "healthy"; item.cooldownUntil = undefined; void this.persist(item); } if (item.status === "healthy") healthy += 1; else if (item.status === "cooldown") cooldown += 1; else if (item.status === "disabled") disabled += 1; else invalid += 1; return this.toPublic(item); }); return { provider, rotationMode: this.rotationMode, totalKeys: items.length, healthyKeys: healthy, inCooldownKeys: cooldown, disabledKeys: disabled, invalidKeys: invalid, keys }; }
+  private toPublic(item: ProviderManagedKey): ProviderManagedKeyPublicInfo { return { id: item.id, provider: item.provider, name: item.name, maskedKey: this.mask(item.key), status: item.status, cooldownSecondsLeft: item.cooldownUntil ? Math.max(0, Math.ceil((item.cooldownUntil - Date.now()) / 1000)) : 0, lastError: item.lastError, totalSuccess: item.totalSuccess, totalErrors: item.totalErrors, lastUsedAt: item.lastUsedAt, source: item.source, createdAt: item.createdAt, avgLatencyMs: item.avgLatencyMs }; }
 }
-
 export const aiProviderKeyPoolService = new AIProviderKeyPoolService();
