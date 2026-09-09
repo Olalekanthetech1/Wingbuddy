@@ -72,6 +72,7 @@ export class AIObservabilityService {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private flushInFlight: Promise<void> | null = null;
   private dirty = false;
+  private revision = 0;
 
   private key(provider: AIProviderId, modelId: string): string { return `${provider}:${modelId}`; }
 
@@ -109,6 +110,7 @@ export class AIObservabilityService {
     metric.requests += 1;
     if (streamed) metric.streamedRequests += 1;
     metric.updatedAt = new Date().toISOString();
+    this.revision += 1;
     this.markDirty();
   }
 
@@ -121,6 +123,7 @@ export class AIObservabilityService {
     metric.ewmaLatencyMs = metric.ewmaLatencyMs ? metric.ewmaLatencyMs * 0.7 + latency * 0.3 : latency;
     metric.lastSuccessAt = new Date().toISOString();
     metric.updatedAt = new Date().toISOString();
+    this.revision += 1;
     this.markDirty();
   }
 
@@ -136,6 +139,7 @@ export class AIObservabilityService {
     metric.lastFailureAt = new Date().toISOString();
     metric.lastError = (error instanceof Error ? error.message : String(error)).slice(0, 1000);
     metric.updatedAt = new Date().toISOString();
+    this.revision += 1;
     this.markDirty();
   }
 
@@ -148,15 +152,19 @@ export class AIObservabilityService {
   async flush(): Promise<void> {
     if (!this.loaded || !this.dirty) return;
     if (this.flushInFlight) return this.flushInFlight;
+    const flushRevision = this.revision;
+    const models = [...this.metrics.values()]
+      .sort((a, b) => b.requests - a.requests || a.provider.localeCompare(b.provider) || a.modelId.localeCompare(b.modelId))
+      .slice(0, MAX_MODELS)
+      .map((metric) => ({ ...metric }));
+    const payload = { windowStartedAt: this.windowStartedAt, models, updatedAt: new Date().toISOString() };
+    this.dirty = false;
     this.flushInFlight = (async () => {
       try {
-        const models = [...this.metrics.values()]
-          .sort((a, b) => b.requests - a.requests || a.provider.localeCompare(b.provider) || a.modelId.localeCompare(b.modelId))
-          .slice(0, MAX_MODELS);
-        const payload = { windowStartedAt: this.windowStartedAt, models, updatedAt: new Date().toISOString() };
         await db.insert(systemSettingsTable).values({ key: KEY, value: JSON.stringify(payload), updatedAt: new Date() }).onConflictDoUpdate({ target: systemSettingsTable.key, set: { value: JSON.stringify(payload), updatedAt: new Date() } });
-        this.dirty = false;
+        if (this.revision !== flushRevision) this.markDirty();
       } catch (error) {
+        this.dirty = true;
         logger.warn({ error: error instanceof Error ? error.message : String(error) }, "Failed to persist AI observability metrics");
       } finally {
         this.flushInFlight = null;
@@ -166,15 +174,11 @@ export class AIObservabilityService {
   }
 
   reset(provider?: AIProviderId, modelId?: string): void {
-    if (provider && modelId) {
-      this.metrics.delete(this.key(provider, modelId));
-    } else if (provider) {
-      for (const key of this.metrics.keys()) if (key.startsWith(`${provider}:`)) this.metrics.delete(key);
-    } else if (modelId) {
-      for (const key of this.metrics.keys()) if (key.endsWith(`:${modelId}`)) this.metrics.delete(key);
-    } else {
-      this.metrics.clear();
-    }
+    if (provider && modelId) this.metrics.delete(this.key(provider, modelId));
+    else if (provider) for (const key of this.metrics.keys()) if (key.startsWith(`${provider}:`)) this.metrics.delete(key);
+    else if (modelId) for (const key of this.metrics.keys()) if (key.endsWith(`:${modelId}`)) this.metrics.delete(key);
+    else this.metrics.clear();
+    this.revision += 1;
     this.markDirty();
   }
 
@@ -192,15 +196,7 @@ export class AIObservabilityService {
     return {
       generatedAt: new Date().toISOString(),
       windowStartedAt: this.windowStartedAt,
-      totals: {
-        requests: totals.requests,
-        successes: totals.successes,
-        failures: totals.failures,
-        streamedRequests: totals.streamedRequests,
-        streamedFailures: totals.streamedFailures,
-        avgLatencyMs: completed ? Math.round(totals.totalLatencyMs / completed) : 0,
-        successRate: completed ? Number(((totals.successes / completed) * 100).toFixed(2)) : 0,
-      },
+      totals: { requests: totals.requests, successes: totals.successes, failures: totals.failures, streamedRequests: totals.streamedRequests, streamedFailures: totals.streamedFailures, avgLatencyMs: completed ? Math.round(totals.totalLatencyMs / completed) : 0, successRate: completed ? Number(((totals.successes / completed) * 100).toFixed(2)) : 0 },
       models: models.sort((a, b) => b.requests - a.requests || a.provider.localeCompare(b.provider) || a.modelId.localeCompare(b.modelId)),
     };
   }
