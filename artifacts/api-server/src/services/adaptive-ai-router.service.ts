@@ -13,11 +13,18 @@ export interface AIRoutingContext { mode?: string; isDeepReasoning?: boolean; is
 export interface AIRoutingCandidate { model: UnifiedModelRecord; score: number; reasons: string[]; healthScore: number; latencyMs: number; }
 
 const POLICY_KEY = "AI_ROUTING_POLICY";
-const DEFAULT_POLICY: AIRoutingPolicy = { strategy: "adaptive", capabilityWeight: 40, healthWeight: 25, latencyWeight: 15, priorityWeight: 20, maxAttempts: 3, updatedAt: new Date().toISOString() };
+const DEFAULT_POLICY: AIRoutingPolicy = { strategy: "adaptive", capabilityWeight: 50, healthWeight: 25, latencyWeight: 15, priorityWeight: 10, maxAttempts: 3, updatedAt: new Date().toISOString() };
 
 interface ModelHealth { successes: number; failures: number; consecutiveFailures: number; ewmaLatencyMs: number; lastSuccessAt?: string; lastFailureAt?: string; lastError?: string; cooldownUntil?: number; }
 function finite(value: unknown, fallback: number): number { return typeof value === "number" && Number.isFinite(value) ? value : fallback; }
 function clamp(value: number, min: number, max: number): number { return Math.min(max, Math.max(min, value)); }
+function isQuotaOrRateLimit(error: unknown): boolean {
+  const record = typeof error === "object" && error !== null ? error as Record<string, unknown> : undefined;
+  const status = typeof record?.status === "number" ? record.status : undefined;
+  if (status === 429) return true;
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return message.includes("429") || message.includes("quota") || message.includes("resource_exhausted") || message.includes("rate limit") || message.includes("too many requests") || message.includes("tokens per minute") || message.includes("tpm");
+}
 
 export class AdaptiveAIRouterService {
   private policyCache: AIRoutingPolicy | null = null;
@@ -26,28 +33,44 @@ export class AdaptiveAIRouterService {
   private readonly health = new Map<string, ModelHealth>();
 
   private defaultHealth(): ModelHealth { return { successes: 0, failures: 0, consecutiveFailures: 0, ewmaLatencyMs: 0 }; }
-  private getHealth(model: UnifiedModelRecord): ModelHealth { const current = this.health.get(model.id); if (current) return current; const initial = this.defaultHealth(); this.health.set(model.id, initial); return initial; }
-  private healthScore(model: UnifiedModelRecord): number { const health = this.getHealth(model); if (health.cooldownUntil && Date.now() < health.cooldownUntil) return 0; const attempts = health.successes + health.failures; const reliability = attempts === 0 ? 80 : (health.successes / Math.max(1, attempts)) * 100; const penalty = Math.min(45, health.consecutiveFailures * 15); return clamp(reliability - penalty, 0, 100); }
-  private latencyScore(model: UnifiedModelRecord): number { const latency = this.getHealth(model).ewmaLatencyMs; if (!latency) return 70; return clamp(100 - Math.max(0, latency - 300) / 25, 10, 100); }
+  private getHealth(model: UnifiedModelRecord): ModelHealth {
+    const current = this.health.get(model.id);
+    if (current) return current;
+    const initial = this.defaultHealth();
+    this.health.set(model.id, initial);
+    return initial;
+  }
+  private healthScore(model: UnifiedModelRecord): number {
+    const health = this.getHealth(model);
+    if (health.cooldownUntil && Date.now() < health.cooldownUntil) return 0;
+    const attempts = health.successes + health.failures;
+    const reliability = attempts === 0 ? 80 : (health.successes / Math.max(1, attempts)) * 100;
+    const penalty = Math.min(60, health.consecutiveFailures * 20);
+    return clamp(reliability - penalty, 0, 100);
+  }
+  private latencyScore(model: UnifiedModelRecord): number {
+    const latency = this.getHealth(model).ewmaLatencyMs;
+    if (!latency) return 70;
+    return clamp(100 - Math.max(0, latency - 300) / 25, 10, 100);
+  }
 
   async initializeHealth(): Promise<void> {
     await aiObservabilityService.initialize();
-    const snapshot = aiObservabilityService.snapshot();
+    const [snapshot, models] = await Promise.all([Promise.resolve(aiObservabilityService.snapshot()), unifiedModelRegistryService.list()]);
+    const modelIds = new Map(models.map((model) => [`${model.provider}:${model.modelId}`, model.id]));
     for (const metric of snapshot.models) {
+      const key = modelIds.get(`${metric.provider}:${metric.modelId}`) || `${metric.provider}:${metric.modelId}`;
       const attempts = metric.successes + metric.failures;
-      const health = this.health.get(`${metric.provider}:${metric.modelId}`) || this.defaultHealth();
+      const health = this.health.get(key) || this.defaultHealth();
       health.successes = metric.successes;
       health.failures = metric.failures;
-      health.consecutiveFailures = 0;
+      health.consecutiveFailures = attempts > 0 && metric.successes === 0 ? Math.min(3, metric.failures) : 0;
       health.ewmaLatencyMs = metric.ewmaLatencyMs || metric.avgLatencyMs || 0;
       health.lastSuccessAt = metric.lastSuccessAt;
       health.lastFailureAt = metric.lastFailureAt;
       health.lastError = metric.lastError;
-      if (attempts > 0 && metric.failures >= 3 && metric.successes === 0) {
-        health.consecutiveFailures = Math.min(3, metric.failures);
-        health.cooldownUntil = Date.now() + 30_000;
-      }
-      this.health.set(`${metric.provider}:${metric.modelId}`, health);
+      if (attempts > 0 && metric.failures > metric.successes && metric.lastFailureAt) health.cooldownUntil = Date.now() + 10_000;
+      this.health.set(key, health);
     }
   }
 
@@ -57,16 +80,33 @@ export class AdaptiveAIRouterService {
       const rows = await db.select({ value: systemSettingsTable.value }).from(systemSettingsTable).where(eq(systemSettingsTable.key, POLICY_KEY)).limit(1);
       if (rows[0]?.value) { this.policyCache = this.normalizePolicy(JSON.parse(rows[0].value) as Partial<AIRoutingPolicy>); this.policyCacheAt = Date.now(); return this.policyCache; }
     } catch (error) { logger.warn({ error: String(error) }, "Failed to read adaptive AI routing policy"); }
-    this.policyCache = this.normalizePolicy(DEFAULT_POLICY); this.policyCacheAt = Date.now(); return this.policyCache;
+    this.policyCache = this.normalizePolicy(DEFAULT_POLICY);
+    this.policyCacheAt = Date.now();
+    return this.policyCache;
   }
 
   private normalizePolicy(raw: Partial<AIRoutingPolicy>): AIRoutingPolicy {
     const strategy: AIRoutingStrategy = raw.strategy === "primary_first" || raw.strategy === "priority_only" ? raw.strategy : "adaptive";
-    return { strategy, capabilityWeight: clamp(finite(raw.capabilityWeight, DEFAULT_POLICY.capabilityWeight), 0, 100), healthWeight: clamp(finite(raw.healthWeight, DEFAULT_POLICY.healthWeight), 0, 100), latencyWeight: clamp(finite(raw.latencyWeight, DEFAULT_POLICY.latencyWeight), 0, 100), priorityWeight: clamp(finite(raw.priorityWeight, DEFAULT_POLICY.priorityWeight), 0, 100), maxAttempts: clamp(Math.round(finite(raw.maxAttempts, DEFAULT_POLICY.maxAttempts)), 1, 6), updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : new Date().toISOString() };
+    return {
+      strategy,
+      capabilityWeight: clamp(finite(raw.capabilityWeight, DEFAULT_POLICY.capabilityWeight), 0, 100),
+      healthWeight: clamp(finite(raw.healthWeight, DEFAULT_POLICY.healthWeight), 0, 100),
+      latencyWeight: clamp(finite(raw.latencyWeight, DEFAULT_POLICY.latencyWeight), 0, 100),
+      priorityWeight: clamp(finite(raw.priorityWeight, DEFAULT_POLICY.priorityWeight), 0, 100),
+      maxAttempts: clamp(Math.round(finite(raw.maxAttempts, DEFAULT_POLICY.maxAttempts)), 1, 6),
+      updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : new Date().toISOString(),
+    };
   }
 
   async getPolicy(): Promise<AIRoutingPolicy> { return { ...(await this.loadPolicy()) }; }
-  async setPolicy(patch: Partial<Omit<AIRoutingPolicy, "updatedAt">>): Promise<AIRoutingPolicy> { const current = await this.loadPolicy(); const next = this.normalizePolicy({ ...current, ...patch, updatedAt: new Date().toISOString() }); await db.insert(systemSettingsTable).values({ key: POLICY_KEY, value: JSON.stringify(next), updatedAt: new Date() }).onConflictDoUpdate({ target: systemSettingsTable.key, set: { value: JSON.stringify(next), updatedAt: new Date() } }); this.policyCache = next; this.policyCacheAt = Date.now(); return { ...next }; }
+  async setPolicy(patch: Partial<Omit<AIRoutingPolicy, "updatedAt">>): Promise<AIRoutingPolicy> {
+    const current = await this.loadPolicy();
+    const next = this.normalizePolicy({ ...current, ...patch, updatedAt: new Date().toISOString() });
+    await db.insert(systemSettingsTable).values({ key: POLICY_KEY, value: JSON.stringify(next), updatedAt: new Date() }).onConflictDoUpdate({ target: systemSettingsTable.key, set: { value: JSON.stringify(next), updatedAt: new Date() } });
+    this.policyCache = next;
+    this.policyCacheAt = Date.now();
+    return { ...next };
+  }
 
   async candidates(context: AIRoutingContext = {}): Promise<AIRoutingCandidate[]> {
     const [models, providers, policy] = await Promise.all([unifiedModelRegistryService.list(), aiProviderRegistryService.list(), this.loadPolicy()]);
@@ -79,68 +119,116 @@ export class AdaptiveAIRouterService {
       if (context.preferredModelId && model.modelId !== context.preferredModelId) return false;
       if (context.requiresVision && !model.capabilities.includes("vision") && !provider.capabilities.includes("vision")) return false;
       if (context.requiresTools && !model.capabilities.includes("tool_calling") && !provider.capabilities.includes("tool_calling")) return false;
-      if (context.enableSearch && model.provider !== "gemini") return false;
+      if (context.enableSearch && !model.capabilities.includes("web_search") && !provider.capabilities.includes("web_search")) return false;
       return this.healthScore(model) > 0;
     });
     const hasRole = (model: UnifiedModelRecord, role: UnifiedModelRole): boolean => model.roles.includes(role);
-    const primary = eligible.find((model) => hasRole(model, "primary"));
-    const preferredRole: UnifiedModelRole | undefined = context.isExtraction ? "extraction" : context.isDeepReasoning ? "reasoning" : context.enableSearch ? "fast" : undefined;
+    const preferredRole: UnifiedModelRole | undefined = context.isExtraction ? "extraction" : context.isDeepReasoning ? "reasoning" : undefined;
     return eligible.map((model) => {
-      const capabilityMatches = [context.requiresVision ? (model.capabilities.includes("vision") ? 1 : 0) : undefined, context.requiresTools ? (model.capabilities.includes("tool_calling") ? 1 : 0) : undefined, context.enableSearch ? (model.provider === "gemini" ? 1 : 0) : undefined, context.isDeepReasoning ? (hasRole(model, "reasoning") || model.capabilities.includes("reasoning") ? 1 : 0) : undefined, context.isExtraction ? (hasRole(model, "extraction") ? 1 : 0) : undefined].filter((value): value is number => value !== undefined);
+      const capabilityMatches = [
+        context.requiresVision ? (model.capabilities.includes("vision") || providerMap.get(model.provider)?.capabilities.includes("vision") ? 1 : 0) : undefined,
+        context.requiresTools ? (model.capabilities.includes("tool_calling") || providerMap.get(model.provider)?.capabilities.includes("tool_calling") ? 1 : 0) : undefined,
+        context.enableSearch ? (model.capabilities.includes("web_search") || providerMap.get(model.provider)?.capabilities.includes("web_search") ? 1 : 0) : undefined,
+        context.isDeepReasoning ? (hasRole(model, "reasoning") || model.capabilities.includes("reasoning") ? 1 : 0) : undefined,
+        context.isExtraction ? (hasRole(model, "extraction") ? 1 : 0) : undefined,
+      ].filter((value): value is number => value !== undefined);
       const capabilityMatch = capabilityMatches.length ? (capabilityMatches.reduce((a, b) => a + b, 0) / capabilityMatches.length) * 100 : 70;
-      const roleBonus = preferredRole && hasRole(model, preferredRole) ? 30 : 0;
-      const primaryBonus = primary?.id === model.id ? 20 : 0;
+      const roleBonus = preferredRole && hasRole(model, preferredRole) ? 20 : 0;
       const priorityScore = 100 - clamp(model.priority * 8, 0, 100);
       const healthScore = this.healthScore(model);
       const latencyScore = this.latencyScore(model);
       const totalWeight = Math.max(1, policy.capabilityWeight + policy.healthWeight + policy.latencyWeight + policy.priorityWeight);
       let score = (capabilityMatch * policy.capabilityWeight + healthScore * policy.healthWeight + latencyScore * policy.latencyWeight + priorityScore * policy.priorityWeight) / totalWeight;
-      if (policy.strategy === "primary_first" && primary?.id === model.id) score += 100;
+      if (policy.strategy === "primary_first" && hasRole(model, "primary")) score += 100;
       if (policy.strategy === "priority_only") score = priorityScore;
-      score += roleBonus + primaryBonus;
+      score += roleBonus;
       const reasons: string[] = [];
-      if (hasRole(model, "primary")) reasons.push("primary");
       if (preferredRole && hasRole(model, preferredRole)) reasons.push(preferredRole);
       if (capabilityMatch >= 90) reasons.push("capability match");
       if (healthScore >= 85) reasons.push("healthy");
       if (latencyScore >= 85) reasons.push("low latency");
       return { model, score, reasons, healthScore, latencyMs: this.getHealth(model).ewmaLatencyMs };
-    }).sort((a, b) => b.score - a.score || a.model.priority - b.model.priority);
+    }).sort((a, b) => b.score - a.score || a.model.priority - b.model.priority || a.model.provider.localeCompare(b.model.provider));
   }
 
-  recordSuccess(modelId: string, latencyMs: number): void { const health = this.health.get(modelId) || this.defaultHealth(); health.successes += 1; health.consecutiveFailures = 0; health.lastSuccessAt = new Date().toISOString(); health.ewmaLatencyMs = health.ewmaLatencyMs ? health.ewmaLatencyMs * 0.7 + latencyMs * 0.3 : latencyMs; health.cooldownUntil = undefined; this.health.set(modelId, health); }
-  recordFailure(modelId: string, error: unknown): void { const health = this.health.get(modelId) || this.defaultHealth(); health.failures += 1; health.consecutiveFailures += 1; health.lastFailureAt = new Date().toISOString(); health.lastError = error instanceof Error ? error.message : String(error); if (health.consecutiveFailures >= 3) health.cooldownUntil = Date.now() + Math.min(60_000, 5_000 * 2 ** (health.consecutiveFailures - 3)); this.health.set(modelId, health); }
+  recordSuccess(modelId: string, latencyMs: number): void {
+    const health = this.health.get(modelId) || this.defaultHealth();
+    health.successes += 1;
+    health.consecutiveFailures = 0;
+    health.lastSuccessAt = new Date().toISOString();
+    health.ewmaLatencyMs = health.ewmaLatencyMs ? health.ewmaLatencyMs * 0.7 + latencyMs * 0.3 : latencyMs;
+    health.cooldownUntil = undefined;
+    this.health.set(modelId, health);
+  }
+
+  recordFailure(modelId: string, error: unknown): void {
+    const health = this.health.get(modelId) || this.defaultHealth();
+    health.failures += 1;
+    health.consecutiveFailures += 1;
+    health.lastFailureAt = new Date().toISOString();
+    health.lastError = error instanceof Error ? error.message : String(error);
+    if (isQuotaOrRateLimit(error)) health.cooldownUntil = Date.now() + 30_000;
+    else if (health.consecutiveFailures >= 3) health.cooldownUntil = Date.now() + Math.min(60_000, 5_000 * 2 ** (health.consecutiveFailures - 3));
+    this.health.set(modelId, health);
+  }
+
   resetHealth(modelId?: string): void { if (modelId) this.health.delete(modelId); else this.health.clear(); }
 
-  async route(request: AIChatRequest, context: AIRoutingContext = {}, geminiExecutor?: () => Promise<AIChatResponse>): Promise<{ response: AIChatResponse; candidate: AIRoutingCandidate; attempts: string[] }> {
-    const policy = await this.loadPolicy(); const candidates = await this.candidates(context); if (!candidates.length) throw new Error("No eligible AI model is available for the requested capability.");
-    const attempts: string[] = []; const limited = candidates.slice(0, policy.maxAttempts); let lastError: unknown;
+  async route(request: AIChatRequest, context: AIRoutingContext = {}): Promise<{ response: AIChatResponse; candidate: AIRoutingCandidate; attempts: string[] }> {
+    const policy = await this.loadPolicy();
+    const candidates = await this.candidates(context);
+    if (!candidates.length) throw new Error("No eligible AI model is available for the requested capability.");
+    const attempts: string[] = [];
+    const limited = candidates.slice(0, policy.maxAttempts);
+    let lastError: unknown;
     for (const candidate of limited) {
-      const started = Date.now(); const key = `${candidate.model.provider}/${candidate.model.modelId}`; attempts.push(key); aiObservabilityService.recordStart(candidate.model.provider, candidate.model.modelId, false);
+      const started = Date.now();
+      const key = `${candidate.model.provider}/${candidate.model.modelId}`;
+      attempts.push(key);
+      aiObservabilityService.recordStart(candidate.model.provider, candidate.model.modelId, false);
       try {
-        const response = candidate.model.provider === "gemini" && geminiExecutor ? await geminiExecutor() : (await aiProviderGatewayService.chat(candidate.model.provider, { ...request, model: candidate.model.modelId })).result;
-        const latencyMs = Date.now() - started; this.recordSuccess(candidate.model.id, latencyMs); aiObservabilityService.recordSuccess(candidate.model.provider, candidate.model.modelId, latencyMs);
+        const response = (await aiProviderGatewayService.chat(candidate.model.provider, { ...request, model: candidate.model.modelId })).result;
+        const latencyMs = Date.now() - started;
+        this.recordSuccess(candidate.model.id, latencyMs);
+        aiObservabilityService.recordSuccess(candidate.model.provider, candidate.model.modelId, latencyMs);
         return { response: { ...response, provider: candidate.model.provider, model: candidate.model.modelId }, candidate, attempts };
       } catch (error) {
-        const latencyMs = Date.now() - started; lastError = error; this.recordFailure(candidate.model.id, error); aiObservabilityService.recordFailure(candidate.model.provider, candidate.model.modelId, latencyMs, error); logger.warn({ provider: candidate.model.provider, model: candidate.model.modelId, error: error instanceof Error ? error.message : String(error) }, "Adaptive AI candidate failed; trying next candidate");
+        const latencyMs = Date.now() - started;
+        lastError = error;
+        this.recordFailure(candidate.model.id, error);
+        aiObservabilityService.recordFailure(candidate.model.provider, candidate.model.modelId, latencyMs, error);
+        logger.warn({ provider: candidate.model.provider, model: candidate.model.modelId, error: error instanceof Error ? error.message : String(error) }, "Adaptive AI candidate failed; selecting next eligible provider/model");
       }
     }
     throw new Error(`Adaptive AI routing exhausted ${attempts.length} candidate(s). Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
   }
 
-  async *routeStream(request: AIChatRequest, context: AIRoutingContext = {}, geminiExecutor?: (onChunk?: (chunk: string) => Promise<void> | void) => Promise<string>): AsyncGenerator<AIStreamChunk> {
-    const policy = await this.loadPolicy(); const candidates = await this.candidates(context); if (!candidates.length) throw new Error("No eligible AI model is available for the requested capability.");
-    const limited = candidates.slice(0, policy.maxAttempts); let lastError: unknown;
+  async *routeStream(request: AIChatRequest, context: AIRoutingContext = {}): AsyncGenerator<AIStreamChunk> {
+    const policy = await this.loadPolicy();
+    const candidates = await this.candidates(context);
+    if (!candidates.length) throw new Error("No eligible AI model is available for the requested capability.");
+    const limited = candidates.slice(0, policy.maxAttempts);
+    let lastError: unknown;
     for (const candidate of limited) {
-      const started = Date.now(); let emitted = false; aiObservabilityService.recordStart(candidate.model.provider, candidate.model.modelId, true);
+      const started = Date.now();
+      let emitted = false;
+      aiObservabilityService.recordStart(candidate.model.provider, candidate.model.modelId, true);
       try {
-        if (candidate.model.provider === "gemini" && geminiExecutor) {
-          let full = ""; const text = await geminiExecutor((chunk) => { emitted = true; full = chunk; }); const latencyMs = Date.now() - started; this.recordSuccess(candidate.model.id, latencyMs); aiObservabilityService.recordSuccess(candidate.model.provider, candidate.model.modelId, latencyMs); if (!full && text) full = text; if (!full) throw new Error("Gemini streaming returned an empty response."); yield { provider: "gemini", model: candidate.model.modelId, delta: full, done: false }; yield { provider: "gemini", model: candidate.model.modelId, delta: "", done: true }; return;
+        for await (const chunk of aiProviderGatewayService.stream(candidate.model.provider, { ...request, model: candidate.model.modelId })) {
+          if (chunk.delta) emitted = true;
+          yield chunk;
         }
-        for await (const chunk of aiProviderGatewayService.stream(candidate.model.provider, { ...request, model: candidate.model.modelId })) { emitted = emitted || Boolean(chunk.delta); yield chunk; }
-        const latencyMs = Date.now() - started; this.recordSuccess(candidate.model.id, latencyMs); aiObservabilityService.recordSuccess(candidate.model.provider, candidate.model.modelId, latencyMs); return;
+        const latencyMs = Date.now() - started;
+        this.recordSuccess(candidate.model.id, latencyMs);
+        aiObservabilityService.recordSuccess(candidate.model.provider, candidate.model.modelId, latencyMs);
+        return;
       } catch (error) {
-        const latencyMs = Date.now() - started; lastError = error; this.recordFailure(candidate.model.id, error); aiObservabilityService.recordFailure(candidate.model.provider, candidate.model.modelId, latencyMs, error, true); if (emitted) throw error; logger.warn({ provider: candidate.model.provider, model: candidate.model.modelId, error: error instanceof Error ? error.message : String(error) }, "Adaptive AI stream candidate failed before output; trying next candidate");
+        const latencyMs = Date.now() - started;
+        lastError = error;
+        this.recordFailure(candidate.model.id, error);
+        aiObservabilityService.recordFailure(candidate.model.provider, candidate.model.modelId, latencyMs, error, true);
+        if (emitted) throw error;
+        logger.warn({ provider: candidate.model.provider, model: candidate.model.modelId, error: error instanceof Error ? error.message : String(error) }, "Adaptive AI stream candidate failed before output; selecting next eligible provider/model");
       }
     }
     throw new Error(`Adaptive AI streaming exhausted candidates. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
@@ -148,7 +236,10 @@ export class AdaptiveAIRouterService {
 
   async healthSnapshot() {
     const models = await unifiedModelRegistryService.list();
-    return models.filter((model) => !model.roles.includes("embedding")).map((model) => { const health = this.getHealth(model); return { provider: model.provider, modelId: model.modelId, id: model.id, successes: health.successes, failures: health.failures, consecutiveFailures: health.consecutiveFailures, ewmaLatencyMs: Math.round(health.ewmaLatencyMs), healthScore: Math.round(this.healthScore(model)), lastSuccessAt: health.lastSuccessAt || null, lastFailureAt: health.lastFailureAt || null, cooldownUntil: health.cooldownUntil || null, lastError: health.lastError || null }; });
+    return models.filter((model) => !model.roles.includes("embedding")).map((model) => {
+      const health = this.getHealth(model);
+      return { provider: model.provider, modelId: model.modelId, id: model.id, successes: health.successes, failures: health.failures, consecutiveFailures: health.consecutiveFailures, ewmaLatencyMs: Math.round(health.ewmaLatencyMs), healthScore: Math.round(this.healthScore(model)), lastSuccessAt: health.lastSuccessAt || null, lastFailureAt: health.lastFailureAt || null, cooldownUntil: health.cooldownUntil || null, lastError: health.lastError || null };
+    });
   }
 }
 
