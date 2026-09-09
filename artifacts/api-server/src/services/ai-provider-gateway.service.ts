@@ -3,18 +3,12 @@ import { aiProviderKeyPoolService, type ProviderManagedKey } from "./ai-provider
 import { apiKeyPoolService, type ManagedKey } from "./api-key-pool.service";
 import type { AIChatRequest, AIChatResponse, AIProviderId, AIProviderRecord, AIStreamChunk } from "./ai-provider.types";
 
-export interface AIProviderExecutionResult<T> {
-  provider: AIProviderId;
-  model: string;
-  result: T;
-}
+export interface AIProviderExecutionResult<T> { provider: AIProviderId; model: string; result: T; }
 
 async function orderedKeys(provider: AIProviderRecord): Promise<Array<ProviderManagedKey | ManagedKey>> {
-  if (provider.id === "gemini") {
-    return apiKeyPoolService.getOrderedKeysForExecution();
-  }
+  if (provider.id === "gemini") return apiKeyPoolService.getOrderedKeysForExecution();
   await aiProviderKeyPoolService.hydrateProvider(provider.id, provider.apiKeyEnv);
-  return aiProviderKeyPoolService.getOrderedKeys(provider.id, provider.apiKeyEnv);
+  return aiProviderKeyPoolService.getOrderedKeys(provider.id);
 }
 
 function keyValue(key: ProviderManagedKey | ManagedKey): string { return key.key; }
