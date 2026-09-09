@@ -10,15 +10,17 @@ import {
 
 export interface StreamingResponderOptions {
   /**
-   * Deprecated compatibility escape hatch. New callers should provide a
-   * presentationEvent so the visible placeholder is derived from runtime
-   * state rather than a hard-coded task label.
+   * Optional compatibility override. Prefer presentationEvent for new callers
+   * so the initial visible state comes from trusted runtime metadata.
    */
   placeholderText?: string;
   presentationEvent?: InteractionRuntimeEvent;
 }
 
-const DEFAULT_STREAM_PLACEHOLDER = "…";
+function configuredThinkingText(): string {
+  const configured = process.env.TELEGRAM_THINKING_TEXT?.trim();
+  return configured || "💭 Thinking";
+}
 
 export class StreamingResponder {
   private lastEditTime = 0;
@@ -39,9 +41,8 @@ export class StreamingResponder {
       ? interactionPresentationService.decide(options.presentationEvent).visibleProgressText
       : undefined;
 
-    // Runtime presentation is authoritative. The legacy placeholder is retained
-    // only for backwards compatibility; the neutral fallback remains "…".
-    this.placeholderText = runtimePlaceholder ?? options.placeholderText ?? DEFAULT_STREAM_PLACEHOLDER;
+    this.placeholderText =
+      runtimePlaceholder ?? options.placeholderText ?? configuredThinkingText();
   }
 
   async init(): Promise<number | undefined> {
@@ -56,7 +57,7 @@ export class StreamingResponder {
     } catch (err) {
       logger.warn(
         { error: safeErrorMetadata(err) },
-        "Could not send initial streaming placeholder; will send single message on finish",
+        "Could not send initial streaming message; will send single message on finish",
       );
       return undefined;
     }
@@ -116,7 +117,16 @@ export class StreamingResponder {
       return;
     }
 
-    const firstChunk = chunks[0] || "...";
+    const firstChunk = chunks[0] || "";
+
+    if (!firstChunk) {
+      try {
+        await this.ctx.api.deleteMessage(this.ctx.chat!.id, this.messageId);
+      } catch (e) {
+        logger.debug({ error: safeErrorMetadata(e) }, "Empty streaming message cleanup failed");
+      }
+      return;
+    }
 
     try {
       await this.ctx.api.editMessageText(
