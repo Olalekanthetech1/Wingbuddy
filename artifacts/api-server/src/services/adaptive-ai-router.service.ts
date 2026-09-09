@@ -59,13 +59,8 @@ interface ModelHealth {
   cooldownUntil?: number;
 }
 
-function finite(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
+function finite(value: unknown, fallback: number): number { return typeof value === "number" && Number.isFinite(value) ? value : fallback; }
+function clamp(value: number, min: number, max: number): number { return Math.min(max, Math.max(min, value)); }
 
 export class AdaptiveAIRouterService {
   private policyCache: AIRoutingPolicy | null = null;
@@ -73,9 +68,7 @@ export class AdaptiveAIRouterService {
   private readonly policyCacheTtlMs = 3000;
   private readonly health = new Map<string, ModelHealth>();
 
-  private defaultHealth(): ModelHealth {
-    return { successes: 0, failures: 0, consecutiveFailures: 0, ewmaLatencyMs: 0 };
-  }
+  private defaultHealth(): ModelHealth { return { successes: 0, failures: 0, consecutiveFailures: 0, ewmaLatencyMs: 0 }; }
 
   private getHealth(model: UnifiedModelRecord): ModelHealth {
     const current = this.health.get(model.id);
@@ -105,8 +98,7 @@ export class AdaptiveAIRouterService {
     try {
       const rows = await db.select({ value: systemSettingsTable.value }).from(systemSettingsTable).where(eq(systemSettingsTable.key, POLICY_KEY)).limit(1);
       if (rows[0]?.value) {
-        const raw = JSON.parse(rows[0].value) as Partial<AIRoutingPolicy>;
-        this.policyCache = this.normalizePolicy(raw);
+        this.policyCache = this.normalizePolicy(JSON.parse(rows[0].value) as Partial<AIRoutingPolicy>);
         this.policyCacheAt = Date.now();
         return this.policyCache;
       }
@@ -120,20 +112,10 @@ export class AdaptiveAIRouterService {
 
   private normalizePolicy(raw: Partial<AIRoutingPolicy>): AIRoutingPolicy {
     const strategy: AIRoutingStrategy = raw.strategy === "primary_first" || raw.strategy === "priority_only" ? raw.strategy : "adaptive";
-    return {
-      strategy,
-      capabilityWeight: clamp(finite(raw.capabilityWeight, DEFAULT_POLICY.capabilityWeight), 0, 100),
-      healthWeight: clamp(finite(raw.healthWeight, DEFAULT_POLICY.healthWeight), 0, 100),
-      latencyWeight: clamp(finite(raw.latencyWeight, DEFAULT_POLICY.latencyWeight), 0, 100),
-      priorityWeight: clamp(finite(raw.priorityWeight, DEFAULT_POLICY.priorityWeight), 0, 100),
-      maxAttempts: clamp(Math.round(finite(raw.maxAttempts, DEFAULT_POLICY.maxAttempts)), 1, 6),
-      updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : new Date().toISOString(),
-    };
+    return { strategy, capabilityWeight: clamp(finite(raw.capabilityWeight, DEFAULT_POLICY.capabilityWeight), 0, 100), healthWeight: clamp(finite(raw.healthWeight, DEFAULT_POLICY.healthWeight), 0, 100), latencyWeight: clamp(finite(raw.latencyWeight, DEFAULT_POLICY.latencyWeight), 0, 100), priorityWeight: clamp(finite(raw.priorityWeight, DEFAULT_POLICY.priorityWeight), 0, 100), maxAttempts: clamp(Math.round(finite(raw.maxAttempts, DEFAULT_POLICY.maxAttempts)), 1, 6), updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : new Date().toISOString() };
   }
 
-  async getPolicy(): Promise<AIRoutingPolicy> {
-    return { ...(await this.loadPolicy()) };
-  }
+  async getPolicy(): Promise<AIRoutingPolicy> { return { ...(await this.loadPolicy()) }; }
 
   async setPolicy(patch: Partial<Omit<AIRoutingPolicy, "updatedAt">>): Promise<AIRoutingPolicy> {
     const current = await this.loadPolicy();
@@ -145,16 +127,12 @@ export class AdaptiveAIRouterService {
   }
 
   async candidates(context: AIRoutingContext = {}): Promise<AIRoutingCandidate[]> {
-    const [models, providers, policy] = await Promise.all([
-      unifiedModelRegistryService.list(),
-      aiProviderRegistryService.list(),
-      this.loadPolicy(),
-    ]);
-    const providerMap = new Map(providers.map((provider) => [provider.id, provider]));
+    const [models, providers, policy] = await Promise.all([unifiedModelRegistryService.list(), aiProviderRegistryService.list(), this.loadPolicy()]);
+    const providerMap = new Map(providers.map((item) => [item.id, item]));
     const eligible = models.filter((model) => {
       if (!model.enabled || model.roles.includes("embedding")) return false;
       const provider = providerMap.get(model.provider);
-      if (!provider?.enabled || !provider.adapter) return false;
+      if (!provider?.enabled || !provider.adapter || !provider.configured) return false;
       if (context.preferredProvider && model.provider !== context.preferredProvider) return false;
       if (context.preferredModelId && model.modelId !== context.preferredModelId) return false;
       if (context.requiresVision && !model.capabilities.includes("vision") && !provider.capabilities.includes("vision")) return false;
@@ -162,26 +140,28 @@ export class AdaptiveAIRouterService {
       if (context.enableSearch && model.provider !== "gemini") return false;
       return this.healthScore(model) > 0;
     });
-
     const hasRole = (model: UnifiedModelRecord, role: UnifiedModelRole): boolean => model.roles.includes(role);
     const primary = eligible.find((model) => hasRole(model, "primary"));
     const preferredRole: UnifiedModelRole | undefined = context.isExtraction ? "extraction" : context.isDeepReasoning ? "reasoning" : context.enableSearch ? "fast" : undefined;
 
     return eligible.map((model) => {
       const capabilityMatches = [
-        context.requiresVision && (model.capabilities.includes("vision") ? 1 : 0),
-        context.requiresTools && (model.capabilities.includes("tool_calling") ? 1 : 0),
-        context.enableSearch && model.provider === "gemini" ? 1 : 0,
-        context.isDeepReasoning && (hasRole(model, "reasoning") || model.capabilities.includes("reasoning")) ? 1 : 0,
-        context.isExtraction && hasRole(model, "extraction") ? 1 : 0,
-      ].filter((value) => value !== undefined) as number[];
+        context.requiresVision ? (model.capabilities.includes("vision") ? 1 : 0) : undefined,
+        context.requiresTools ? (model.capabilities.includes("tool_calling") ? 1 : 0) : undefined,
+        context.enableSearch ? (model.provider === "gemini" ? 1 : 0) : undefined,
+        context.isDeepReasoning ? (hasRole(model, "reasoning") || model.capabilities.includes("reasoning") ? 1 : 0) : undefined,
+        context.isExtraction ? (hasRole(model, "extraction") ? 1 : 0) : undefined,
+      ].filter((value): value is number => value !== undefined);
       const capabilityMatch = capabilityMatches.length ? (capabilityMatches.reduce((a, b) => a + b, 0) / capabilityMatches.length) * 100 : 70;
       const roleBonus = preferredRole && hasRole(model, preferredRole) ? 30 : 0;
       const primaryBonus = primary?.id === model.id ? 20 : 0;
       const priorityScore = 100 - clamp(model.priority * 8, 0, 100);
       const healthScore = this.healthScore(model);
       const latencyScore = this.latencyScore(model);
-      let score = (capabilityMatch * policy.capabilityWeight + healthScore * policy.healthWeight + latencyScore * policy.latencyWeight + priorityScore * policy.priorityWeight) / Math.max(1, policy.capabilityWeight + policy.healthWeight + policy.latencyWeight + policy.priorityWeight);
+      const totalWeight = Math.max(1, policy.capabilityWeight + policy.healthWeight + policy.latencyWeight + policy.priorityWeight);
+      let score = (capabilityMatch * policy.capabilityWeight + healthScore * policy.healthWeight + latencyScore * policy.latencyWeight + priorityScore * policy.priorityWeight) / totalWeight;
+      if (policy.strategy === "primary_first" && primary?.id === model.id) score += 100;
+      if (policy.strategy === "priority_only") score = priorityScore;
       score += roleBonus + primaryBonus;
       const reasons: string[] = [];
       if (hasRole(model, "primary")) reasons.push("primary");
@@ -194,7 +174,7 @@ export class AdaptiveAIRouterService {
   }
 
   recordSuccess(modelId: string, latencyMs: number): void {
-    const health = this.getHealth({ id: modelId } as UnifiedModelRecord);
+    const health = this.health.get(modelId) || this.defaultHealth();
     health.successes += 1;
     health.consecutiveFailures = 0;
     health.lastSuccessAt = new Date().toISOString();
@@ -204,7 +184,7 @@ export class AdaptiveAIRouterService {
   }
 
   recordFailure(modelId: string, error: unknown): void {
-    const health = this.getHealth({ id: modelId } as UnifiedModelRecord);
+    const health = this.health.get(modelId) || this.defaultHealth();
     health.failures += 1;
     health.consecutiveFailures += 1;
     health.lastFailureAt = new Date().toISOString();
@@ -226,10 +206,13 @@ export class AdaptiveAIRouterService {
       attempts.push(key);
       try {
         let response: AIChatResponse;
-        if (candidate.model.provider === "gemini" && geminiExecutor) response = await geminiExecutor();
-        else response = (await aiProviderGatewayService.chat(candidate.model.provider, request)).result;
+        if (candidate.model.provider === "gemini" && geminiExecutor) {
+          response = await geminiExecutor();
+        } else {
+          response = (await aiProviderGatewayService.chat(candidate.model.provider, { ...request, model: candidate.model.modelId })).result;
+        }
         this.recordSuccess(candidate.model.id, Date.now() - started);
-        return { response, candidate, attempts };
+        return { response: { ...response, provider: candidate.model.provider, model: candidate.model.modelId }, candidate, attempts };
       } catch (error) {
         lastError = error;
         this.recordFailure(candidate.model.id, error);
@@ -250,16 +233,16 @@ export class AdaptiveAIRouterService {
       let emitted = false;
       try {
         if (candidate.model.provider === "gemini" && geminiExecutor) {
-          const chunks: AIStreamChunk[] = [];
-          let accumulated = "";
-          const text = await geminiExecutor((chunk) => { emitted = true; accumulated = chunk; chunks.push({ provider: "gemini", model: candidate.model.modelId, delta: chunk, done: false }); });
-          if (!chunks.length && text) chunks.push({ provider: "gemini", model: candidate.model.modelId, delta: text, done: false });
+          let full = "";
+          const text = await geminiExecutor((chunk) => { emitted = true; full = chunk; });
           this.recordSuccess(candidate.model.id, Date.now() - started);
-          for (const chunk of chunks) yield chunk;
+          if (!full && text) full = text;
+          if (!full) throw new Error("Gemini streaming returned an empty response.");
+          yield { provider: "gemini", model: candidate.model.modelId, delta: full, done: false };
           yield { provider: "gemini", model: candidate.model.modelId, delta: "", done: true };
           return;
         }
-        for await (const chunk of aiProviderGatewayService.stream(candidate.model.provider, request)) {
+        for await (const chunk of aiProviderGatewayService.stream(candidate.model.provider, { ...request, model: candidate.model.modelId })) {
           emitted = emitted || Boolean(chunk.delta);
           yield chunk;
         }
