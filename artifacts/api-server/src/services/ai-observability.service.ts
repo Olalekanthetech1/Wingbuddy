@@ -41,19 +41,7 @@ const FLUSH_DEBOUNCE_MS = 2000;
 
 function empty(provider: AIProviderId, modelId: string): AIModelMetric {
   const now = new Date().toISOString();
-  return {
-    provider,
-    modelId,
-    requests: 0,
-    successes: 0,
-    failures: 0,
-    streamedRequests: 0,
-    streamedFailures: 0,
-    totalLatencyMs: 0,
-    avgLatencyMs: 0,
-    ewmaLatencyMs: 0,
-    updatedAt: now,
-  };
+  return { provider, modelId, requests: 0, successes: 0, failures: 0, streamedRequests: 0, streamedFailures: 0, totalLatencyMs: 0, avgLatencyMs: 0, ewmaLatencyMs: 0, updatedAt: now };
 }
 
 function normalizeMetric(value: unknown): AIModelMetric | null {
@@ -85,17 +73,12 @@ export class AIObservabilityService {
   private flushInFlight: Promise<void> | null = null;
   private dirty = false;
 
-  private key(provider: AIProviderId, modelId: string): string {
-    return `${provider}:${modelId}`;
-  }
+  private key(provider: AIProviderId, modelId: string): string { return `${provider}:${modelId}`; }
 
   async initialize(): Promise<void> {
     if (this.loaded) return;
     try {
-      const rows = await db.select({ value: systemSettingsTable.value })
-        .from(systemSettingsTable)
-        .where(eq(systemSettingsTable.key, KEY))
-        .limit(1);
+      const rows = await db.select({ value: systemSettingsTable.value }).from(systemSettingsTable).where(eq(systemSettingsTable.key, KEY)).limit(1);
       if (rows[0]?.value) {
         const parsed = JSON.parse(rows[0].value) as { windowStartedAt?: string; models?: unknown[] };
         if (typeof parsed.windowStartedAt === "string") this.windowStartedAt = parsed.windowStartedAt;
@@ -159,10 +142,7 @@ export class AIObservabilityService {
   private markDirty(): void {
     this.dirty = true;
     if (this.flushTimer) return;
-    this.flushTimer = setTimeout(() => {
-      this.flushTimer = null;
-      void this.flush();
-    }, FLUSH_DEBOUNCE_MS);
+    this.flushTimer = setTimeout(() => { this.flushTimer = null; void this.flush(); }, FLUSH_DEBOUNCE_MS);
   }
 
   async flush(): Promise<void> {
@@ -173,10 +153,8 @@ export class AIObservabilityService {
         const models = [...this.metrics.values()]
           .sort((a, b) => b.requests - a.requests || a.provider.localeCompare(b.provider) || a.modelId.localeCompare(b.modelId))
           .slice(0, MAX_MODELS);
-        const now = new Date().toISOString();
-        await db.insert(systemSettingsTable)
-          .values({ key: KEY, value: JSON.stringify({ windowStartedAt: this.windowStartedAt, models, updatedAt: now }), updatedAt: new Date() })
-          .onConflictDoUpdate({ target: systemSettingsTable.key, set: { value: JSON.stringify({ windowStartedAt: this.windowStartedAt, models, updatedAt: now }), updatedAt: new Date() } });
+        const payload = { windowStartedAt: this.windowStartedAt, models, updatedAt: new Date().toISOString() };
+        await db.insert(systemSettingsTable).values({ key: KEY, value: JSON.stringify(payload), updatedAt: new Date() }).onConflictDoUpdate({ target: systemSettingsTable.key, set: { value: JSON.stringify(payload), updatedAt: new Date() } });
         this.dirty = false;
       } catch (error) {
         logger.warn({ error: error instanceof Error ? error.message : String(error) }, "Failed to persist AI observability metrics");
@@ -188,9 +166,15 @@ export class AIObservabilityService {
   }
 
   reset(provider?: AIProviderId, modelId?: string): void {
-    if (provider && modelId) this.metrics.delete(this.key(provider, modelId));
-    else if (provider) for (const key of this.metrics.keys()) if (key.startsWith(`${provider}:`)) this.metrics.delete(key);
-    else this.metrics.clear();
+    if (provider && modelId) {
+      this.metrics.delete(this.key(provider, modelId));
+    } else if (provider) {
+      for (const key of this.metrics.keys()) if (key.startsWith(`${provider}:`)) this.metrics.delete(key);
+    } else if (modelId) {
+      for (const key of this.metrics.keys()) if (key.endsWith(`:${modelId}`)) this.metrics.delete(key);
+    } else {
+      this.metrics.clear();
+    }
     this.markDirty();
   }
 
