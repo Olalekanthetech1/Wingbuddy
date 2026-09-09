@@ -69,7 +69,8 @@ export class ApiKeyPoolService {
   private mask(key: string): string { if (!key || key.length < 8) return "••••••••"; return `${key.slice(0, 6)}...${key.slice(-4)}`; }
 
   private encryptionKey(): Buffer {
-    const secret = process.env.API_KEY_ENCRYPTION_SECRET?.trim() || process.env.APP_ENCRYPTION_SECRET?.trim() || process.env.SESSION_SECRET?.trim() || "fallback-in-memory-managed-key-secret";
+    const secret = process.env.API_KEY_ENCRYPTION_SECRET?.trim() || process.env.APP_ENCRYPTION_SECRET?.trim() || process.env.SESSION_SECRET?.trim();
+    if (!secret) throw new Error("Missing API_KEY_ENCRYPTION_SECRET (or APP_ENCRYPTION_SECRET/SESSION_SECRET) for managed API-key storage");
     return createHash("sha256").update(secret).digest();
   }
 
