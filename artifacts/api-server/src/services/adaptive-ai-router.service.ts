@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { logger } from "../lib/logger";
 import { aiProviderGatewayService } from "./ai-provider-gateway.service";
 import { aiProviderRegistryService } from "./ai-provider-registry.service";
+import { aiObservabilityService } from "./ai-observability.service";
 import { unifiedModelRegistryService, type UnifiedModelRecord, type UnifiedModelRole } from "./unified-model-registry.service";
 import type { AIChatRequest, AIChatResponse, AIProviderId, AIStreamChunk } from "./ai-provider.types";
 
@@ -193,6 +194,11 @@ export class AdaptiveAIRouterService {
     this.health.set(modelId, health);
   }
 
+  resetHealth(modelId?: string): void {
+    if (modelId) this.health.delete(modelId);
+    else this.health.clear();
+  }
+
   async route(request: AIChatRequest, context: AIRoutingContext = {}, geminiExecutor?: () => Promise<AIChatResponse>): Promise<{ response: AIChatResponse; candidate: AIRoutingCandidate; attempts: string[] }> {
     const policy = await this.loadPolicy();
     const candidates = await this.candidates(context);
@@ -204,18 +210,20 @@ export class AdaptiveAIRouterService {
       const started = Date.now();
       const key = `${candidate.model.provider}/${candidate.model.modelId}`;
       attempts.push(key);
+      aiObservabilityService.recordStart(candidate.model.provider, candidate.model.modelId, false);
       try {
         let response: AIChatResponse;
-        if (candidate.model.provider === "gemini" && geminiExecutor) {
-          response = await geminiExecutor();
-        } else {
-          response = (await aiProviderGatewayService.chat(candidate.model.provider, { ...request, model: candidate.model.modelId })).result;
-        }
-        this.recordSuccess(candidate.model.id, Date.now() - started);
+        if (candidate.model.provider === "gemini" && geminiExecutor) response = await geminiExecutor();
+        else response = (await aiProviderGatewayService.chat(candidate.model.provider, { ...request, model: candidate.model.modelId })).result;
+        const latencyMs = Date.now() - started;
+        this.recordSuccess(candidate.model.id, latencyMs);
+        aiObservabilityService.recordSuccess(candidate.model.provider, candidate.model.modelId, latencyMs);
         return { response: { ...response, provider: candidate.model.provider, model: candidate.model.modelId }, candidate, attempts };
       } catch (error) {
+        const latencyMs = Date.now() - started;
         lastError = error;
         this.recordFailure(candidate.model.id, error);
+        aiObservabilityService.recordFailure(candidate.model.provider, candidate.model.modelId, latencyMs, error);
         logger.warn({ provider: candidate.model.provider, model: candidate.model.modelId, error: error instanceof Error ? error.message : String(error) }, "Adaptive AI candidate failed; trying next candidate");
       }
     }
@@ -231,11 +239,14 @@ export class AdaptiveAIRouterService {
     for (const candidate of limited) {
       const started = Date.now();
       let emitted = false;
+      aiObservabilityService.recordStart(candidate.model.provider, candidate.model.modelId, true);
       try {
         if (candidate.model.provider === "gemini" && geminiExecutor) {
           let full = "";
           const text = await geminiExecutor((chunk) => { emitted = true; full = chunk; });
-          this.recordSuccess(candidate.model.id, Date.now() - started);
+          const latencyMs = Date.now() - started;
+          this.recordSuccess(candidate.model.id, latencyMs);
+          aiObservabilityService.recordSuccess(candidate.model.provider, candidate.model.modelId, latencyMs);
           if (!full && text) full = text;
           if (!full) throw new Error("Gemini streaming returned an empty response.");
           yield { provider: "gemini", model: candidate.model.modelId, delta: full, done: false };
@@ -246,11 +257,15 @@ export class AdaptiveAIRouterService {
           emitted = emitted || Boolean(chunk.delta);
           yield chunk;
         }
-        this.recordSuccess(candidate.model.id, Date.now() - started);
+        const latencyMs = Date.now() - started;
+        this.recordSuccess(candidate.model.id, latencyMs);
+        aiObservabilityService.recordSuccess(candidate.model.provider, candidate.model.modelId, latencyMs);
         return;
       } catch (error) {
+        const latencyMs = Date.now() - started;
         lastError = error;
         this.recordFailure(candidate.model.id, error);
+        aiObservabilityService.recordFailure(candidate.model.provider, candidate.model.modelId, latencyMs, error, true);
         if (emitted) throw error;
         logger.warn({ provider: candidate.model.provider, model: candidate.model.modelId, error: error instanceof Error ? error.message : String(error) }, "Adaptive AI stream candidate failed before output; trying next candidate");
       }
