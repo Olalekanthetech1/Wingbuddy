@@ -1,9 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach } from "vitest";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { AdaptiveIntentService } from "../src/services/adaptive-intent.service";
+import { semanticInteractionCache } from "../src/services/semantic-interaction-cache.service";
 
 describe("natural-language routing architecture", () => {
-  it("does not reintroduce vocabulary-driven routing into the active router services", async () => {
+  beforeEach(() => semanticInteractionCache.clear());
+
+  it("keeps natural-language interpretation outside compatibility/router services", async () => {
     const root = resolve(process.cwd(), "src/services");
     const [adaptiveIntent, executionPlanner, modeService] = await Promise.all([
       readFile(resolve(root, "adaptive-intent.service.ts"), "utf8"),
@@ -11,15 +15,36 @@ describe("natural-language routing architecture", () => {
       readFile(resolve(root, "mode.service.ts"), "utf8"),
     ]);
 
-    expect(adaptiveIntent).not.toContain("TEMPORAL_FACT_PATTERNS");
-    expect(adaptiveIntent).not.toContain("CODING_PATTERNS");
-    expect(adaptiveIntent).not.toContain("DEEP_REASONING_PATTERNS");
-    expect(executionPlanner).not.toContain("isReasoningText");
-    expect(executionPlanner).not.toContain("temporalFactMatch");
-    expect(executionPlanner).not.toContain("hasQuestionOrFactRequest");
-    expect(modeService).not.toContain("Auto classification");
-    expect(modeService).not.toContain("resolvedTurnMode: \"coder\"");
-    expect(modeService).not.toContain("resolvedTurnMode: \"math\"");
-    expect(modeService).not.toContain("resolvedTurnMode: \"deep_research\"");
+    // Explicit Telegram protocol commands may use deterministic parsing.
+    expect(adaptiveIntent).toContain("/^\\/mode(?:\\s+([a-z_]+))?$/i");
+
+    // These services must consume semantic decisions, not classify raw vocabulary.
+    expect(adaptiveIntent).toContain("semanticInteractionCache.get");
+    expect(executionPlanner).toContain("semanticInteractionCache.get");
+    expect(executionPlanner).not.toContain("inferAutoTurnMode");
+    expect(modeService).toContain("resolveTurnMode");
+
+    // No executable lexical classifier is permitted here.
+    expect(adaptiveIntent).not.toMatch(/new\\s+RegExp\\s*\\(/);
+    expect(executionPlanner).not.toMatch(/new\\s+RegExp\\s*\\(/);
+    expect(adaptiveIntent).not.toContain(".test(");
+    expect(executionPlanner).not.toContain(".test(");
+    expect(adaptiveIntent).not.toContain(".match(");
+    expect(executionPlanner).not.toContain(".match(");
+
+    // Guard against the previous named heuristic families too.
+    for (const marker of ["TEMPORAL_FACT_PATTERNS", "CODING_PATTERNS", "DEEP_REASONING_PATTERNS"]) {
+      expect(adaptiveIntent).not.toContain(marker);
+    }
+  });
+
+  it("fails closed when semantic resolution is unavailable", () => {
+    const text = "Please switch to study mode and explain this topic";
+    expect(AdaptiveIntentService.detectModeSwitchIntent(text)).toEqual({ isModeSwitch: false });
+    const plan = AdaptiveIntentService.analyze(text, "auto");
+    expect(plan.detectedIntent).toBe("general");
+    expect(plan.enableSearch).toBe(false);
+    expect(plan.imagePrompt).toBeUndefined();
+    expect(plan.videoPrompt).toBeUndefined();
   });
 });
