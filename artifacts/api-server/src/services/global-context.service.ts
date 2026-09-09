@@ -7,6 +7,7 @@ import { PERSONALITIES, type PersonalityKey } from "../config/personality";
 import { MODES, type ModeKey } from "../config/mode";
 import { cosineSimilarity, type GeminiService } from "../gemini/gemini.service";
 import { AdaptiveEngineService } from "./adaptive-engine.service";
+import { TemporalContextService } from "./temporal-context.service";
 
 export interface UserGlobalContext {
   telegramUserId: number;
@@ -27,6 +28,7 @@ export interface UserGlobalContext {
   semanticRecall?: Array<{ role: string; content: string }>;
   recentHistory: Array<{ role: "user" | "model"; content: string }>;
   promptInstruction: string;
+  temporalContext: ReturnType<typeof TemporalContextService.resolve>;
 }
 
 /**
@@ -171,7 +173,11 @@ export class GlobalContextService {
       .trim();
     const displayName = fullName || userProfile?.username || undefined;
 
-    // 6. Format the unified Global Context block using ONLY the recalled memories for this turn.
+    // 6. Resolve deterministic temporal context locally. The LLM generates the natural
+    // wording; this layer only supplies the trustworthy local date/time and identity facts.
+    const temporalContext = TemporalContextService.resolve();
+
+    // 7. Format the unified Global Context block using ONLY the recalled memories for this turn.
     const promptInstructionBase = chatDatabaseService.formatGlobalContextForPrompt({
       userName: displayName,
       personalityLabel: personalityConfig.label,
@@ -181,8 +187,18 @@ export class GlobalContextService {
       semanticRecall,
     });
 
+    const identityInstruction = [
+      "[IDENTITY CONTEXT]",
+      displayName ? `Preferred/display name: ${displayName}` : "No reliable user name is available.",
+      "Use the user's name naturally when it improves warmth, clarity, or personalization. Never invent or repeatedly insert a name.",
+    ].join("\n");
+
+    const temporalInstruction = TemporalContextService.buildPromptInstruction(temporalContext);
+
     const promptInstruction = [
       promptInstructionBase,
+      identityInstruction,
+      temporalInstruction,
       "[MEMORY SILENCE POLICY] Persistent memory is background context, not response content. Never mention, enumerate, expose, or narrate stored memories, memory keys, personalization, or the fact that something was remembered unless the user explicitly asks what you remember, asks to inspect/manage memories, or otherwise makes memory itself the subject of the request.",
     ]
       .filter(Boolean)
@@ -212,6 +228,7 @@ export class GlobalContextService {
       semanticRecall,
       recentHistory,
       promptInstruction,
+      temporalContext,
     };
   }
 }
