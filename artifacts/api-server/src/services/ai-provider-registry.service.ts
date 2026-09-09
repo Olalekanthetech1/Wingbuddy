@@ -35,9 +35,11 @@ const BUILT_IN_PROVIDERS: Record<AIProviderId, Omit<AIProviderRecord, "createdAt
 
 function normalize(value: unknown): AIProviderRecord[] {
   if (!Array.isArray(value)) return [];
-  return value.filter((item): item is AIProviderRecord =>
-    Boolean(item && typeof item === "object" && typeof (item as AIProviderRecord).id === "string" && item.id in BUILT_IN_PROVIDERS),
-  ).map((item) => {
+  return value.filter((item): item is AIProviderRecord => {
+    if (!item || typeof item !== "object") return false;
+    const id = (item as Partial<AIProviderRecord>).id;
+    return typeof id === "string" && id in BUILT_IN_PROVIDERS;
+  }).map((item) => {
     const defaults = BUILT_IN_PROVIDERS[item.id];
     return {
       ...defaults,
@@ -58,7 +60,7 @@ function normalize(value: unknown): AIProviderRecord[] {
 
 function bootstrapProviders(): AIProviderRecord[] {
   const now = new Date().toISOString();
-  return (Object.values(BUILT_IN_PROVIDERS)).map((provider) => ({
+  return Object.values(BUILT_IN_PROVIDERS).map((provider) => ({
     ...provider,
     enabled: Boolean(process.env[provider.apiKeyEnv]?.trim()),
     createdAt: now,
@@ -82,7 +84,7 @@ export class AIProviderRegistryService {
       if (rows[0]?.value) {
         const stored = normalize(JSON.parse(rows[0].value));
         const byId = new Map(stored.map((provider) => [provider.id, provider]));
-        const merged = (Object.values(BUILT_IN_PROVIDERS)).map((defaults) => byId.get(defaults.id) || {
+        const merged = Object.values(BUILT_IN_PROVIDERS).map((defaults) => byId.get(defaults.id) || {
           ...defaults,
           enabled: false,
           createdAt: new Date().toISOString(),
