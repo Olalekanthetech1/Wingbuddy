@@ -8,6 +8,8 @@ import { MODES, type ModeKey } from "../config/mode";
 import { cosineSimilarity, type GeminiService } from "../gemini/gemini.service";
 import { AdaptiveEngineService } from "./adaptive-engine.service";
 import { TemporalContextService } from "./temporal-context.service";
+import { SemanticInteractionResolverService } from "./semantic-interaction-resolver.service";
+import type { SemanticInteractionDecision } from "./semantic-interaction-cache.service";
 
 export interface UserGlobalContext {
   telegramUserId: number;
@@ -29,23 +31,19 @@ export interface UserGlobalContext {
   recentHistory: Array<{ role: "user" | "model"; content: string }>;
   promptInstruction: string;
   temporalContext: ReturnType<typeof TemporalContextService.resolve>;
+  semanticInteraction?: SemanticInteractionDecision;
 }
 
 /**
  * Global Context Layer:
  * Automatically associates incoming messages with the user's ID in PostgreSQL,
  * synchronizes identity, and aggregates only relevant long-term profile memories,
- * episodic session summaries, semantic vector memory recall, and working conversation history
- * into an enriched context snapshot before every Gemini completion.
+ * episodic session summaries, semantic vector memory recall, working conversation history,
+ * and one per-turn semantic interaction decision for downstream planning.
  */
 export class GlobalContextService {
   constructor(private readonly conversations: ConversationService) {}
 
-  /**
-   * Queries and builds the complete global context for a user before calling Gemini.
-   * Long-term memory is recall-oriented: only memories relevant to the current request are
-   * passed to the model. Persistent memories remain stored and are never deleted by relevance filtering.
-   */
   async getContextForCompletion(params: {
     telegramUserId: number;
     chatId: number;
@@ -58,38 +56,40 @@ export class GlobalContextService {
       telegramUserId,
       chatId,
       userProfile,
-      maxHistoryMessages = 20,
+      maxHistoryMessages,
       message,
       geminiService,
     } = params;
 
-    // 1. Automatically associate and sync the user profile
-    if (userProfile) {
-      await this.conversations.upsertUser(userProfile);
-    }
+    if (userProfile) await this.conversations.upsertUser(userProfile);
 
-    // 2. Automatically associate with the conversation session
     const conversationId = await this.conversations.getOrCreateConversation(
       telegramUserId,
       chatId,
     );
 
-    // 3. Query user settings, memories, and episodic summaries
-    const [personality, mode, allMemories, sessionSummaries] =
-      await Promise.all([
-        this.conversations.getUserPersonality(telegramUserId),
-        this.conversations.getUserMode(telegramUserId),
-        chatDatabaseService.getUserMemories(telegramUserId),
-        chatDatabaseService.getRecentSessionSummaries(telegramUserId, 3),
-      ]);
+    const [personality, mode, allMemories, sessionSummaries] = await Promise.all([
+      this.conversations.getUserPersonality(telegramUserId),
+      this.conversations.getUserMode(telegramUserId),
+      chatDatabaseService.getUserMemories(telegramUserId),
+      chatDatabaseService.getRecentSessionSummaries(telegramUserId, 3),
+    ]);
 
-    // 4. Recall-oriented long-term memory retrieval.
-    // IMPORTANT: never merge vector matches back with the full memory corpus.
-    // Relevance controls what is exposed to the model for this turn; storage is untouched.
-    let memories: UserMemoryRecord[] = [];
-    let memoryRecallSource: "vector" | "lexical" | "none" = "none";
     const query = message?.trim() ?? "";
+    let memories: UserMemoryRecord[] = [];
     let semanticRecall: Array<{ role: string; content: string }> = [];
+    let memoryRecallSource: "vector" | "lexical" | "none" = "none";
+    let semanticInteraction: SemanticInteractionDecision | undefined;
+
+    // Resolve semantic interaction exactly once per incoming turn, before downstream routing.
+    if (query && geminiService) {
+      semanticInteraction = await SemanticInteractionResolverService.resolve({
+        text: query,
+        persistentMode: mode,
+        history: [],
+        gemini: geminiService,
+      });
+    }
 
     if (query.length > 3) {
       try {
@@ -98,19 +98,14 @@ export class GlobalContextService {
           queryVec = await geminiService.embedText(query);
         }
 
-        // Use the database's adaptive threshold and limit. Only matches are exposed to Gemini.
         if (queryVec.length > 0) {
-          memories = await chatDatabaseService.searchSimilarMemories(
-            telegramUserId,
-            queryVec,
-          );
+          memories = await chatDatabaseService.searchSimilarMemories(telegramUserId, queryVec);
           memoryRecallSource = memories.length > 0 ? "vector" : "none";
         } else {
           memories = await chatDatabaseService.searchMemories(telegramUserId, query);
           memoryRecallSource = memories.length > 0 ? "lexical" : "none";
         }
 
-        // Semantic dialogue recall across past conversations
         const historicalCandidates = await chatDatabaseService.searchHistoricalDialogue(
           telegramUserId,
           query,
@@ -128,30 +123,21 @@ export class GlobalContextService {
               }),
             );
             scored.sort((a, b) => b.score - a.score);
-            semanticRecall = scored.slice(0, 3).map((s) => ({
-              role: s.cand.role,
-              content: s.cand.content,
-            }));
+            semanticRecall = scored.slice(0, 3).map(({ cand }) => ({ role: cand.role, content: cand.content }));
           } else {
-            semanticRecall = historicalCandidates.slice(0, 3).map((c) => ({
-              role: c.role,
-              content: c.content,
-            }));
+            semanticRecall = historicalCandidates.slice(0, 3).map((c) => ({ role: c.role, content: c.content }));
           }
         }
       } catch {
-        // Fail closed: retrieval failures must not expose the full persistent memory corpus.
         memories = [];
         memoryRecallSource = "none";
       }
     }
 
-    // Keep the variable referenced for observability without exposing internal recall mechanics to users.
     void allMemories;
     void memoryRecallSource;
 
-    // 5. Dynamically compute the adaptive history window based on mode, prompt length, and recalled-memory density
-    const adaptiveLimit = maxHistoryMessages !== undefined && maxHistoryMessages !== 20
+    const adaptiveLimit = maxHistoryMessages !== undefined
       ? maxHistoryMessages
       : AdaptiveEngineService.computeAdaptiveHistoryLimit({
           mode,
@@ -159,25 +145,14 @@ export class GlobalContextService {
           memoriesCount: memories.length,
         });
 
-    const recentMessages = await this.conversations.getRecentMessages(
-      conversationId,
-      adaptiveLimit,
-    );
-
+    const recentMessages = await this.conversations.getRecentMessages(conversationId, adaptiveLimit);
     const personalityConfig = PERSONALITIES[personality] || PERSONALITIES.playful;
     const modeConfig = MODES[mode] || MODES.general;
 
-    const fullName = [userProfile?.firstName, userProfile?.lastName]
-      .filter(Boolean)
-      .join(" ")
-      .trim();
+    const fullName = [userProfile?.firstName, userProfile?.lastName].filter(Boolean).join(" ").trim();
     const displayName = fullName || userProfile?.username || undefined;
-
-    // 6. Resolve deterministic temporal context locally. The LLM generates the natural
-    // wording; this layer only supplies the trustworthy local date/time and identity facts.
     const temporalContext = TemporalContextService.resolve();
 
-    // 7. Format the unified Global Context block using ONLY the recalled memories for this turn.
     const promptInstructionBase = chatDatabaseService.formatGlobalContextForPrompt({
       userName: displayName,
       personalityLabel: personalityConfig.label,
@@ -194,15 +169,12 @@ export class GlobalContextService {
     ].join("\n");
 
     const temporalInstruction = TemporalContextService.buildPromptInstruction(temporalContext);
-
     const promptInstruction = [
       promptInstructionBase,
       identityInstruction,
       temporalInstruction,
       "[MEMORY SILENCE POLICY] Persistent memory is background context, not response content. Never mention, enumerate, expose, or narrate stored memories, memory keys, personalization, or the fact that something was remembered unless the user explicitly asks what you remember, asks to inspect/manage memories, or otherwise makes memory itself the subject of the request.",
-    ]
-      .filter(Boolean)
-      .join("\n\n");
+    ].filter(Boolean).join("\n\n");
 
     const recentHistory = recentMessages.map((item) => ({
       role: (item.role === "model" ? "model" : "user") as "user" | "model",
@@ -229,6 +201,7 @@ export class GlobalContextService {
       recentHistory,
       promptInstruction,
       temporalContext,
+      semanticInteraction,
     };
   }
 }
