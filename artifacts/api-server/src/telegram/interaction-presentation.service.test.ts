@@ -86,6 +86,17 @@ describe("InteractionPresentationService", () => {
     ).toBe("Generating: video_generation (11s)");
   });
 
+  it("suppresses the generic assistant-response progress label", () => {
+    expect(
+      service.decide({
+        state: "generating",
+        toolName: "assistant_response",
+        operationLabel: "assistant response",
+        userFacingProgress: true,
+      }).visibleProgressText,
+    ).toBeUndefined();
+  });
+
   it("allows the runtime to suppress acknowledgement reactions", () => {
     expect(
       service.decide({

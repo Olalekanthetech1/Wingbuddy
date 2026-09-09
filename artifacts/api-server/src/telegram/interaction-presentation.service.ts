@@ -143,6 +143,13 @@ export class InteractionPresentationService {
       return `${this.thinkingText}${this.latencySuffix(event)}`;
     }
 
+    // A normal assistant response already has Telegram's native typing
+    // presence. Do not emit a visible progress message such as
+    // "Generating: assistant response" for ordinary conversational turns.
+    if (event.state === "generating" && event.toolName === "assistant_response") {
+      return undefined;
+    }
+
     const subject = event.operationLabel?.trim() || event.toolName?.trim();
     if (!subject) return undefined;
 
