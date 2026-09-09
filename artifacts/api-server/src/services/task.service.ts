@@ -4,7 +4,10 @@ import {
   type AgentTaskStepRecord,
 } from "@workspace/db";
 import { logger } from "../lib/logger";
-import type { SemanticInteractionDecision } from "./semantic-interaction-cache.service";
+import {
+  semanticInteractionCache,
+  type SemanticInteractionDecision,
+} from "./semantic-interaction-cache.service";
 
 export type TaskStatus = "pending" | "active" | "paused" | "waiting" | "completed" | "failed" | "cancelled";
 export type StepStatus = "pending" | "running" | "completed" | "failed" | "skipped";
@@ -171,16 +174,18 @@ export class TaskService {
 
   /**
    * Natural-language task routing is owned by SemanticInteractionResolverService.
-   * This method remains as a compatibility boundary for explicit command handlers.
+   * This compatibility boundary reads the current turn's short-lived semantic decision;
+   * explicit Telegram commands can still pass a semantic decision directly.
    */
-  detectTaskIntent(_text: string, semantic?: SemanticInteractionDecision | null): TaskIntentResult {
-    if (!semantic?.taskIntent) return { intent: "NO_TASK" };
+  detectTaskIntent(text: string, semantic?: SemanticInteractionDecision | null): TaskIntentResult {
+    const decision = semantic || semanticInteractionCache.getLatestForText(text);
+    if (!decision?.taskIntent || decision.taskIntent === "NO_TASK") return { intent: "NO_TASK" };
     return {
-      intent: semantic.taskIntent,
-      taskTitle: semantic.taskTitle,
-      taskGoal: semantic.taskGoal,
-      taskIdHint: semantic.taskIdHint,
-      steps: semantic.taskSteps,
+      intent: decision.taskIntent,
+      taskTitle: decision.taskTitle,
+      taskGoal: decision.taskGoal,
+      taskIdHint: decision.taskIdHint,
+      steps: decision.taskSteps,
     };
   }
 }
