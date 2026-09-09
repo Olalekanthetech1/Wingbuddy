@@ -33,13 +33,32 @@ describe("GeminiModelPoolService", () => {
     expect(service.getCandidates("primary-model", { mode: "deep_research", isDeepReasoning: true })[0]).toBe("reasoning-model");
   });
 
+  it("uses the live Dashboard-selected primary instead of a stale constructor model", () => {
+    process.env.GEMINI_MODEL = "dashboard-primary";
+    process.env.GEMINI_MODEL_POOL = "dashboard-primary,backup-model";
+
+    const service = new GeminiModelPoolService();
+    expect(service.getCandidates("stale-constructor-model")).toEqual([
+      "dashboard-primary",
+      "backup-model",
+    ]);
+
+    process.env.GEMINI_MODEL = "new-dashboard-primary";
+    process.env.GEMINI_MODEL_POOL = "new-dashboard-primary,backup-model";
+    expect(service.getCandidates("stale-constructor-model")).toEqual([
+      "new-dashboard-primary",
+      "backup-model",
+    ]);
+  });
+
   it("falls back to the configured primary when role-specific models are absent", () => {
     delete process.env.GEMINI_MODEL_FAST;
     delete process.env.GEMINI_MODEL_REASONING;
     delete process.env.GEMINI_MODEL_FALLBACKS;
     delete process.env.GEMINI_MODEL_POOL;
+    process.env.GEMINI_MODEL = "primary-model";
 
     const service = new GeminiModelPoolService();
-    expect(service.getCandidates("primary-model", { enableSearch: true })).toEqual(["primary-model"]);
+    expect(service.getCandidates("constructor-model", { enableSearch: true })).toEqual(["primary-model"]);
   });
 });
