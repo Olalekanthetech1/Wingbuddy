@@ -9,9 +9,10 @@ import type {
   AIUsage,
 } from "./ai-provider.types";
 import type { AIProviderId } from "./ai-provider.types";
+import { getRequestScopedProviderApiKey } from "./ai-provider-key-context.service";
 
-function requireApiKey(provider: AIProviderRecord): string {
-  const value = process.env[provider.apiKeyEnv]?.trim();
+function requireApiKey(provider: AIProviderRecord, apiKey?: string): string {
+  const value = apiKey?.trim() || getRequestScopedProviderApiKey(provider.id)?.trim() || process.env[provider.apiKeyEnv]?.trim();
   if (!value) throw new Error(`${provider.apiKeyEnv} is not configured`);
   return value;
 }
@@ -100,8 +101,8 @@ class GeminiAdapter implements AIProviderAdapter {
     return messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n") || undefined;
   }
 
-  async chat(request: AIChatRequest, provider: AIProviderRecord): Promise<AIChatResponse> {
-    const client = new GoogleGenAI({ apiKey: requireApiKey(provider) });
+  async chat(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIChatResponse> {
+    const client = new GoogleGenAI({ apiKey: requireApiKey(provider, apiKey) });
     const response: any = await client.models.generateContent({
       model: request.model,
       contents: this.toContents(request.messages),
@@ -112,18 +113,11 @@ class GeminiAdapter implements AIProviderAdapter {
         ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
       },
     });
-    return {
-      provider: this.providerId,
-      model: request.model,
-      text: response.text || "",
-      finishReason: response.candidates?.[0]?.finishReason,
-      usage: normalizeUsage(response.usageMetadata),
-      raw: response,
-    };
+    return { provider: this.providerId, model: request.model, text: response.text || "", finishReason: response.candidates?.[0]?.finishReason, usage: normalizeUsage(response.usageMetadata), raw: response };
   }
 
-  async *stream(request: AIChatRequest, provider: AIProviderRecord): AsyncGenerator<AIStreamChunk> {
-    const client = new GoogleGenAI({ apiKey: requireApiKey(provider) });
+  async *stream(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): AsyncGenerator<AIStreamChunk> {
+    const client = new GoogleGenAI({ apiKey: requireApiKey(provider, apiKey) });
     const result: any = await client.models.generateContentStream({
       model: request.model,
       contents: this.toContents(request.messages),
@@ -137,25 +131,14 @@ class GeminiAdapter implements AIProviderAdapter {
     for await (const chunk of result) {
       const text = typeof chunk?.text === "string" ? chunk.text : "";
       const candidate = chunk?.candidates?.[0];
-      yield {
-        provider: this.providerId,
-        model: request.model,
-        delta: text,
-        done: Boolean(candidate?.finishReason),
-        finishReason: candidate?.finishReason,
-        usage: normalizeUsage(chunk?.usageMetadata),
-      };
+      yield { provider: this.providerId, model: request.model, delta: text, done: Boolean(candidate?.finishReason), finishReason: candidate?.finishReason, usage: normalizeUsage(chunk?.usageMetadata) };
     }
   }
 
-  async test(model: string, provider: AIProviderRecord) {
+  async test(model: string, provider: AIProviderRecord, apiKey?: string) {
     const started = Date.now();
-    try {
-      await this.chat({ model, messages: [{ role: "user", content: "ping" }], maxOutputTokens: 4 }, provider);
-      return { ok: true, latencyMs: Date.now() - started };
-    } catch (error) {
-      return { ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) };
-    }
+    try { await this.chat({ model, messages: [{ role: "user", content: "ping" }], maxOutputTokens: 4 }, provider, apiKey); return { ok: true, latencyMs: Date.now() - started }; }
+    catch (error) { return { ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) }; }
   }
 }
 
@@ -163,77 +146,37 @@ abstract class OpenAICompatibleAdapter implements AIProviderAdapter {
   abstract readonly providerId: AIProviderId;
   protected abstract completionPath: string;
 
-  async chat(request: AIChatRequest, provider: AIProviderRecord): Promise<AIChatResponse> {
+  async chat(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIChatResponse> {
     const response = await fetch(`${normalizeBaseUrl(provider.baseUrl)}${this.completionPath}`, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${requireApiKey(provider)}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: request.model,
-        messages: request.messages.map(asOpenAIMessage),
-        stream: false,
-        ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
-        ...(request.topP !== undefined ? { top_p: request.topP } : {}),
-        ...(request.maxOutputTokens !== undefined ? { max_tokens: request.maxOutputTokens } : {}),
-      }),
+      headers: { Authorization: `Bearer ${requireApiKey(provider, apiKey)}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: request.model, messages: request.messages.map(asOpenAIMessage), stream: false, ...(request.temperature !== undefined ? { temperature: request.temperature } : {}), ...(request.topP !== undefined ? { top_p: request.topP } : {}), ...(request.maxOutputTokens !== undefined ? { max_tokens: request.maxOutputTokens } : {}) }),
     });
     await requireOk(response, this.providerId);
     const payload: any = await response.json();
-    return {
-      provider: this.providerId,
-      model: request.model,
-      text: payload.choices?.[0]?.message?.content || "",
-      finishReason: payload.choices?.[0]?.finish_reason,
-      usage: normalizeUsage(payload.usage),
-      raw: payload,
-    };
+    return { provider: this.providerId, model: request.model, text: payload.choices?.[0]?.message?.content || "", finishReason: payload.choices?.[0]?.finish_reason, usage: normalizeUsage(payload.usage), raw: payload };
   }
 
-  async *stream(request: AIChatRequest, provider: AIProviderRecord): AsyncGenerator<AIStreamChunk> {
+  async *stream(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): AsyncGenerator<AIStreamChunk> {
     const response = await fetch(`${normalizeBaseUrl(provider.baseUrl)}${this.completionPath}`, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${requireApiKey(provider)}`,
-        "Content-Type": "application/json",
-        Accept: "text/event-stream",
-      },
-      body: JSON.stringify({
-        model: request.model,
-        messages: request.messages.map(asOpenAIMessage),
-        stream: true,
-        ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
-        ...(request.topP !== undefined ? { top_p: request.topP } : {}),
-        ...(request.maxOutputTokens !== undefined ? { max_tokens: request.maxOutputTokens } : {}),
-      }),
+      headers: { Authorization: `Bearer ${requireApiKey(provider, apiKey)}`, "Content-Type": "application/json", Accept: "text/event-stream" },
+      body: JSON.stringify({ model: request.model, messages: request.messages.map(asOpenAIMessage), stream: true, ...(request.temperature !== undefined ? { temperature: request.temperature } : {}), ...(request.topP !== undefined ? { top_p: request.topP } : {}), ...(request.maxOutputTokens !== undefined ? { max_tokens: request.maxOutputTokens } : {}) }),
     });
     await requireOk(response, this.providerId);
-
     yield* parseSSE(response, (payload) => {
       const choice = payload.choices?.[0];
       const delta = choice?.delta?.content;
       const finishReason = choice?.finish_reason;
       if (!delta && !finishReason && !payload.usage) return null;
-      return {
-        provider: this.providerId,
-        model: request.model,
-        delta: typeof delta === "string" ? delta : "",
-        done: Boolean(finishReason),
-        finishReason,
-        usage: normalizeUsage(payload.usage),
-      };
+      return { provider: this.providerId, model: request.model, delta: typeof delta === "string" ? delta : "", done: Boolean(finishReason), finishReason, usage: normalizeUsage(payload.usage) };
     });
   }
 
-  async test(model: string, provider: AIProviderRecord) {
+  async test(model: string, provider: AIProviderRecord, apiKey?: string) {
     const started = Date.now();
-    try {
-      await this.chat({ model, messages: [{ role: "user", content: "ping" }], maxOutputTokens: 4 }, provider);
-      return { ok: true, latencyMs: Date.now() - started };
-    } catch (error) {
-      return { ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) };
-    }
+    try { await this.chat({ model, messages: [{ role: "user", content: "ping" }], maxOutputTokens: 4 }, provider, apiKey); return { ok: true, latencyMs: Date.now() - started }; }
+    catch (error) { return { ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) }; }
   }
 }
 

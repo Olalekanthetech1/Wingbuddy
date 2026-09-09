@@ -14,6 +14,7 @@ import { renderDashboardBotSimulator } from "./dashboard-bot-simulator";
 import { renderDashboardBehaviorControls } from "./dashboard-behavior-controls";
 import { renderDashboardResponsiveLayer } from "./dashboard-responsive";
 import { renderDashboardAIRoutingControls } from "./dashboard-ai-routing-controls";
+import { renderDashboardProviderKeyControls } from "./dashboard-provider-key-controls";
 import { apiKeyPoolService } from "./services/api-key-pool.service";
 import { aiProviderRegistryService } from "./services/ai-provider-registry.service";
 import { unifiedModelRegistryService } from "./services/unified-model-registry.service";
@@ -116,7 +117,7 @@ app.use("/api", router);
 
 const serveDashboard = (_req: Request, res: Response): void => {
   const html = renderDashboardHtml();
-  const enhanced = html.replace("</body>", `${renderDashboardModelControls()}${renderDashboardControlPlane()}${renderDashboardBotSimulator()}${renderDashboardBehaviorControls()}${renderDashboardResponsiveLayer()}${renderDashboardAIRoutingControls()}</body>`);
+  const enhanced = html.replace("</body>", `${renderDashboardModelControls()}${renderDashboardControlPlane()}${renderDashboardBotSimulator()}${renderDashboardBehaviorControls()}${renderDashboardResponsiveLayer()}${renderDashboardAIRoutingControls()}${renderDashboardProviderKeyControls()}</body>`);
   res.type("html").send(enhanced);
 };
 app.get("/", serveDashboard);
