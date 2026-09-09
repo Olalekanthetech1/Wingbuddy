@@ -100,7 +100,7 @@ export class ModelRegistryService {
     } catch (error) {
       logger.warn({ error: String(error) }, "Failed to read Gemini model registry from PostgreSQL");
     }
-    this.cache = this.buildEnvironmentRegistry();
+    this.cache = this.ensureSinglePrimary(this.buildEnvironmentRegistry());
     this.cacheAt = Date.now();
     return this.cache;
   }
@@ -109,7 +109,7 @@ export class ModelRegistryService {
     let foundPrimary = false;
     return models.map((model) => {
       if (!model.roles.includes("primary")) return model;
-      if (foundPrimary) return { ...model, roles: model.roles.filter((role) => role !== "primary") };
+      if (foundPrimary || !model.enabled) return { ...model, roles: model.roles.filter((role) => role !== "primary") };
       foundPrimary = true;
       return model;
     });
@@ -158,25 +158,24 @@ export class ModelRegistryService {
     const models = await this.read();
     if (models.some((m) => m.provider === "gemini" && m.modelId === modelId)) throw new Error(`Model ${modelId} is already registered.`);
     const now = new Date().toISOString();
+    const hasPrimary = models.some((m) => m.enabled && m.roles.includes("primary"));
     const requestedRoles = unique((input.roles || []).filter((role): role is ModelRole => ROLES.includes(role)));
-    if (requestedRoles.includes("primary") && models.every((m) => !m.enabled || !m.roles.includes("primary"))) {
-      // first primary is valid; no special handling required
-    }
+    if (!hasPrimary) requestedRoles.push("primary");
     const model: ManagedModel = {
       id: makeId(modelId), provider: "gemini", modelId,
       name: input.name?.trim() || modelId,
-      roles: requestedRoles,
+      roles: unique(requestedRoles),
       enabled: true,
       priority: Number.isFinite(input.priority) ? Number(input.priority) : models.length,
       capabilities: unique(input.capabilities?.length ? input.capabilities : ["generate"]),
       createdAt: now, updatedAt: now,
     };
-    const base = requestedRoles.includes("primary")
+    const base = model.roles.includes("primary")
       ? models.map((m) => ({ ...m, roles: m.roles.filter((role) => role !== "primary") }))
       : models;
     const next = this.ensureSinglePrimary([...base, model]);
     await this.persist(next);
-    return model;
+    return next.find((m) => m.id === model.id)!;
   }
 
   async update(id: string, patch: Partial<Pick<ManagedModel, "modelId" | "name" | "roles" | "enabled" | "priority" | "capabilities">>): Promise<ManagedModel> {
@@ -189,9 +188,8 @@ export class ModelRegistryService {
     if (models.some((m, i) => i !== index && m.modelId === nextModelId)) throw new Error(`Model ${nextModelId} is already registered.`);
     const roles = patch.roles ? unique(patch.roles.filter((role): role is ModelRole => ROLES.includes(role))) : current.roles;
     if (roles.includes("primary") && patch.enabled === false) throw new Error("The primary model must remain enabled.");
-    if (current.roles.includes("primary") && patch.enabled === false && !roles.includes("primary")) {
-      throw new Error("Select another primary model before disabling the current primary.");
-    }
+    if (current.roles.includes("primary") && !roles.includes("primary")) throw new Error("Select another primary model before removing the primary role.");
+    if (current.roles.includes("primary") && patch.enabled === false) throw new Error("Select another primary model before disabling the current primary.");
     const updated: ManagedModel = {
       ...current,
       ...patch,
