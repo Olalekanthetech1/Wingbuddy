@@ -1,6 +1,5 @@
 import { aiProviderRegistryService } from "./ai-provider-registry.service";
 import { aiProviderKeyPoolService, type ProviderManagedKey } from "./ai-provider-key-pool.service";
-import { withProviderApiKey } from "./ai-provider-key-context.service";
 import type { AIChatRequest, AIChatResponse, AIProviderId, AIProviderRecord, AIStreamChunk } from "./ai-provider.types";
 
 export interface AIProviderExecutionResult<T> {
@@ -29,7 +28,7 @@ export class AIProviderGatewayService {
     for (const key of keys) {
       const started = Date.now();
       try {
-        const result = await withProviderApiKey(provider.id, key.key, () => adapter.chat(request, provider, key.key));
+        const result = await adapter.chat(request, provider, key.key);
         aiProviderKeyPoolService.recordSuccess(key.id, Date.now() - started);
         return { provider: providerId, model: request.model, result };
       } catch (error) {
@@ -52,7 +51,7 @@ export class AIProviderGatewayService {
       const started = Date.now();
       let emitted = false;
       try {
-        for await (const chunk of withProviderApiKey(provider.id, key.key, async () => adapter.stream(request, provider, key.key))) {
+        for await (const chunk of adapter.stream(request, provider, key.key)) {
           if (chunk.delta) emitted = true;
           yield chunk;
         }
