@@ -5,6 +5,7 @@ import { getPool, ensureDatabaseSchema } from "@workspace/db";
 import { hydrateEnvFromDatabase } from "./routes/env";
 import { getExecutionConfig } from "./execution/config";
 import { apiKeyPoolService } from "./services/api-key-pool.service";
+import { geminiKeyRecoveryService } from "./services/gemini-key-recovery.service";
 import { runtimeBehaviorConfigService } from "./services/runtime-behavior-config.service";
 import { modelRegistryService } from "./services/model-registry.service";
 import { aiProviderRegistryService } from "./services/ai-provider-registry.service";
@@ -22,6 +23,7 @@ const server = app.listen(port, "0.0.0.0", async () => {
     await ensureDatabaseSchema(pool);
     logger.info("Database schema verification and initialization completed");
     await hydrateEnvFromDatabase();
+    await geminiKeyRecoveryService.recover();
     await apiKeyPoolService.initializeDb();
     await apiKeyPoolService.hydrateFromDatabase();
     await runtimeBehaviorConfigService.initialize();
