@@ -21,14 +21,17 @@ function normalize(value: unknown): AIProviderRecord[] {
     return typeof id === "string" && id in BUILT_IN_PROVIDERS;
   }).map((item) => {
     const defaults = BUILT_IN_PROVIDERS[item.id];
+    const storedCapabilities = Array.isArray(item.capabilities) ? item.capabilities : [];
+    const capabilities = [...new Set([
+      ...defaults.capabilities,
+      ...storedCapabilities.filter((value): value is AIProviderCapability => defaults.capabilities.includes(value)),
+    ])];
     return {
       ...defaults,
       ...item,
       adapter: defaults.adapter,
       apiKeyEnv: defaults.apiKeyEnv,
-      capabilities: Array.isArray(item.capabilities)
-        ? item.capabilities.filter((value): value is AIProviderCapability => defaults.capabilities.includes(value))
-        : [...defaults.capabilities],
+      capabilities,
       baseUrl: typeof item.baseUrl === "string" && item.baseUrl.trim() ? item.baseUrl.trim().replace(/\/+$/, "") : defaults.baseUrl,
       name: typeof item.name === "string" && item.name.trim() ? item.name.trim() : defaults.name,
       enabled: item.enabled === true,
@@ -88,14 +91,25 @@ export class AIProviderRegistryService {
   async list(): Promise<Array<AIProviderRecord & { configured: boolean; adapterAvailable: boolean; keyCount: number }>> {
     const providers = await this.read();
     return Promise.all(providers.map(async (provider) => {
-      if (provider.id === "gemini") {
-        await apiKeyPoolService.hydrateFromDatabase();
-        const keyCount = apiKeyPoolService.getSummary().totalKeys;
-        return { ...provider, capabilities: [...provider.capabilities], configured: keyCount > 0 || Boolean(process.env[provider.apiKeyEnv]?.trim()), adapterAvailable: Boolean(aiProviderAdapters[provider.adapter]), keyCount };
+      let keyCount = 0;
+      try {
+        if (provider.id === "gemini") {
+          await apiKeyPoolService.hydrateFromDatabase();
+          keyCount = apiKeyPoolService.getSummary().totalKeys;
+        } else {
+          await aiProviderKeyPoolService.hydrateProvider(provider.id, provider.apiKeyEnv);
+          keyCount = aiProviderKeyPoolService.getSummary(provider.id).totalKeys;
+        }
+      } catch (error) {
+        logger.warn({ provider: provider.id, error: String(error) }, "AI provider key hydration failed; provider remains isolated from routing");
       }
-      await aiProviderKeyPoolService.hydrateProvider(provider.id, provider.apiKeyEnv);
-      const keyCount = aiProviderKeyPoolService.getSummary(provider.id).totalKeys;
-      return { ...provider, capabilities: [...provider.capabilities], configured: keyCount > 0 || Boolean(process.env[provider.apiKeyEnv]?.trim()), adapterAvailable: Boolean(aiProviderAdapters[provider.adapter]), keyCount };
+      return {
+        ...provider,
+        capabilities: [...provider.capabilities],
+        configured: keyCount > 0 || Boolean(process.env[provider.apiKeyEnv]?.trim()),
+        adapterAvailable: Boolean(aiProviderAdapters[provider.adapter]),
+        keyCount,
+      };
     }));
   }
 
@@ -127,22 +141,27 @@ export class AIProviderRegistryService {
     if (!provider.enabled) throw new Error(`Provider ${id} is disabled`);
     const adapter = aiProviderAdapters[provider.adapter];
     if (!adapter) throw new Error(`No adapter is registered for provider ${id}`);
-    if (provider.id === "gemini") {
-      await apiKeyPoolService.hydrateFromDatabase();
-      const keys = apiKeyPoolService.getOrderedKeysForExecution();
+    try {
+      if (provider.id === "gemini") {
+        await apiKeyPoolService.hydrateFromDatabase();
+        const keys = apiKeyPoolService.getOrderedKeysForExecution();
+        if (!keys.length) return adapter.test(model.trim(), provider);
+        const key = keys[0];
+        const result = await adapter.test(model.trim(), provider, key.key);
+        if (result.ok) apiKeyPoolService.recordSuccess(key.id, result.latencyMs); else apiKeyPoolService.recordError(key.id, result.error || "Provider test failed");
+        return result;
+      }
+      await aiProviderKeyPoolService.hydrateProvider(provider.id, provider.apiKeyEnv);
+      const keys = aiProviderKeyPoolService.getOrderedKeys(provider.id);
       if (!keys.length) return adapter.test(model.trim(), provider);
       const key = keys[0];
       const result = await adapter.test(model.trim(), provider, key.key);
-      if (result.ok) apiKeyPoolService.recordSuccess(key.id, result.latencyMs); else apiKeyPoolService.recordError(key.id, result.error || "Provider test failed");
+      if (result.ok) aiProviderKeyPoolService.recordSuccess(key.id, result.latencyMs); else aiProviderKeyPoolService.recordFailure(key.id, result.error || "Provider test failed");
       return result;
+    } catch (error) {
+      logger.warn({ provider: id, error: String(error) }, "AI provider test could not hydrate managed credentials; falling back to provider adapter result");
+      return adapter.test(model.trim(), provider, process.env[provider.apiKeyEnv]?.trim() || undefined);
     }
-    await aiProviderKeyPoolService.hydrateProvider(provider.id, provider.apiKeyEnv);
-    const keys = aiProviderKeyPoolService.getOrderedKeys(provider.id);
-    if (!keys.length) return adapter.test(model.trim(), provider);
-    const key = keys[0];
-    const result = await adapter.test(model.trim(), provider, key.key);
-    if (result.ok) aiProviderKeyPoolService.recordSuccess(key.id, result.latencyMs); else aiProviderKeyPoolService.recordFailure(key.id, result.error || "Provider test failed");
-    return result;
   }
 
   getAdapter(id: AIProviderId) {
