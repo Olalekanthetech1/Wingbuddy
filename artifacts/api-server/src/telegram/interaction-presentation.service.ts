@@ -13,24 +13,31 @@ export type InteractionProgressState =
   | "completed"
   | "failed";
 
+export type InteractionChatAction =
+  | "typing"
+  | "upload_photo"
+  | "upload_video"
+  | "upload_document"
+  | "record_voice"
+  | "record_video";
+
 export interface InteractionPresentationDecision {
   reaction?: string;
-  chatAction?: "typing" | "upload_photo" | "upload_video" | "upload_document" | "record_voice" | "record_video";
+  chatAction?: InteractionChatAction;
   visibleProgressText?: string;
 }
 
 export interface InteractionPresentationHints {
   state?: InteractionProgressState;
-  capability?: string;
+  chatAction?: InteractionChatAction;
+  reaction?: string | null;
   expectsLongRunning?: boolean;
   userFacingProgress?: boolean;
 }
 
 /**
- * Presentation policy is deliberately separate from semantic intent resolution.
- * It consumes trusted runtime state/capabilities and never interprets user
- * vocabulary. Reaction and progress UI are best-effort and cannot affect task
- * execution or response correctness.
+ * Presentation policy consumes trusted runtime metadata only. It never
+ * interprets user vocabulary or uses substring/regex intent detection.
  */
 export class InteractionPresentationService {
   private readonly refreshMs: number;
@@ -45,20 +52,9 @@ export class InteractionPresentationService {
     const state = hints.state ?? "received";
     if (state === "completed" || state === "failed") return {};
 
-    const capability = hints.capability?.trim().toLowerCase();
-    if (capability?.includes("image") || capability?.includes("photo")) {
-      return { reaction: this.defaultReaction, chatAction: "upload_photo" };
-    }
-    if (capability?.includes("video")) {
-      return { reaction: this.defaultReaction, chatAction: "upload_video" };
-    }
-    if (capability?.includes("document") || capability?.includes("file")) {
-      return { reaction: this.defaultReaction, chatAction: "upload_document" };
-    }
-
     return {
-      reaction: this.defaultReaction,
-      chatAction: "typing",
+      reaction: hints.reaction === null ? undefined : hints.reaction ?? this.defaultReaction,
+      chatAction: hints.chatAction ?? "typing",
     };
   }
 
