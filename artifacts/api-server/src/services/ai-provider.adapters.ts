@@ -3,6 +3,7 @@ import type {
   AIChatRequest,
   AIChatResponse,
   AIMessage,
+  AIModelCatalogEntry,
   AIProviderAdapter,
   AIProviderRecord,
   AIStreamChunk,
@@ -84,6 +85,25 @@ async function* parseSSE(
   }
 }
 
+function normalizeCatalogCapabilities(source: any): string[] {
+  if (Array.isArray(source?.capabilities)) return source.capabilities.filter((value: unknown): value is string => typeof value === "string");
+  if (source?.capabilities && typeof source.capabilities === "object") return Object.entries(source.capabilities).filter(([, enabled]) => enabled === true).map(([name]) => name);
+  if (Array.isArray(source?.supported_actions)) return source.supported_actions.filter((value: unknown): value is string => typeof value === "string");
+  return [];
+}
+
+function catalogEntry(provider: AIProviderId, modelId: string, name: string | undefined, status: string | undefined, capabilities: string[], contextWindow?: number): AIModelCatalogEntry {
+  return {
+    provider,
+    modelId,
+    name: name?.trim() || modelId,
+    status: status === "active" ? "active" : status === "inactive" ? "inactive" : "unknown",
+    capabilities: [...new Set(capabilities)],
+    ...(Number.isFinite(contextWindow) && contextWindow! > 0 ? { contextWindow: contextWindow! } : {}),
+    source: "provider_api",
+  };
+}
+
 class GeminiAdapter implements AIProviderAdapter {
   readonly providerId = "gemini" as const;
 
@@ -139,11 +159,31 @@ class GeminiAdapter implements AIProviderAdapter {
     try { await this.chat({ model, messages: [{ role: "user", content: "ping" }], maxOutputTokens: 4 }, provider, apiKey); return { ok: true, latencyMs: Date.now() - started }; }
     catch (error) { return { ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) }; }
   }
+
+  async listModels(provider: AIProviderRecord, apiKey?: string): Promise<AIModelCatalogEntry[]> {
+    const client = new GoogleGenAI({ apiKey: requireApiKey(provider, apiKey) });
+    const results: AIModelCatalogEntry[] = [];
+    for await (const item of client.models.list()) {
+      const raw: any = item;
+      const modelName = typeof raw?.name === "string" ? raw.name.replace(/^models\//, "") : "";
+      if (!modelName) continue;
+      results.push(catalogEntry(
+        this.providerId,
+        modelName,
+        raw?.displayName || raw?.name,
+        "active",
+        normalizeCatalogCapabilities(raw),
+        Number(raw?.inputTokenLimit || NaN),
+      ));
+    }
+    return results;
+  }
 }
 
 abstract class OpenAICompatibleAdapter implements AIProviderAdapter {
   abstract readonly providerId: AIProviderId;
   protected abstract completionPath: string;
+  protected modelPath = "/models";
 
   async chat(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIChatResponse> {
     const response = await fetch(`${normalizeBaseUrl(provider.baseUrl)}${this.completionPath}`, {
@@ -177,6 +217,29 @@ abstract class OpenAICompatibleAdapter implements AIProviderAdapter {
     try { await this.chat({ model, messages: [{ role: "user", content: "ping" }], maxOutputTokens: 4 }, provider, apiKey); return { ok: true, latencyMs: Date.now() - started }; }
     catch (error) { return { ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) }; }
   }
+
+  async listModels(provider: AIProviderRecord, apiKey?: string): Promise<AIModelCatalogEntry[]> {
+    const response = await fetch(`${normalizeBaseUrl(provider.baseUrl)}${this.modelPath}`, {
+      headers: { Authorization: `Bearer ${requireApiKey(provider, apiKey)}`, Accept: "application/json" },
+    });
+    await requireOk(response, this.providerId);
+    const payload: any = await response.json();
+    const rows = Array.isArray(payload?.data) ? payload.data : [];
+    return rows
+      .map((raw: any) => {
+        const modelId = typeof raw?.id === "string" ? raw.id.trim() : "";
+        if (!modelId) return null;
+        return catalogEntry(
+          this.providerId,
+          modelId,
+          raw?.name || raw?.id,
+          raw?.active === false || raw?.archived === true ? "inactive" : "active",
+          normalizeCatalogCapabilities(raw),
+          Number(raw?.context_window ?? raw?.max_context_length ?? NaN),
+        );
+      })
+      .filter((item: AIModelCatalogEntry | null): item is AIModelCatalogEntry => Boolean(item));
+  }
 }
 
 class GroqAdapter extends OpenAICompatibleAdapter {
@@ -189,7 +252,7 @@ class MistralAdapter extends OpenAICompatibleAdapter {
   protected completionPath = "/v1/chat/completions";
 }
 
-export const aiProviderAdapters: Record<AIProviderId, AIProviderAdapter> = {
+export const aiProviderAdapters: Record<AIProviderId, AIProviderAdapter & { listModels: (provider: AIProviderRecord, apiKey?: string) => Promise<AIModelCatalogEntry[]> }> = {
   gemini: new GeminiAdapter(),
   groq: new GroqAdapter(),
   mistral: new MistralAdapter(),
