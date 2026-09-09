@@ -4,6 +4,7 @@ import {
   type AgentTaskStepRecord,
 } from "@workspace/db";
 import { logger } from "../lib/logger";
+import type { SemanticInteractionDecision } from "./semantic-interaction-cache.service";
 
 export type TaskStatus = "pending" | "active" | "paused" | "waiting" | "completed" | "failed" | "cancelled";
 export type StepStatus = "pending" | "running" | "completed" | "failed" | "skipped";
@@ -168,16 +169,19 @@ export class TaskService {
     return { status: "AMBIGUOUS", activeTasks };
   }
 
-  detectTaskIntent(text: string): TaskIntentResult {
-    const trimmed = text.trim();
-    if (/^\/tasks?\b/i.test(trimmed) || /^(show|list|view|my)\s+tasks?\b/i.test(trimmed)) return { intent: "VIEW_TASKS" };
-    if (/^\/(cancel_task|canceltask|stop_task)\b/i.test(trimmed) || /\b(cancel|abort|stop)\s+(the|this|my)?\s*task\b/i.test(trimmed)) return { intent: "CANCEL_TASK", taskIdHint: trimmed.match(/#?(\d+)/)?.[1] ? Number(trimmed.match(/#?(\d+)/)![1]) : undefined };
-    if (/^\/(pause_task|pausetask)\b/i.test(trimmed) || /\b(pause|hold)\s+(the|this|my)?\s*task\b/i.test(trimmed)) return { intent: "PAUSE_TASK", taskIdHint: trimmed.match(/#?(\d+)/)?.[1] ? Number(trimmed.match(/#?(\d+)/)![1]) : undefined };
-    if (/^\/(finish_task|completetask)\b/i.test(trimmed) || /\b(mark|set)\s+(the|this|my)?\s*task\s+(as\s+)?(complete|done|finished)\b/i.test(trimmed)) return { intent: "COMPLETE_TASK", taskIdHint: trimmed.match(/#?(\d+)/)?.[1] ? Number(trimmed.match(/#?(\d+)/)![1]) : undefined };
-    if (/^\/(continue|resume)\b/i.test(trimmed) || /\b(continue|resume|pick up|carry on)\s+(the|this|my)?\s*(task|plan|work|project)?\b/i.test(trimmed)) return { intent: "CONTINUE_TASK", taskIdHint: trimmed.match(/#?(\d+)/)?.[1] ? Number(trimmed.match(/#?(\d+)/)![1]) : undefined };
-    const newTaskMatch = trimmed.match(/^(?:create|start|begin|make)\s+(?:a\s+)?(?:new\s+)?(?:task|project|workflow)\b(?:\s*[:\-]?\s*)(.*)$/i);
-    if (newTaskMatch) return { intent: "NEW_TASK", taskTitle: newTaskMatch[1].trim() || "New Task", taskGoal: newTaskMatch[1].trim() || "New Task" };
-    return { intent: "NO_TASK" };
+  /**
+   * Natural-language task routing is owned by SemanticInteractionResolverService.
+   * This method remains as a compatibility boundary for explicit command handlers.
+   */
+  detectTaskIntent(_text: string, semantic?: SemanticInteractionDecision | null): TaskIntentResult {
+    if (!semantic?.taskIntent) return { intent: "NO_TASK" };
+    return {
+      intent: semantic.taskIntent,
+      taskTitle: semantic.taskTitle,
+      taskGoal: semantic.taskGoal,
+      taskIdHint: semantic.taskIdHint,
+      steps: semantic.taskSteps,
+    };
   }
 }
 
