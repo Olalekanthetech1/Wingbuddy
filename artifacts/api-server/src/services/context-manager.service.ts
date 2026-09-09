@@ -77,19 +77,13 @@ export class ContextManagerService {
       ? `\n\n[RELEVANT LONG-TERM MEMORY]\n${memories.map((m) => `- ${m.content}`).join("\n")}\n\nUse only when relevant. Do not mention the memory system to the user.`
       : "";
 
-    let activeTaskData = options.activeTask || null;
-    let formattedTaskContext = "";
-    if (activeTaskData) {
-      formattedTaskContext = taskService.formatTaskForPrompt(activeTaskData.task, activeTaskData.steps);
-    } else {
-      const activeTasks = await taskService.getActiveTasksForUser(telegramUserId);
-      if (activeTasks.length > 0) {
-        const primaryTask = activeTasks[0];
-        const steps = await chatDatabaseService.getTaskSteps(primaryTask.id);
-        activeTaskData = { task: primaryTask, steps };
-        formattedTaskContext = taskService.formatTaskForPrompt(primaryTask, steps);
-      }
-    }
+    // Task context is explicit: the Telegram request path decides when a tracked task
+    // is actually relevant and passes it here. Do not implicitly attach the user's first
+    // active task to every unrelated conversation turn.
+    const activeTaskData = options.activeTask || null;
+    const formattedTaskContext = activeTaskData
+      ? taskService.formatTaskForPrompt(activeTaskData.task, activeTaskData.steps)
+      : "";
 
     let conversationSummary = "";
     const sessionSummaries: Array<{ summary: string }> = [];
@@ -122,9 +116,6 @@ export class ContextManagerService {
         cachedInteraction.intent !== "deep_reasoning",
       );
 
-      // The canonical semantic interaction resolver has already interpreted this
-      // turn. Simple non-follow-up turns do not need a second LLM control-plane
-      // call for conversational continuity.
       if (!isSimpleCachedTurn) {
         try {
           semanticState = await conversationIntelligenceService.analyzeSemanticState(

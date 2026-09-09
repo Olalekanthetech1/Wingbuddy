@@ -31,10 +31,9 @@ router.post("/provider-keys", async (req: Request, res: Response) => {
     if (!key) { res.status(400).json({ error: "Missing required field 'key'" }); return; }
     if (!model) { res.status(400).json({ error: "Missing required field 'model' for key validation" }); return; }
     const provider = await aiProviderRegistryService.get(providerId);
-    if (!provider.enabled) { res.status(409).json({ error: `Provider ${providerId} is disabled` }); return; }
 
-    // Validate the submitted key against the provider's live model catalog before persisting it.
-    // This keeps the API authoritative even when the Dashboard is bypassed or stale.
+    // A first valid key is the evidence needed to activate an otherwise unconfigured provider.
+    // Do not reject onboarding merely because the registry currently has enabled=false.
     const catalog = await aiModelCatalogService.listWithKey(providerId, key);
     if (!catalog.some((entry) => entry.modelId === model)) {
       res.status(400).json({ error: `Model ${providerId}/${model} was not returned by the provider for this API key`, availableModels: catalog.map((entry) => ({ modelId: entry.modelId, name: entry.name })) });
@@ -44,10 +43,19 @@ router.post("/provider-keys", async (req: Request, res: Response) => {
     const adapter = aiProviderRegistryService.getAdapter(provider.adapter);
     const validation = await adapter.test(model, provider, key);
     if (!validation.ok) { res.status(400).json({ error: validation.error || "Provider API key validation failed", validation }); return; }
+
     const saved = providerId === "gemini" ? await apiKeyPoolService.addKey(key, name) : await aiProviderKeyPoolService.addKey(providerId, key, name);
+
+    // Successful validation activates the provider so it becomes usable and visible to
+    // the Dashboard model registry. The user can explicitly disable it afterward.
+    if (!provider.enabled) {
+      await aiProviderRegistryService.update(providerId, { enabled: true });
+    }
+
     if (providerId === "gemini") { await apiKeyPoolService.reloadFromDatabase(); aiModelCatalogService.invalidate(providerId); }
     else { await aiProviderKeyPoolService.hydrateProvider(providerId, provider.apiKeyEnv, true); aiModelCatalogService.invalidate(providerId); }
-    res.status(201).json({ message: "Provider API key validated and securely saved", key: saved, poolSummary: providerId === "gemini" ? apiKeyPoolService.getSummary() : aiProviderKeyPoolService.getSummary(providerId) });
+    const updatedProvider = await aiProviderRegistryService.get(providerId);
+    res.status(201).json({ message: "Provider API key validated and securely saved", key: saved, provider: updatedProvider, poolSummary: providerId === "gemini" ? apiKeyPoolService.getSummary() : aiProviderKeyPoolService.getSummary(providerId) });
   } catch (error) { logger.warn({ error: error instanceof Error ? error.message : String(error) }, "Provider API key add failed"); res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
 });
 

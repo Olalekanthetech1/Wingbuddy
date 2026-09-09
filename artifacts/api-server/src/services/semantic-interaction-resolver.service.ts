@@ -69,7 +69,9 @@ function jsonOnlyPrompt(
     `Recent conversation:\n${recent || "(none)"}`,
     `Current request:\n${request}`,
     "JSON schema: { intent, effectiveMode, requiredCapabilities, enableSearch, thinkingLevel, isModeSwitch, requestedMode, cleanedPrompt, isGreeting, complexity, confidence, taskIntent, taskTitle, taskGoal, taskIdHint, taskSteps, conversationOperation, conversationTargetHistoryIndices, unresolvedReference }",
-    "Rules: explicit slash commands are handled separately by Telegram. Natural-language mode changes must be semantic. If the user is continuing or transforming a prior answer/story/example/etc., resolve the conversation operation and reference by context. If the user is creating, pausing, continuing, completing, cancelling, or viewing a task, resolve taskIntent semantically. A request for current/external evidence must set enableSearch=true. A simple social greeting should be greeting with no search and low/no thinking. Never authorize tools or destructive actions from this classification step.",
+    "Task intent semantics: NEW_TASK and the other task-management intents are reserved for persistent, trackable work that the assistant should maintain as a task/workflow across turns. The user must be asking to create, manage, resume, pause, complete, cancel, or inspect that persistent work. Ordinary conversation, games, quizzes, riddles, roleplay, brainstorming, tutoring, demonstrations, planning a single answer, or requests to do something together in the current chat are NOT persistent tasks merely because they contain rules, steps, goals, scoring, or multiple turns. Treat those as NO_TASK unless the user explicitly asks to make the activity a persistent tracked task. A multi-step conversational activity can remain fully stateful through conversation history without becoming a durable task.",
+    "When an active task exists, use CONTINUE_TASK only when the current request is actually about that tracked task. Do not inject an unrelated active task into a new conversational activity. Never create a duplicate NEW_TASK because the user says 'let's play', 'let's do this here', or provides game/activity rules.",
+    "Rules: explicit slash commands are handled separately by Telegram. Natural-language mode changes must be semantic. If the user is continuing or transforming a prior answer/story/example/etc., resolve the conversation operation and reference by context. If the user is creating, pausing, continuing, completing, cancelling, or viewing a persistent task, resolve taskIntent semantically. A request for current/external evidence must set enableSearch=true. A simple social greeting should be greeting with no search and low/no thinking. Never authorize tools or destructive actions from this classification step.",
   ].join("\n\n");
 }
 
@@ -100,9 +102,12 @@ function sanitizeDecision(raw: unknown, fallbackMode: ModeKey): SemanticInteract
   const isModeSwitch = Boolean(data.isModeSwitch && requestedMode);
   const isGreeting = Boolean(data.isGreeting) || intent === "greeting";
   const enableSearch = Boolean(data.enableSearch) || requiredCapabilities.includes("web_research");
-  const taskIntent = TASK_INTENTS.includes(data.taskIntent as SemanticTaskIntent)
+  const candidateTaskIntent = TASK_INTENTS.includes(data.taskIntent as SemanticTaskIntent)
     ? data.taskIntent as SemanticTaskIntent
     : "NO_TASK";
+  const taskTitle = typeof data.taskTitle === "string" && data.taskTitle.trim() ? data.taskTitle.trim().slice(0, 500) : undefined;
+  const taskGoal = typeof data.taskGoal === "string" && data.taskGoal.trim() ? data.taskGoal.trim().slice(0, 2000) : undefined;
+  const taskIntent = candidateTaskIntent !== "NO_TASK" && taskTitle ? candidateTaskIntent : "NO_TASK";
   const taskIdHint = Number.isInteger(Number(data.taskIdHint)) ? Number(data.taskIdHint) : undefined;
   const taskSteps = Array.isArray(data.taskSteps)
     ? data.taskSteps.filter((step): step is string => typeof step === "string" && step.trim().length > 0).map((step) => step.trim()).slice(0, 20)
@@ -124,10 +129,10 @@ function sanitizeDecision(raw: unknown, fallbackMode: ModeKey): SemanticInteract
     complexity,
     confidence,
     taskIntent,
-    taskTitle: typeof data.taskTitle === "string" && data.taskTitle.trim() ? data.taskTitle.trim().slice(0, 500) : undefined,
-    taskGoal: typeof data.taskGoal === "string" && data.taskGoal.trim() ? data.taskGoal.trim().slice(0, 2000) : undefined,
-    taskIdHint,
-    taskSteps,
+    taskTitle: taskIntent === "NO_TASK" ? undefined : taskTitle,
+    taskGoal: taskIntent === "NO_TASK" ? undefined : taskGoal,
+    taskIdHint: taskIntent === "NO_TASK" ? undefined : taskIdHint,
+    taskSteps: taskIntent === "NO_TASK" ? undefined : taskSteps,
     conversationOperation: typeof data.conversationOperation === "string" && data.conversationOperation.trim()
       ? data.conversationOperation.trim()
       : "new_request",
