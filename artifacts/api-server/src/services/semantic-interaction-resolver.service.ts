@@ -32,6 +32,17 @@ const TASK_INTENTS: SemanticTaskIntent[] = [
   "NO_TASK",
 ];
 
+function availableCapabilities(): Capability[] {
+  return Array.from(
+    new Set(
+      MODE_KEYS.flatMap((key) => {
+        const profile = MODES[key];
+        return profile?.capabilitiesList ?? [];
+      }),
+    ),
+  ) as Capability[];
+}
+
 function jsonOnlyPrompt(
   request: string,
   persistentMode: ModeKey,
@@ -42,6 +53,7 @@ function jsonOnlyPrompt(
     return `${key}: ${profile.description}; capabilities=${profile.capabilitiesList.join(",")}; researchPolicy=${profile.researchPolicy}; codingPolicy=${profile.codingPolicy}; tutoringPolicy=${profile.tutoringPolicy}`;
   }).join("\n");
   const recent = history.slice(-8).map((item) => `${item.role}: ${item.content}`).join("\n");
+  const capabilityContract = availableCapabilities().join(",");
 
   return [
     "Interpret the user's current request for an adaptive AI-assistant runtime.",
@@ -49,7 +61,7 @@ function jsonOnlyPrompt(
     "Return ONLY one valid JSON object and no markdown.",
     "Available intent contract:", INTENTS.join(", "),
     "Available canonical modes:", MODE_KEYS.join(", "),
-    "Available capability contract:", "tutoring,active_recall,socratic_questioning,code_generation,code_analysis,debugging,web_research,source_verification,document_analysis,mathematical_reasoning,image_analysis,file_generation,memory,calculator",
+    "Available capability contract (derived from the active mode registry):", capabilityContract,
     "Available task intent contract:", TASK_INTENTS.join(", "),
     "Conversation operation contract:", "new_request,answer_about_artifact,extract_lesson,deepen,simplify,shorten,expand,continue,generate_variant,compare,clarify_reference,transform,other",
     "Mode profiles:", modeProfiles,
@@ -72,8 +84,11 @@ function sanitizeDecision(raw: unknown, fallbackMode: ModeKey): SemanticInteract
   const requestedMode = MODE_KEYS.includes(data.requestedMode as ModeKey)
     ? data.requestedMode as ModeKey
     : undefined;
+  const knownCapabilities = new Set<string>(availableCapabilities());
   const requiredCapabilities = Array.isArray(data.requiredCapabilities)
-    ? data.requiredCapabilities.filter((cap): cap is Capability => typeof cap === "string")
+    ? data.requiredCapabilities.filter(
+        (cap): cap is Capability => typeof cap === "string" && knownCapabilities.has(cap),
+      )
     : [];
   const thinkingLevel = data.thinkingLevel === "LOW" || data.thinkingLevel === "MEDIUM" || data.thinkingLevel === "HIGH"
     ? data.thinkingLevel

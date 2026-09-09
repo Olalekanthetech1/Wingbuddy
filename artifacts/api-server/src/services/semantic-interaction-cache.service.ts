@@ -44,9 +44,11 @@ export interface SemanticInteractionDecision {
 interface CacheEntry {
   decision: SemanticInteractionDecision;
   expiresAt: number;
+  decisionFingerprint: string;
 }
 
 const DEFAULT_TTL_MS = 30_000;
+const MAX_LATEST_ENTRIES_PER_TEXT = 8;
 
 function ttlMs(): number {
   const raw = Number(process.env.SEMANTIC_INTENT_CACHE_TTL_MS);
@@ -58,22 +60,51 @@ function fingerprint(text: string, mode: string, history: Array<{ role: string; 
   return createHash("sha256").update(payload).digest("hex");
 }
 
+function decisionFingerprint(decision: SemanticInteractionDecision): string {
+  return createHash("sha256").update(JSON.stringify(decision)).digest("hex");
+}
+
 class SemanticInteractionCacheService {
   private readonly entries = new Map<string, CacheEntry>();
-  private readonly latestByText = new Map<string, CacheEntry>();
+  private readonly latestByText = new Map<string, CacheEntry[]>();
 
   key(text: string, mode: string, history: Array<{ role: string; content: string }>): string {
     return fingerprint(text, mode, history);
   }
 
-  set(text: string, mode: string, history: Array<{ role: string; content: string }>, decision: SemanticInteractionDecision): void {
-    const entry = { decision, expiresAt: Date.now() + ttlMs() };
+  set(
+    text: string,
+    mode: string,
+    history: Array<{ role: string; content: string }>,
+    decision: SemanticInteractionDecision,
+  ): void {
+    const entry: CacheEntry = {
+      decision,
+      expiresAt: Date.now() + ttlMs(),
+      decisionFingerprint: decisionFingerprint(decision),
+    };
     this.entries.set(this.key(text, mode, history), entry);
-    this.latestByText.set(text.trim(), entry);
+
+    const textKey = text.trim();
+    const current = (this.latestByText.get(textKey) ?? []).filter(
+      (candidate) => candidate.expiresAt > Date.now(),
+    );
+    const withoutSameDecision = current.filter(
+      (candidate) => candidate.decisionFingerprint !== entry.decisionFingerprint,
+    );
+    withoutSameDecision.push(entry);
+    this.latestByText.set(
+      textKey,
+      withoutSameDecision.slice(-MAX_LATEST_ENTRIES_PER_TEXT),
+    );
     this.prune();
   }
 
-  get(text: string, mode: string, history: Array<{ role: string; content: string }>): SemanticInteractionDecision | undefined {
+  get(
+    text: string,
+    mode: string,
+    history: Array<{ role: string; content: string }>,
+  ): SemanticInteractionDecision | undefined {
     const key = this.key(text, mode, history);
     const entry = this.entries.get(key);
     if (!entry) return undefined;
@@ -84,15 +115,29 @@ class SemanticInteractionCacheService {
     return entry.decision;
   }
 
+  /**
+   * Compatibility lookup used by older adapters that do not yet carry the full turn key.
+   * Returns a result only when exactly one distinct semantic decision is valid for the text.
+   * This prevents a concurrent identical message from one user from leaking another user's
+   * mode/task decision through a process-local text-only cache.
+   */
   getLatestForText(text: string): SemanticInteractionDecision | undefined {
     const key = text.trim();
-    const entry = this.latestByText.get(key);
-    if (!entry) return undefined;
-    if (entry.expiresAt <= Date.now()) {
+    const now = Date.now();
+    const current = (this.latestByText.get(key) ?? []).filter(
+      (entry) => entry.expiresAt > now,
+    );
+    if (current.length === 0) {
       this.latestByText.delete(key);
       return undefined;
     }
-    return entry.decision;
+
+    this.latestByText.set(key, current);
+    const distinct = new Map<string, CacheEntry>();
+    for (const entry of current) distinct.set(entry.decisionFingerprint, entry);
+    if (distinct.size !== 1) return undefined;
+
+    return current[current.length - 1].decision;
   }
 
   clear(): void {
@@ -102,8 +147,14 @@ class SemanticInteractionCacheService {
 
   private prune(): void {
     const now = Date.now();
-    for (const [key, entry] of this.entries) if (entry.expiresAt <= now) this.entries.delete(key);
-    for (const [key, entry] of this.latestByText) if (entry.expiresAt <= now) this.latestByText.delete(key);
+    for (const [key, entry] of this.entries) {
+      if (entry.expiresAt <= now) this.entries.delete(key);
+    }
+    for (const [key, entries] of this.latestByText) {
+      const active = entries.filter((entry) => entry.expiresAt > now);
+      if (active.length === 0) this.latestByText.delete(key);
+      else this.latestByText.set(key, active.slice(-MAX_LATEST_ENTRIES_PER_TEXT));
+    }
   }
 }
 
