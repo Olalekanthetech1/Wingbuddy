@@ -1,4 +1,4 @@
-export const DEFAULT_MODEL = process.env.GEMINI_DEFAULT_MODEL?.trim() || "gemini-3.8-flash";
+export const DEFAULT_MODEL = process.env.GEMINI_DEFAULT_MODEL?.trim() || "";
 export const DEFAULT_MAX_HISTORY_MESSAGES = 20;
 export const DEFAULT_RATE_LIMIT_MAX_REQUESTS = 6;
 export const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
@@ -53,10 +53,14 @@ function parseAllowedIds(): Set<number> {
 
 export function getConfig(): AppConfig {
   const webhookUrl = process.env.TELEGRAM_WEBHOOK_URL?.trim() || undefined;
+  const geminiModel = process.env.GEMINI_MODEL?.trim() || process.env.GEMINI_DEFAULT_MODEL?.trim() || DEFAULT_MODEL;
+  if (!geminiModel) {
+    throw new Error("No Gemini model is configured. Select a primary model in the Web Dashboard or configure GEMINI_MODEL as bootstrap configuration.");
+  }
   return {
     telegramBotToken: required("TELEGRAM_BOT_TOKEN"),
     geminiApiKey: required("GEMINI_API_KEY"),
-    geminiModel: process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL,
+    geminiModel,
     tavilyApiKey: process.env.TAVILY_API_KEY?.trim() || undefined,
     tavilyTimeoutMs: positiveInt("TAVILY_TIMEOUT_MS", DEFAULT_TAVILY_TIMEOUT_MS),
     allowedTelegramUserIds: parseAllowedIds(),
