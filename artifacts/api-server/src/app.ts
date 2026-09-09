@@ -14,8 +14,9 @@ import { renderDashboardBotSimulator } from "./dashboard-bot-simulator";
 import { renderDashboardBehaviorControls } from "./dashboard-behavior-controls";
 import { renderDashboardResponsiveLayer } from "./dashboard-responsive";
 import { apiKeyPoolService } from "./services/api-key-pool.service";
-import { modelRegistryService } from "./services/model-registry.service";
 import { aiProviderRegistryService } from "./services/ai-provider-registry.service";
+import { unifiedModelRegistryService } from "./services/unified-model-registry.service";
+import { adaptiveAIRouterService } from "./services/adaptive-ai-router.service";
 
 const app: Express = express();
 app.use(pinoHttp({ logger, serializers: { req(req) { return { id: req.id, method: req.method, url: req.url?.split("?")[0] }; }, res(res) { return { statusCode: res.statusCode }; } } }));
@@ -79,13 +80,31 @@ app.post("/telegram/webhook", handleTelegramWebhook);
 app.get("/api/telegram/queue-metrics", (_req: Request, res: Response) => res.json({ status: "ok", workerQueue: telegramWorkerQueue.getMetrics() }));
 
 app.get("/api/dashboard/runtime", async (_req: Request, res: Response) => {
-  const split = (name: string): string[] => (process.env[name] || "").split(",").map((value) => value.trim()).filter(Boolean);
-  const unique = (items: string[]): string[] => [...new Set(items)];
-  const [models, providers] = await Promise.all([modelRegistryService.list(), aiProviderRegistryService.list()]);
-  const primaryFromRegistry = models.find((model) => model.enabled && model.roles.includes("primary"));
-  const primaryModel = primaryFromRegistry?.modelId || process.env.GEMINI_MODEL?.trim() || "";
-  const modelPool = unique([primaryModel, ...models.filter((m) => m.enabled && !m.roles.includes("embedding")).map((m) => m.modelId), ...split("GEMINI_MODEL_POOL")]);
-  res.json({ controlPlane: "postgresql-authoritative", timestamp: new Date().toISOString(), runtimeHydrationReady, providers, primaryModel, primaryModelId: primaryFromRegistry?.id || "", modelRegistryCount: models.length, modelPool, fastModel: process.env.GEMINI_MODEL_FAST?.trim() || "", reasoningModel: process.env.GEMINI_MODEL_REASONING?.trim() || "", extractionModel: process.env.GEMINI_MODEL_EXTRACTION?.trim() || "", fallbackModels: split("GEMINI_MODEL_FALLBACKS"), embeddingModel: process.env.GEMINI_EMBEDDING_MODEL?.trim() || "", webResearchProvider: process.env.TAVILY_API_KEY?.trim() ? "Tavily" : "", webResearchConfigured: Boolean(process.env.TAVILY_API_KEY?.trim()), executionEngineEnabled: String(process.env.EXECUTION_ENGINE_ENABLED ?? "").toLowerCase() === "true", telegramRuntimeActive: Boolean(realTelegramRuntime), keyPool: apiKeyPoolService.getSummary() });
+  const [models, providers, routingPolicy, routingHealth] = await Promise.all([
+    unifiedModelRegistryService.list(),
+    aiProviderRegistryService.list(),
+    adaptiveAIRouterService.getPolicy(),
+    adaptiveAIRouterService.healthSnapshot(),
+  ]);
+  const primary = models.find((model) => model.enabled && model.roles.includes("primary"));
+  res.json({
+    controlPlane: "postgresql-authoritative",
+    timestamp: new Date().toISOString(),
+    runtimeHydrationReady,
+    providers,
+    primaryModel: primary?.modelId || "",
+    primaryProvider: primary?.provider || "",
+    primaryModelId: primary?.id || "",
+    modelRegistryCount: models.length,
+    models,
+    routingPolicy,
+    routingHealth,
+    webResearchProvider: process.env.TAVILY_API_KEY?.trim() ? "Tavily" : "",
+    webResearchConfigured: Boolean(process.env.TAVILY_API_KEY?.trim()),
+    executionEngineEnabled: String(process.env.EXECUTION_ENGINE_ENABLED ?? "").toLowerCase() === "true",
+    telegramRuntimeActive: Boolean(realTelegramRuntime),
+    keyPool: apiKeyPoolService.getSummary(),
+  });
 });
 
 app.get("/health", healthHandler);
