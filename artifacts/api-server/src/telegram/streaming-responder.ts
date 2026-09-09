@@ -8,6 +8,8 @@ export interface StreamingResponderOptions {
   placeholderText?: string;
 }
 
+const DEFAULT_STREAM_PLACEHOLDER = "…";
+
 export class StreamingResponder {
   private lastEditTime = 0;
   private pendingTimer?: NodeJS.Timeout;
@@ -23,7 +25,10 @@ export class StreamingResponder {
     private readonly ctx: Context,
     options: StreamingResponderOptions = {},
   ) {
-    this.placeholderText = options.placeholderText ?? "💭 <i>Thinking...</i>";
+    // The placeholder is intentionally neutral. Human-readable progress must
+    // come from an actual resolved/executing stage rather than a generic
+    // "thinking" claim that is inaccurate for some message types.
+    this.placeholderText = options.placeholderText ?? DEFAULT_STREAM_PLACEHOLDER;
   }
 
   /**
