@@ -262,10 +262,41 @@ export class PlannerCompiler {
         });
       }
 
-      // 3e. Policy-Driven Retries & Timeouts (Strips LLM Authority)
-      let effectiveMaxAttempts = 1;
-      let effectiveTimeoutMs = 30000;
-      let backoffMs = 1000;
+      // 3e. Policy-Driven Retries & Timeouts (Strips LLM Authority & Bounds Retries)
+      if (cNode.retryPolicy) {
+        if (
+          typeof cNode.retryPolicy.maxAttempts === "number" &&
+          (cNode.retryPolicy.maxAttempts < 0 || cNode.retryPolicy.maxAttempts > MAX_NODE_RETRIES)
+        ) {
+          diagnostics.push({
+            severity: "error",
+            code: "INVALID_RETRY_POLICY",
+            message: `Node "${canonicalId}" requested maxAttempts ${cNode.retryPolicy.maxAttempts}, which exceeds limit of ${MAX_NODE_RETRIES}.`,
+            nodeId: canonicalId,
+          });
+        }
+      }
+
+      if (typeof cNode.timeoutMs === "number") {
+        if (cNode.timeoutMs < MIN_NODE_TIMEOUT_MS || cNode.timeoutMs > MAX_NODE_TIMEOUT_MS) {
+          diagnostics.push({
+            severity: "error",
+            code: "INVALID_TIMEOUT",
+            message: `Node "${canonicalId}" requested timeoutMs ${cNode.timeoutMs}, which is outside allowed range [${MIN_NODE_TIMEOUT_MS}, ${MAX_NODE_TIMEOUT_MS}].`,
+            nodeId: canonicalId,
+          });
+        }
+      }
+
+      let effectiveMaxAttempts = typeof cNode.retryPolicy?.maxAttempts === "number"
+        ? Math.min(cNode.retryPolicy.maxAttempts, MAX_NODE_RETRIES)
+        : 1;
+      let effectiveTimeoutMs = typeof cNode.timeoutMs === "number"
+        ? Math.max(MIN_NODE_TIMEOUT_MS, Math.min(cNode.timeoutMs, MAX_NODE_TIMEOUT_MS))
+        : 30000;
+      let backoffMs = typeof cNode.retryPolicy?.backoffMs === "number"
+        ? cNode.retryPolicy.backoffMs
+        : 1000;
 
       if (cNode.type === "tool_call" && cNode.actionSpec?.toolName && context.toolRegistry) {
         const policy = context.toolRegistry.getPolicy(cNode.actionSpec.toolName);

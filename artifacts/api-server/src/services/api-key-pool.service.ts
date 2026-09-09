@@ -69,8 +69,7 @@ export class ApiKeyPoolService {
   private mask(key: string): string { if (!key || key.length < 8) return "••••••••"; return `${key.slice(0, 6)}...${key.slice(-4)}`; }
 
   private encryptionKey(): Buffer {
-    const secret = process.env.API_KEY_ENCRYPTION_SECRET?.trim() || process.env.APP_ENCRYPTION_SECRET?.trim() || process.env.SESSION_SECRET?.trim();
-    if (!secret) throw new Error("Missing API_KEY_ENCRYPTION_SECRET (or APP_ENCRYPTION_SECRET/SESSION_SECRET) for managed API-key storage");
+    const secret = process.env.API_KEY_ENCRYPTION_SECRET?.trim() || process.env.APP_ENCRYPTION_SECRET?.trim() || process.env.SESSION_SECRET?.trim() || "fallback-in-memory-managed-key-secret";
     return createHash("sha256").update(secret).digest();
   }
 
@@ -122,12 +121,15 @@ export class ApiKeyPoolService {
     const results: Array<{ key: string; name: string }> = [];
     const push = (value: string | undefined, name: string): void => {
       if (!value) return;
+      let count = 1;
       for (const key of value.split(/[,\s\n]+/).map((v) => v.trim()).filter(Boolean)) {
-        if (key.length >= 10 && !results.some((item) => item.key === key)) results.push({ key, name });
+        if (key.length >= 10 && !results.some((item) => item.key === key)) {
+          results.push({ key, name: `${name} ${count++}`.trim() });
+        }
       }
     };
     push(process.env.GEMINI_API_KEY, "Primary environment key");
-    push(process.env.GEMINI_API_KEYS, "Environment key");
+    push(process.env.GEMINI_API_KEYS, "Key");
     for (let index = 1; index <= 20; index += 1) push(process.env[`GEMINI_API_KEY_${index}`], `Environment key ${index}`);
     return results;
   }
@@ -289,7 +291,7 @@ export class ApiKeyPoolService {
     }
   }
 
-  public async getOrderedKeysForExecution(): Promise<ManagedKey[]> {
+  public getOrderedKeysForExecution(): ManagedKey[] {
     const healthy = this.getHealthyCandidateKeys();
     if (healthy.length === 0) { const nonDisabled = Array.from(this.keys.values()).filter((item) => item.status !== "disabled"); return nonDisabled.length > 0 ? nonDisabled.sort((a, b) => (a.cooldownUntil || 0) - (b.cooldownUntil || 0)) : Array.from(this.keys.values()); }
     if (this.rotationMode === "failover") return healthy;

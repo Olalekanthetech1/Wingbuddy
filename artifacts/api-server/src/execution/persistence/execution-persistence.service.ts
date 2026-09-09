@@ -154,17 +154,7 @@ export class ExecutionPersistenceService {
     return this.sessions.get(executionId) || null;
   }
 
-  async getActiveSessionForGraph(graphId: string, planRevision: number): Promise<ExecutionSession | null> {
-    for (const session of this.sessions.values()) {
-      if (
-        session.graphId === graphId &&
-        session.planRevision === planRevision &&
-        ["ready", "executing", "paused_for_approval"].includes(session.status)
-      ) {
-        return session;
-      }
-    }
-
+  async getActiveSessionForGraph(graphId: string, planRevision: number, mustBeAuthoritative = true): Promise<ExecutionSession | null> {
     if (this.isDbAvailable()) {
       try {
         const pool = getPool();
@@ -175,23 +165,32 @@ export class ExecutionPersistenceService {
           [graphId, planRevision],
         );
         if (res.rows.length > 0) {
-          return this.getExecutionSession(res.rows[0].execution_id);
+          return this.getExecutionSession(res.rows[0].execution_id, mustBeAuthoritative);
         }
-      } catch {
-        // Fall back to memory
+        return null;
+      } catch (err) {
+        if (mustBeAuthoritative) {
+          throw new PersistenceError(`Failed to fetch authoritative active session for graph: ${graphId}`, err);
+        }
+      }
+    } else if (mustBeAuthoritative) {
+      throw new PersistenceError("Database unavailable for authoritative active execution session check.");
+    }
+
+    for (const session of this.sessions.values()) {
+      if (
+        session.graphId === graphId &&
+        session.planRevision === planRevision &&
+        ["ready", "executing", "paused_for_approval"].includes(session.status)
+      ) {
+        return session;
       }
     }
 
     return null;
   }
 
-  async getSessionForGraph(graphId: string, planRevision: number): Promise<ExecutionSession | null> {
-    for (const session of this.sessions.values()) {
-      if (session.graphId === graphId && session.planRevision === planRevision) {
-        return session;
-      }
-    }
-
+  async getSessionForGraph(graphId: string, planRevision: number, mustBeAuthoritative = true): Promise<ExecutionSession | null> {
     if (this.isDbAvailable()) {
       try {
         const pool = getPool();
@@ -202,10 +201,21 @@ export class ExecutionPersistenceService {
           [graphId, planRevision],
         );
         if (res.rows.length > 0) {
-          return this.getExecutionSession(res.rows[0].execution_id);
+          return this.getExecutionSession(res.rows[0].execution_id, mustBeAuthoritative);
         }
-      } catch {
-        // Fall back to memory
+        return null;
+      } catch (err) {
+        if (mustBeAuthoritative) {
+          throw new PersistenceError(`Failed to fetch authoritative session for graph: ${graphId}`, err);
+        }
+      }
+    } else if (mustBeAuthoritative) {
+      throw new PersistenceError("Database unavailable for authoritative execution session check.");
+    }
+
+    for (const session of this.sessions.values()) {
+      if (session.graphId === graphId && session.planRevision === planRevision) {
+        return session;
       }
     }
 
@@ -357,7 +367,7 @@ export class ExecutionPersistenceService {
     return { claimed: true, lease };
   }
 
-  async verifyLeaseOwnership(leaseKey: string, workerId: string): Promise<boolean> {
+  async verifyLeaseOwnership(leaseKey: string, workerId: string, mustBeAuthoritative = true): Promise<boolean> {
     const now = Date.now();
     if (this.isDbAvailable()) {
       try {
@@ -367,9 +377,13 @@ export class ExecutionPersistenceService {
           [leaseKey, workerId],
         );
         return res.rows.length > 0;
-      } catch {
-        // Fallback
+      } catch (err) {
+        if (mustBeAuthoritative) {
+          throw new PersistenceError(`Failed to verify authoritative lease ownership for ${leaseKey}`, err);
+        }
       }
+    } else if (mustBeAuthoritative) {
+      throw new PersistenceError("Database unavailable for authoritative lease ownership verification.");
     }
 
     const existing = this.leases.get(leaseKey);
@@ -378,7 +392,7 @@ export class ExecutionPersistenceService {
     return existing.workerId === workerId && exp > now;
   }
 
-  async isNodeCompleted(graphId: string, planRevision: number, nodeId: string): Promise<boolean> {
+  async isNodeCompleted(graphId: string, planRevision: number, nodeId: string, mustBeAuthoritative = true): Promise<boolean> {
     if (this.isDbAvailable()) {
       try {
         const pool = getPool();
@@ -387,9 +401,14 @@ export class ExecutionPersistenceService {
           [graphId, planRevision, nodeId],
         );
         if (res.rows.length > 0) return true;
-      } catch {
-        // Fallback
+        return false;
+      } catch (err) {
+        if (mustBeAuthoritative) {
+          throw new PersistenceError(`Failed to check authoritative node completion for ${nodeId}`, err);
+        }
       }
+    } else if (mustBeAuthoritative) {
+      throw new PersistenceError("Database unavailable for authoritative node completion check.");
     }
 
     for (const attempt of this.nodeExecutions.values()) {
@@ -641,7 +660,7 @@ export class ExecutionPersistenceService {
 
   // --- Approvals ---
 
-  async upsertApproval(approval: StoredApproval): Promise<void> {
+  async upsertApproval(approval: StoredApproval, mustBeAuthoritative = true): Promise<void> {
     const key = `${approval.graphId}:r${approval.planRevision}:${approval.nodeId}`;
     this.approvals.set(key, JSON.parse(JSON.stringify(approval)));
 
@@ -672,8 +691,13 @@ export class ExecutionPersistenceService {
           ],
         );
       } catch (err) {
+        if (mustBeAuthoritative) {
+          throw new PersistenceError(`Failed to persist authoritative approval for ${approval.approvalId}`, err);
+        }
         logger.warn({ err: String(err) }, "APPROVAL_DB_SAVE_FALLBACK");
       }
+    } else if (mustBeAuthoritative) {
+      throw new PersistenceError("Database unavailable for authoritative approval persistence.");
     }
   }
 
@@ -681,6 +705,7 @@ export class ExecutionPersistenceService {
     graphId: string,
     planRevision: number,
     nodeId: string,
+    mustBeAuthoritative = true,
   ): Promise<StoredApproval | null> {
     const key = `${graphId}:r${planRevision}:${nodeId}`;
     if (this.isDbAvailable()) {
@@ -707,9 +732,14 @@ export class ExecutionPersistenceService {
             resolvedByUserId: row.resolved_by_user_id ? Number(row.resolved_by_user_id) : undefined,
           };
         }
-      } catch {
-        // Fallback
+        return null;
+      } catch (err) {
+        if (mustBeAuthoritative) {
+          throw new PersistenceError(`Failed to fetch authoritative approval for node ${nodeId}`, err);
+        }
       }
+    } else if (mustBeAuthoritative) {
+      throw new PersistenceError("Database unavailable for authoritative approval check.");
     }
     return this.approvals.get(key) || null;
   }

@@ -247,11 +247,7 @@ export class GeminiService {
   }
 
   async embedText(text: string): Promise<number[]> {
-    const model = process.env.GEMINI_EMBEDDING_MODEL?.trim();
-    if (!model) {
-      logger.warn("GEMINI_EMBEDDING_MODEL is not configured; skipping embedding");
-      return [];
-    }
+    const model = process.env.GEMINI_EMBEDDING_MODEL?.trim() || "gemini-embedding-2-preview";
     try {
       const client = this.getClient();
       const embedFn = client.models.embedContent;

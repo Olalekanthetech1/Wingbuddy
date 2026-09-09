@@ -130,6 +130,13 @@ export class InteractionPresentationService {
     const subject = event.operationLabel?.trim() || event.toolName?.trim();
     if (!subject) return undefined;
 
+    if (event.state === "executing_tool") {
+      return `Running tool: ${subject}…${this.latencySuffix(event)}`;
+    }
+    if (event.state === "generating") {
+      return `Generating: ${subject}${this.latencySuffix(event)}`;
+    }
+
     return `${subject}${this.latencySuffix(event)}`;
   }
 

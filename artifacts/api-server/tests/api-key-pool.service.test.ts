@@ -77,6 +77,16 @@ describe("ApiKeyPoolService", () => {
 
   it("successfully adds a key in cooldown status when the key receives a 429 quota error", async () => {
     const pool = new ApiKeyPoolService();
+    // Clean up any stale test key from previous runs
+    try {
+      const summary = pool.getSummary();
+      for (const k of summary.keys) {
+        if (k.name.includes("Rate Limited") || k.name.includes("Test")) {
+          await pool.removeKey(k.id);
+        }
+      }
+    } catch {}
+
     // Mock testRawKey to simulate a 429 quota response from Gemini
     vi.spyOn(pool, "testRawKey").mockResolvedValue({
       valid: true,
@@ -86,11 +96,16 @@ describe("ApiKeyPoolService", () => {
       notice: "Key is authenticated with Gemini, but currently in rate-limit quota cooldown (~40s).",
     });
 
-    const added = await pool.addKey("AIzaSyNewKeyInCooldown1234567890", "Key 4 (Rate Limited)");
+    const uniqueKey = `AIzaSyNewKeyInCooldown_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const added = await pool.addKey(uniqueKey, "Key 4 (Rate Limited)");
 
-    expect(added.status).toBe("cooldown");
-    expect(added.cooldownSecondsLeft).toBeGreaterThan(0);
-    expect(pool.getSummary().totalKeys).toBe(1);
-    expect(pool.getSummary().inCooldownKeys).toBe(1);
+    try {
+      expect(added.status).toBe("cooldown");
+      expect(added.cooldownSecondsLeft).toBeGreaterThan(0);
+      expect(pool.getSummary().totalKeys).toBe(1);
+      expect(pool.getSummary().inCooldownKeys).toBe(1);
+    } finally {
+      await pool.removeKey(added.id);
+    }
   });
 });

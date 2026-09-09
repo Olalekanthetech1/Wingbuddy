@@ -143,6 +143,8 @@ export class AgentPlannerService {
     }
 
     logger.info({ requestId: request.requestId, graphId, revisionId, nodes: Object.keys(compilationResult.graph.nodes).length, toolTypes }, "PLAN_PERSISTED");
+    isDirectResponse =
+      candidate.nodes?.length === 1 && (!candidate.edges || candidate.edges.length === 0);
     return { success: true, graph: compilationResult.graph, diagnostics: compilationResult.diagnostics, isDirectResponse };
   }
 
@@ -287,13 +289,73 @@ export class AgentPlannerService {
       `CURRENT USER GOAL:\n${request.goal}`,
     ].join("\n");
 
-    const raw = await this.getGemini().generateReply([], prompt);
-    const parsed = this.parseCandidate(raw);
-    if (!parsed.goal) parsed.goal = request.goal;
-    if (!parsed.graphId) parsed.graphId = request.graphId;
-    if (!Array.isArray(parsed.nodes) || parsed.nodes.length === 0) throw new Error("Dynamic planner returned an empty plan.");
+    let raw = "";
+    try {
+      raw = await this.getGemini().generateReply([], prompt);
+    } catch (error) {
+      logger.warn({ error: error instanceof Error ? error.message : String(error) }, "Dynamic planner model call failed; falling back to deterministic goal decomposition");
+      return this.fallbackGoalPlan(request);
+    }
 
-    return parsed;
+    try {
+      const parsed = this.parseCandidate(raw);
+      if (!parsed.goal) parsed.goal = request.goal;
+      if (!parsed.graphId) parsed.graphId = request.graphId;
+      if (!Array.isArray(parsed.nodes) || parsed.nodes.length === 0) throw new Error("Dynamic planner returned an empty plan.");
+      return parsed;
+    } catch (parseError) {
+      logger.warn({ error: parseError instanceof Error ? parseError.message : String(parseError) }, "Candidate parsing failed; falling back to deterministic goal decomposition");
+      return this.fallbackGoalPlan(request);
+    }
+  }
+
+  private fallbackGoalPlan(request: PlannerRequest): CandidatePlan {
+    const goal = request.goal;
+    const parts = goal.split(/(?=Step\s+\d+[:.-])/i).map((s) => s.trim()).filter(Boolean);
+    if (parts.length > 1) {
+      const nodes = parts.map((part, idx) => {
+        const match = part.match(/^Step\s+(\d+)[:.-]\s*(.*)$/is);
+        const title = match ? match[2].trim() : part;
+        const num = match ? match[1] : `${idx + 1}`;
+        const isLast = idx === parts.length - 1;
+        const isAggregate = isLast || /aggregate|synthesize|summarize/i.test(title);
+        const id = isAggregate ? `step_${num}_synthesize` : `step_${num}_reasoning`;
+        return {
+          id,
+          title: title.slice(0, 100),
+          type: "llm_reasoning" as const,
+          reasoningSpec: { prompt: title, targetFormat: "markdown" as const },
+          dependsOn: [] as string[],
+        };
+      });
+      for (let i = 1; i < nodes.length; i++) {
+        nodes[i].dependsOn = [nodes[i - 1].id];
+      }
+      const edges = nodes.slice(1).map((node, idx) => ({
+        fromNodeId: nodes[idx].id,
+        toNodeId: node.id,
+        dependencyType: "hard" as const,
+      }));
+      return {
+        goal,
+        strategy: "Sequential multi-step goal plan",
+        nodes,
+        edges,
+      };
+    }
+
+    return {
+      goal,
+      strategy: "Autonomous execution plan",
+      nodes: [{
+        id: "step_1",
+        title: goal.slice(0, 80),
+        type: "llm_reasoning" as const,
+        reasoningSpec: { prompt: goal, targetFormat: "markdown" as const },
+        dependsOn: [],
+      }],
+      edges: [],
+    };
   }
 
   /**

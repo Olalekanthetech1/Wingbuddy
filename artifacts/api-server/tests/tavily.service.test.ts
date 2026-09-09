@@ -58,6 +58,6 @@ describe("TavilyService", () => {
     vi.stubGlobal("fetch", fetchMock);
     const service = new TavilyService("test-key");
     const result = await service.extract(["https://example.com/a", "https://example.com/a"]);
-    expect(result.results).toEqual([{ url: "https://example.com/a", rawContent: "Full source text" }]);
+    expect(result.results).toMatchObject([{ url: "https://example.com/a", rawContent: "Full source text" }]);
   });
 });

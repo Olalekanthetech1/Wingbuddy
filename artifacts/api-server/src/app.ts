@@ -65,14 +65,12 @@ const handleTelegramWebhook = (req: Request, res: Response): void => {
     res.status(400).json({ error: "Invalid Telegram update payload" });
     return;
   }
-  if (!runtimeHydrationReady || !realTelegramRuntime) {
-    logger.warn({ updateId: update.update_id }, "Telegram webhook received before runtime readiness; update not processed");
-    res.status(503).json({ ok: false, error: "Runtime initializing" });
-    return;
-  }
   res.status(200).json({ ok: true });
-  try { telegramWorkerQueue.enqueue(update); }
-  catch (err) { logger.error({ error: safeErrorMetadata(err), updateId: update.update_id }, "Failed to enqueue Telegram update"); }
+  try {
+    telegramWorkerQueue.enqueue(update);
+  } catch (err) {
+    logger.error({ error: safeErrorMetadata(err), updateId: update.update_id }, "Failed to enqueue Telegram update");
+  }
 };
 app.post("/api/telegram/webhook", handleTelegramWebhook);
 app.post("/telegram/webhook", handleTelegramWebhook);

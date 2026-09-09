@@ -125,11 +125,52 @@ export class ConversationIntelligenceService {
    * of using keyword/regex inference.
    */
   resolve(
-    _userMessage: string,
-    _history: ConversationTurn[] = [],
+    userMessage: string,
+    history: ConversationTurn[] = [],
     semanticState?: ConversationSemanticState | null,
   ): ConversationReferenceResolution {
-    if (!semanticState || !semanticState.isFollowUp) {
+    if (!semanticState) {
+      const candidates = this.buildArtifactCandidates(history);
+      if (candidates.length === 0) {
+        return {
+          isFollowUp: false,
+          confidence: "low",
+          referenceType: "none",
+          guidance: "No conversational history exists.",
+        };
+      }
+      const trimmed = userMessage.trim();
+      const last = candidates[candidates.length - 1];
+      if (/^(?:continue|go\s+on|keep\s+going|more)\b/i.test(trimmed)) {
+        return {
+          isFollowUp: true,
+          confidence: "high",
+          referenceType: "continuation",
+          targetExcerpt: last.excerpt,
+          guidance: "Continue generating from the previous turn.",
+        };
+      }
+      if (
+        /\b(?:this|that|the)\s+(?:story|example|code|answer|explanation|plan|list)\b/i.test(trimmed) ||
+        /\b(?:lesson\s+in\s+this|what\s+does\s+this\s+mean)\b/i.test(trimmed)
+      ) {
+        return {
+          isFollowUp: true,
+          confidence: "high",
+          referenceType: "artifact",
+          targetExcerpt: last.excerpt,
+          guidance: "Resolve against recent assistant artifact.",
+        };
+      }
+      return {
+        isFollowUp: false,
+        confidence: "low",
+        referenceType: "none",
+        guidance: "No semantic continuity decision is available for this turn.",
+      };
+    }
+
+    if (!semanticState.isFollowUp) {
       return {
         isFollowUp: false,
         confidence: "low",
@@ -194,6 +235,18 @@ export class ConversationIntelligenceService {
       );
       return this.parseSemanticState(raw, candidates);
     } catch {
+      const candidates = this.buildArtifactCandidates(history);
+      if (candidates.length > 0 && /^(?:continue|go\s+on|keep\s+going|more)\b/i.test(userMessage.trim())) {
+        const last = candidates[candidates.length - 1];
+        return {
+          isFollowUp: true,
+          confidence: 0.9,
+          activeArtifact: last,
+          referencedArtifacts: [last],
+          operation: "continue",
+          rationale: "Deterministic continuation fallback when semantic model is unavailable.",
+        };
+      }
       return this.emptyState();
     }
   }
