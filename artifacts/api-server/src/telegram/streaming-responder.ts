@@ -95,13 +95,40 @@ export class StreamingResponder {
 
   async finalize(fullText: string): Promise<void> {
     this.isFinalized = true;
-    if (this.pendingTimer) {
-      clearTimeout(this.pendingTimer);
-      this.pendingTimer = undefined;
+    this.clearPendingTimer();
+    this.latestText = fullText.trim();
+    await this.renderFinalText(this.latestText);
+  }
+
+  async fail(message = "⚠️ I hit a temporary issue while generating that response. Please try again."): Promise<void> {
+    if (this.isFinalized) return;
+    this.isFinalized = true;
+    this.clearPendingTimer();
+    const safeMessage = message.trim() || "⚠️ I couldn't complete that response.";
+
+    if (!this.messageId || !this.ctx.chat) {
+      await this.ctx.reply(safeMessage).catch(() => {});
+      return;
     }
 
-    this.latestText = fullText.trim();
-    const rawChunks = AdaptiveEngineService.computeAdaptiveMessageSplit(this.latestText);
+    const formatted = formatTelegramMessage(safeMessage, {
+      telegramUserId: this.ctx.from?.id,
+      source: "StreamingResponder.fail",
+    });
+
+    try {
+      await this.ctx.api.editMessageText(this.ctx.chat.id, this.messageId, formatted, { parse_mode: "HTML" });
+    } catch {
+      try {
+        await this.ctx.api.editMessageText(this.ctx.chat.id, this.messageId, stripTelegramHtml(formatted));
+      } catch (error) {
+        logger.debug({ error: safeErrorMetadata(error) }, "Streaming failure message edit failed");
+      }
+    }
+  }
+
+  private async renderFinalText(fullText: string): Promise<void> {
+    const rawChunks = AdaptiveEngineService.computeAdaptiveMessageSplit(fullText);
     const chunks = rawChunks.map((chunk, idx) => formatTelegramMessage(chunk, {
       telegramUserId: this.ctx.from?.id,
       chunkIndex: idx,
@@ -152,6 +179,13 @@ export class StreamingResponder {
       await this.ctx.reply(chunk, { parse_mode: "HTML" }).catch(async () => {
         await this.ctx.reply(stripTelegramHtml(chunk));
       });
+    }
+  }
+
+  private clearPendingTimer(): void {
+    if (this.pendingTimer) {
+      clearTimeout(this.pendingTimer);
+      this.pendingTimer = undefined;
     }
   }
 

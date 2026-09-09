@@ -5,6 +5,8 @@ import { safeErrorMetadata } from "../utils/safe-error";
 import { apiKeyPoolService, type ApiKeyPoolService, type ManagedKey } from "../services/api-key-pool.service";
 import { AdaptiveEngineService } from "../services/adaptive-engine.service";
 import { geminiModelPoolService } from "../services/gemini-model-pool.service";
+import { adaptiveAIRouterService } from "../services/adaptive-ai-router.service";
+import type { AIChatRequest } from "../services/ai-provider.types";
 
 export interface GeminiMessage { role: "user" | "model"; content: string; }
 export interface AssistantGuidance { personalityInstruction?: string; modeInstruction?: string; memoryInstruction?: string; }
@@ -54,7 +56,7 @@ export class GeminiService {
   }
 
   private buildContents(history: GeminiMessage[], message: string, attachments?: MultimodalAttachment[]): Content[] {
-    const userParts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [{ text: message }];
+    const userParts: Array<{ text?: string; inlineData?: { mimeType?: string; data?: string } }> = [{ text: message }];
     for (const att of attachments || []) userParts.push({ inlineData: { mimeType: att.mimeType, data: att.data } });
     return [...history.map((item) => ({ role: item.role, parts: [{ text: item.content }] })), { role: "user", parts: userParts as unknown as Content["parts"] }];
   }
@@ -70,10 +72,38 @@ export class GeminiService {
     return this.timeoutMs > 0 ? this.timeoutMs : AdaptiveEngineService.computeAdaptiveTimeout({ prompt: context.prompt, enableSearch: context.enableSearch, isDeepReasoning: context.isDeepReasoning, hasAudio: context.hasAudio, hasVisionOrDocument: context.hasVisionOrDocument, mediaSizeBytes: context.mediaSizeBytes, targetKeyId: context.targetKeyId });
   }
 
+  private shouldUseNativeGemini(options?: GenerateReplyOptions): boolean {
+    return Boolean(options?.enableSearch || options?.attachments?.length || options?.hasAudio || options?.hasVisionOrDocument);
+  }
+
+  private adaptiveRequest(history: GeminiMessage[], message: string, guidance?: AssistantGuidance | string, options?: GenerateReplyOptions): AIChatRequest {
+    return {
+      model: this.model,
+      messages: [
+        { role: "system", content: buildSystemInstruction(this.systemInstruction, guidance) },
+        ...history.map((item) => ({ role: item.role === "model" ? "assistant" as const : "user" as const, content: item.content })),
+        { role: "user", content: message },
+      ],
+      temperature: undefined,
+      maxOutputTokens: undefined,
+      topP: undefined,
+      thinkingLevel: options?.thinkingLevel,
+    };
+  }
+
   async generateReply(history: GeminiMessage[], message: string, guidance?: AssistantGuidance | string, options?: GenerateReplyOptions): Promise<string> {
+    const context: CallContext = { prompt: message, enableSearch: Boolean(options?.enableSearch), mode: options?.mode, isDeepReasoning: options?.isDeepReasoning, isExtraction: options?.isExtraction, hasAudio: options?.hasAudio, hasVisionOrDocument: options?.hasVisionOrDocument, mediaSizeBytes: options?.mediaSizeBytes };
+    if (!this.shouldUseNativeGemini(options) && !this.customClient) {
+      const routed = await adaptiveAIRouterService.route(this.adaptiveRequest(history, message, guidance, options), {
+        mode: options?.mode,
+        isDeepReasoning: options?.isDeepReasoning,
+        isExtraction: options?.isExtraction,
+      });
+      return routed.response.text.trim();
+    }
+
     const contents = this.buildContents(history, message, options?.attachments);
     const config = this.buildConfig(guidance, options);
-    const context: CallContext = { prompt: message, enableSearch: Boolean(options?.enableSearch), mode: options?.mode, isDeepReasoning: options?.isDeepReasoning, isExtraction: options?.isExtraction, hasAudio: options?.hasAudio, hasVisionOrDocument: options?.hasVisionOrDocument, mediaSizeBytes: options?.mediaSizeBytes };
     const keys = this.customClient ? [undefined] : await this.pool.getOrderedKeysForExecution();
     let lastError: unknown;
     for (const keyInfo of keys) {
@@ -100,9 +130,22 @@ export class GeminiService {
   }
 
   async generateReplyStream(history: GeminiMessage[], message: string, guidance?: AssistantGuidance | string, options?: GenerateReplyOptions, onChunk?: (accumulatedText: string) => Promise<void> | void): Promise<string> {
+    if (!this.shouldUseNativeGemini(options) && !this.customClient) {
+      const request = this.adaptiveRequest(history, message, guidance, options);
+      let accumulated = "";
+      for await (const chunk of adaptiveAIRouterService.routeStream(request, { mode: options?.mode, isDeepReasoning: options?.isDeepReasoning, isExtraction: options?.isExtraction })) {
+        if (chunk.delta) {
+          accumulated += chunk.delta;
+          if (onChunk) await onChunk(accumulated);
+        }
+      }
+      if (!accumulated.trim()) throw new GeminiMalformedResponseError();
+      return accumulated.trim();
+    }
+
     const contents = this.buildContents(history, message, options?.attachments);
     const config = this.buildConfig(guidance, options);
-    const context: CallContext = { prompt: message, enableSearch: Boolean(options?.enableSearch), mode: options?.mode, isDeepReasoning: options?.isDeepReasoning, hasAudio: options?.hasAudio, hasVisionOrDocument: options?.hasVisionOrDocument, mediaSizeBytes: options?.mediaSizeBytes };
+    const context: CallContext = { prompt: message, enableSearch: Boolean(options?.enableSearch), mode: options?.mode, isDeepReasoning: options?.isDeepReasoning, isExtraction: options?.isExtraction, hasAudio: options?.hasAudio, hasVisionOrDocument: options?.hasVisionOrDocument, mediaSizeBytes: options?.mediaSizeBytes };
     const keys = this.customClient ? [undefined] : await this.pool.getOrderedKeysForExecution();
     let lastError: unknown;
     for (const keyInfo of keys) {

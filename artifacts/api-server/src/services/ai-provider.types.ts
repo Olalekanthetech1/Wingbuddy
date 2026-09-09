@@ -6,7 +6,8 @@ export type AIProviderCapability =
   | "tool_calling"
   | "vision"
   | "reasoning"
-  | "long_context";
+  | "long_context"
+  | "web_search";
 
 export interface AIProviderRecord {
   id: AIProviderId;
@@ -37,12 +38,21 @@ export interface AIMessage {
   toolCallId?: string;
 }
 
+export interface AIChatAttachment {
+  mimeType: string;
+  data: string;
+  fileName?: string;
+}
+
 export interface AIChatRequest {
   model: string;
   messages: AIMessage[];
   temperature?: number;
   maxOutputTokens?: number;
   topP?: number;
+  enableSearch?: boolean;
+  thinkingLevel?: string;
+  attachments?: AIChatAttachment[];
   metadata?: Record<string, unknown>;
 }
 

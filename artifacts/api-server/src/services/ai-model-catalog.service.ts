@@ -11,10 +11,10 @@ export class AIModelCatalogService {
   private async resolveKey(provider: AIProviderId): Promise<string | undefined> {
     const record = await aiProviderRegistryService.get(provider);
     if (provider === "gemini") {
-      await apiKeyPoolService.hydrateFromDatabase();
+      try { await apiKeyPoolService.hydrateFromDatabase(); } catch {}
       return apiKeyPoolService.getOrderedKeysForExecution()[0]?.key || process.env[record.apiKeyEnv]?.trim() || undefined;
     }
-    await aiProviderKeyPoolService.hydrateProvider(provider, record.apiKeyEnv);
+    try { await aiProviderKeyPoolService.hydrateProvider(provider, record.apiKeyEnv); } catch {}
     return aiProviderKeyPoolService.getOrderedKeys(provider)[0]?.key || process.env[record.apiKeyEnv]?.trim() || undefined;
   }
 
@@ -35,7 +35,6 @@ export class AIModelCatalogService {
     const cached = this.cache.get(provider);
     if (!force && cached && Date.now() - cached.at < this.ttlMs) return cached.models.map((model) => ({ ...model, capabilities: [...model.capabilities] }));
     const record = await aiProviderRegistryService.get(provider);
-    if (!record.enabled) throw new Error(`Provider ${provider} is disabled`);
     const key = await this.resolveKey(provider);
     if (!key) throw new Error(`${record.apiKeyEnv} is not configured and no Dashboard-managed key is available`);
     const models = await this.listWithKey(provider, key);
