@@ -1,3 +1,4 @@
+import "./gemini/adaptive-runtime-patch";
 import app, { telegramRuntime, setRuntimeHydrationReady } from "./app";
 import { logger } from "./lib/logger";
 import { getPool, ensureDatabaseSchema } from "@workspace/db";
@@ -7,6 +8,8 @@ import { apiKeyPoolService } from "./services/api-key-pool.service";
 import { runtimeBehaviorConfigService } from "./services/runtime-behavior-config.service";
 import { modelRegistryService } from "./services/model-registry.service";
 import { aiProviderRegistryService } from "./services/ai-provider-registry.service";
+import { unifiedModelRegistryService } from "./services/unified-model-registry.service";
+import { adaptiveAIRouterService } from "./services/adaptive-ai-router.service";
 
 const port = 3000;
 let startupStateReady = false;
@@ -23,12 +26,16 @@ const server = app.listen(port, "0.0.0.0", async () => {
     await runtimeBehaviorConfigService.initialize();
     const providers = await aiProviderRegistryService.list();
     const registeredModels = await modelRegistryService.list();
+    const unifiedModels = await unifiedModelRegistryService.initialize();
+    const routingPolicy = await adaptiveAIRouterService.getPolicy();
     logger.info({
       providerCount: providers.length,
       enabledProviders: providers.filter((provider) => provider.enabled && provider.configured).map((provider) => provider.id),
-      modelRegistryCount: registeredModels.length,
-      primaryModel: registeredModels.find((model) => model.enabled && model.roles.includes("primary"))?.modelId || process.env.GEMINI_MODEL || "",
-    }, "AI provider and Gemini model registries hydrated before Telegram initialization");
+      legacyGeminiModelRegistryCount: registeredModels.length,
+      unifiedModelRegistryCount: unifiedModels.length,
+      unifiedPrimaryModel: unifiedModels.find((model) => model.enabled && model.roles.includes("primary"))?.modelId || "",
+      routingStrategy: routingPolicy.strategy,
+    }, "Unified AI model registry and adaptive routing hydrated before Telegram initialization");
 
     startupStateReady = true;
     setRuntimeHydrationReady(true);
