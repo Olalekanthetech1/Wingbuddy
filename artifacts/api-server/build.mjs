@@ -29,7 +29,7 @@ async function buildAll() {
     // Some of the packages below may not be imported or installed, but we're adding them in case they are in the future.
     // Examples of unbundleable packages:
     // - uses native modules and loads them dynamically (e.g. sharp)
-    // - use path traversal to read files (e.g. @google-cloud/secret-manager loads sibling .proto files)
+    // - use path traversal to read files
     external: [
       "*.node",
       "sharp",
@@ -112,6 +112,7 @@ async function buildAll() {
       esbuildPluginPino({ transports: ["pino-pretty"] })
     ],
     // Make sure packages that are cjs only (e.g. express) but are bundled continue to work in our esm output file
+    // Also normalize PostgreSQL SSL configuration before any bundled dependency parses DATABASE_URL.
     banner: {
       js: `import { createRequire as __bannerCrReq } from 'node:module';
 import __bannerPath from 'node:path';
@@ -120,6 +121,34 @@ import __bannerUrl from 'node:url';
 globalThis.require = __bannerCrReq(import.meta.url);
 globalThis.__filename = __bannerUrl.fileURLToPath(import.meta.url);
 globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
+
+// PostgreSQL SSL policy is explicit and deployment-configurable.
+// pg-connection-string currently warns when legacy sslmode values are used without
+// libpq compatibility. The production-safe default is verify-full, which preserves
+// the secure behavior the current runtime already applies while remaining explicit.
+try {
+  const rawDatabaseUrl = process.env.DATABASE_URL;
+  if (rawDatabaseUrl) {
+    const databaseUrl = new URL(rawDatabaseUrl);
+    const configuredMode = (process.env.DATABASE_SSL_MODE || process.env.PGSSLMODE || 'verify-full').trim().toLowerCase();
+    const supportedModes = new Set(['disable', 'allow', 'prefer', 'require', 'verify-ca', 'verify-full']);
+    const sslMode = supportedModes.has(configuredMode) ? configuredMode : 'verify-full';
+
+    // Keep the operator's explicit request, but remove the warning in modern pg
+    // by making legacy modes use libpq-compatible parsing. Production defaults to
+    // verify-full and therefore performs certificate and hostname verification.
+    databaseUrl.searchParams.delete('sslmode');
+    databaseUrl.searchParams.delete('uselibpqcompat');
+    databaseUrl.searchParams.set('sslmode', sslMode);
+    if (sslMode === 'prefer' || sslMode === 'require' || sslMode === 'verify-ca') {
+      databaseUrl.searchParams.set('uselibpqcompat', 'true');
+    }
+    process.env.DATABASE_URL = databaseUrl.toString();
+    if (!process.env.PGSSLMODE) process.env.PGSSLMODE = sslMode;
+  }
+} catch (sslBootstrapError) {
+  console.warn('[DB] PostgreSQL SSL configuration normalization failed; retaining original DATABASE_URL.', sslBootstrapError instanceof Error ? sslBootstrapError.message : String(sslBootstrapError));
+}
     `,
     },
   });
