@@ -20,6 +20,16 @@ export interface AIProviderRecord {
   updatedAt: string;
 }
 
+export interface AIModelCatalogEntry {
+  provider: AIProviderId;
+  modelId: string;
+  name: string;
+  status: "active" | "inactive" | "unknown";
+  capabilities: string[];
+  contextWindow?: number;
+  source: "provider_api" | "registry";
+}
+
 export interface AIMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
@@ -65,4 +75,5 @@ export interface AIProviderAdapter {
   chat(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIChatResponse>;
   stream(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): AsyncGenerator<AIStreamChunk>;
   test(model: string, provider: AIProviderRecord, apiKey?: string): Promise<{ ok: boolean; latencyMs: number; error?: string }>;
+  listModels(provider: AIProviderRecord, apiKey?: string): Promise<AIModelCatalogEntry[]>;
 }
