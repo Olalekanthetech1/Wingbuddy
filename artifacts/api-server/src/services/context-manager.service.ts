@@ -13,6 +13,7 @@ import {
   type UserMemoryRecord,
 } from "@workspace/db";
 import { logger } from "../lib/logger";
+import { semanticInteractionCache } from "./semantic-interaction-cache.service";
 
 export interface AssembledContext {
   effectiveSystemPrompt: string;
@@ -105,21 +106,42 @@ export class ContextManagerService {
     let semanticState = options.semanticState || null;
 
     if (!semanticState && rawHistory.length > 0 && options.userMessage.trim()) {
-      try {
-        semanticState = await conversationIntelligenceService.analyzeSemanticState(
-          options.userMessage,
-          rawHistory,
-          async (history, analysisPrompt) => this.getGemini().generateReply(
-            history,
-            analysisPrompt,
-            "Act as the conversation-state interpreter. Return only the exact JSON object requested.",
-          ),
-        );
-      } catch (error) {
-        logger.debug?.(
-          { telegramUserId, error: error instanceof Error ? error.message : String(error) },
-          "Semantic conversation analysis unavailable; continuing without semantic continuity enrichment",
-        );
+      const cachedInteraction = semanticInteractionCache.getLatestForText(options.userMessage);
+      const isSimpleCachedTurn = Boolean(
+        cachedInteraction &&
+        cachedInteraction.complexity === "simple" &&
+        cachedInteraction.taskIntent === "NO_TASK" &&
+        cachedInteraction.conversationOperation === "new_request" &&
+        !cachedInteraction.unresolvedReference &&
+        !cachedInteraction.enableSearch &&
+        !cachedInteraction.thinkingLevel &&
+        !cachedInteraction.isModeSwitch &&
+        cachedInteraction.intent !== "image_generation" &&
+        cachedInteraction.intent !== "video_generation" &&
+        cachedInteraction.intent !== "search_grounding" &&
+        cachedInteraction.intent !== "deep_reasoning",
+      );
+
+      // The canonical semantic interaction resolver has already interpreted this
+      // turn. Simple non-follow-up turns do not need a second LLM control-plane
+      // call for conversational continuity.
+      if (!isSimpleCachedTurn) {
+        try {
+          semanticState = await conversationIntelligenceService.analyzeSemanticState(
+            options.userMessage,
+            rawHistory,
+            async (history, analysisPrompt) => this.getGemini().generateReply(
+              history,
+              analysisPrompt,
+              "Act as the conversation-state interpreter. Return only the exact JSON object requested.",
+            ),
+          );
+        } catch (error) {
+          logger.debug?.(
+            { telegramUserId, error: error instanceof Error ? error.message : String(error) },
+            "Semantic conversation analysis unavailable; continuing without semantic continuity enrichment",
+          );
+        }
       }
     }
 
