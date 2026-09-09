@@ -1,0 +1,47 @@
+import { apiKeyPoolService } from "./api-key-pool.service";
+import { aiProviderKeyPoolService } from "./ai-provider-key-pool.service";
+import { aiProviderAdapters } from "./ai-provider.adapters";
+import { aiProviderRegistryService } from "./ai-provider-registry.service";
+import type { AIModelCatalogEntry, AIProviderId } from "./ai-provider.types";
+
+export class AIModelCatalogService {
+  private readonly cache = new Map<AIProviderId, { at: number; models: AIModelCatalogEntry[] }>();
+  private readonly ttlMs = 60_000;
+
+  private async resolveKey(provider: AIProviderId): Promise<string | undefined> {
+    const record = await aiProviderRegistryService.get(provider);
+    if (provider === "gemini") {
+      await apiKeyPoolService.hydrateFromDatabase();
+      return apiKeyPoolService.getOrderedKeysForExecution()[0]?.key || process.env[record.apiKeyEnv]?.trim() || undefined;
+    }
+    await aiProviderKeyPoolService.hydrateProvider(provider, record.apiKeyEnv);
+    return aiProviderKeyPoolService.getOrderedKeys(provider)[0]?.key || process.env[record.apiKeyEnv]?.trim() || undefined;
+  }
+
+  async list(provider: AIProviderId, force = false): Promise<AIModelCatalogEntry[]> {
+    const cached = this.cache.get(provider);
+    if (!force && cached && Date.now() - cached.at < this.ttlMs) return cached.models.map((model) => ({ ...model, capabilities: [...model.capabilities] }));
+
+    const record = await aiProviderRegistryService.get(provider);
+    const adapter = aiProviderAdapters[record.adapter];
+    if (!adapter || typeof adapter.listModels !== "function") throw new Error(`Model discovery is not available for provider ${provider}`);
+    if (!record.enabled) throw new Error(`Provider ${provider} is disabled`);
+
+    const key = await this.resolveKey(provider);
+    if (!key) throw new Error(`${record.apiKeyEnv} is not configured and no Dashboard-managed key is available`);
+
+    const models = await adapter.listModels(record, key);
+    const normalized = models
+      .filter((model) => model.status !== "inactive")
+      .sort((a, b) => a.name.localeCompare(b.name) || a.modelId.localeCompare(b.modelId));
+    this.cache.set(provider, { at: Date.now(), models: normalized });
+    return normalized.map((model) => ({ ...model, capabilities: [...model.capabilities] }));
+  }
+
+  invalidate(provider?: AIProviderId): void {
+    if (provider) this.cache.delete(provider);
+    else this.cache.clear();
+  }
+}
+
+export const aiModelCatalogService = new AIModelCatalogService();
