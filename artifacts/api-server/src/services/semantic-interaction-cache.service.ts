@@ -1,5 +1,14 @@
 import { createHash } from "node:crypto";
 
+export type SemanticTaskIntent =
+  | "NEW_TASK"
+  | "CONTINUE_TASK"
+  | "PAUSE_TASK"
+  | "COMPLETE_TASK"
+  | "CANCEL_TASK"
+  | "VIEW_TASKS"
+  | "NO_TASK";
+
 export interface SemanticInteractionDecision {
   intent:
     | "greeting"
@@ -22,6 +31,14 @@ export interface SemanticInteractionDecision {
   isGreeting: boolean;
   complexity: "simple" | "moderate" | "complex" | "multi_step";
   confidence: number;
+  taskIntent?: SemanticTaskIntent;
+  taskTitle?: string;
+  taskGoal?: string;
+  taskIdHint?: number;
+  taskSteps?: string[];
+  conversationOperation?: string;
+  conversationTargetHistoryIndices?: number[];
+  unresolvedReference?: string;
 }
 
 interface CacheEntry {
@@ -85,12 +102,8 @@ class SemanticInteractionCacheService {
 
   private prune(): void {
     const now = Date.now();
-    for (const [key, entry] of this.entries) {
-      if (entry.expiresAt <= now) this.entries.delete(key);
-    }
-    for (const [key, entry] of this.latestByText) {
-      if (entry.expiresAt <= now) this.latestByText.delete(key);
-    }
+    for (const [key, entry] of this.entries) if (entry.expiresAt <= now) this.entries.delete(key);
+    for (const [key, entry] of this.latestByText) if (entry.expiresAt <= now) this.latestByText.delete(key);
   }
 }
 
