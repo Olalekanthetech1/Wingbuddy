@@ -1,29 +1,12 @@
 import type { Context } from "grammy";
-
-const TYPING_REFRESH_MS = 4_000;
-const ACK_REACTION = "👀";
+import { interactionPresentationService } from "./interaction-presentation.service";
 
 /**
- * Starts Telegram's typing presence and immediately acknowledges the current
- * incoming message. Both are presentation-only and must never affect the
- * underlying execution outcome.
+ * Backward-compatible entry point used by the Telegram runtime.
+ * Presentation policy now owns reactions/chat actions so transport code does
+ * not decide user-facing interaction behavior itself.
  */
 export function startTypingIndicator(ctx: Context): () => void {
-  let stopped = false;
-
-  // Telegram reactions are best-effort: chat permissions, message type, or
-  // platform restrictions must never block the actual assistant response.
-  void ctx.react(ACK_REACTION).catch(() => undefined);
-
-  const sendTyping = (): void => {
-    if (stopped || !ctx.chat) return;
-    void ctx.api.sendChatAction(ctx.chat.id, "typing").catch(() => undefined);
-  };
-
-  sendTyping();
-  const timer = setInterval(sendTyping, TYPING_REFRESH_MS);
-  return () => {
-    stopped = true;
-    clearInterval(timer);
-  };
+  interactionPresentationService.acknowledge(ctx, { state: "received" });
+  return interactionPresentationService.startPresence(ctx, { state: "generating" });
 }
