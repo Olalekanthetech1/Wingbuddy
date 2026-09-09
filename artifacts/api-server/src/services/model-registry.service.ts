@@ -35,7 +35,20 @@ function makeId(modelId: string): string {
 
 function normalizeStoredModels(value: unknown): ManagedModel[] {
   if (!Array.isArray(value)) return [];
-  return value.filter((item): item is ManagedModel => Boolean(item && typeof item === "object" && typeof (item as ManagedModel).modelId === "string"));
+  return value
+    .filter((item): item is ManagedModel => Boolean(item && typeof item === "object" && typeof (item as ManagedModel).modelId === "string"))
+    .map((item) => ({
+      ...item,
+      id: item.id || makeId(item.modelId),
+      provider: "gemini",
+      name: item.name || item.modelId,
+      roles: unique((Array.isArray(item.roles) ? item.roles : []).filter((role): role is ModelRole => ROLES.includes(role))),
+      enabled: item.enabled !== false,
+      priority: Number.isFinite(item.priority) ? item.priority : 0,
+      capabilities: unique(Array.isArray(item.capabilities) ? item.capabilities.filter((v): v is string => typeof v === "string") : ["generate"]),
+      createdAt: item.createdAt || new Date().toISOString(),
+      updatedAt: item.updatedAt || new Date().toISOString(),
+    }));
 }
 
 export class ModelRegistryService {
@@ -78,10 +91,10 @@ export class ModelRegistryService {
         .where(eq(systemSettingsTable.key, REGISTRY_KEY))
         .limit(1);
       if (rows[0]?.value) {
-        // Once persisted, PostgreSQL is authoritative. Environment values are
-        // only the bootstrap source for first initialization/migration.
-        this.cache = normalizeStoredModels(JSON.parse(rows[0].value)).sort((a, b) => a.priority - b.priority);
+        const models = normalizeStoredModels(JSON.parse(rows[0].value)).sort((a, b) => a.priority - b.priority);
+        this.cache = this.ensureSinglePrimary(models);
         this.cacheAt = Date.now();
+        this.syncRuntime(this.cache);
         return this.cache;
       }
     } catch (error) {
@@ -92,15 +105,27 @@ export class ModelRegistryService {
     return this.cache;
   }
 
+  private ensureSinglePrimary(models: ManagedModel[]): ManagedModel[] {
+    let foundPrimary = false;
+    return models.map((model) => {
+      if (!model.roles.includes("primary")) return model;
+      if (foundPrimary) return { ...model, roles: model.roles.filter((role) => role !== "primary") };
+      foundPrimary = true;
+      return model;
+    });
+  }
+
   private async persist(models: ManagedModel[]): Promise<void> {
+    const normalized = this.ensureSinglePrimary(models).sort((a, b) => a.priority - b.priority);
     await db.insert(systemSettingsTable)
-      .values({ key: REGISTRY_KEY, value: JSON.stringify(models), updatedAt: new Date() })
+      .values({ key: REGISTRY_KEY, value: JSON.stringify(normalized), updatedAt: new Date() })
       .onConflictDoUpdate({
         target: systemSettingsTable.key,
-        set: { value: JSON.stringify(models), updatedAt: new Date() },
+        set: { value: JSON.stringify(normalized), updatedAt: new Date() },
       });
-    this.cache = models;
+    this.cache = normalized;
     this.cacheAt = Date.now();
+    this.syncRuntime(normalized);
   }
 
   private syncRuntime(models: ManagedModel[]): void {
@@ -119,7 +144,7 @@ export class ModelRegistryService {
     process.env.GEMINI_MODEL_FAST = fast?.modelId || "";
     process.env.GEMINI_MODEL_REASONING = reasoning?.modelId || "";
     process.env.GEMINI_MODEL_EXTRACTION = extraction?.modelId || "";
-    if (embedding) process.env.GEMINI_EMBEDDING_MODEL = embedding.modelId;
+    process.env.GEMINI_EMBEDDING_MODEL = embedding?.modelId || "";
   }
 
   async list(): Promise<ManagedModel[]> {
@@ -133,37 +158,72 @@ export class ModelRegistryService {
     const models = await this.read();
     if (models.some((m) => m.provider === "gemini" && m.modelId === modelId)) throw new Error(`Model ${modelId} is already registered.`);
     const now = new Date().toISOString();
+    const requestedRoles = unique((input.roles || []).filter((role): role is ModelRole => ROLES.includes(role)));
+    if (requestedRoles.includes("primary") && models.every((m) => !m.enabled || !m.roles.includes("primary"))) {
+      // first primary is valid; no special handling required
+    }
     const model: ManagedModel = {
       id: makeId(modelId), provider: "gemini", modelId,
       name: input.name?.trim() || modelId,
-      roles: unique((input.roles || []).filter((role) => ROLES.includes(role))),
+      roles: requestedRoles,
       enabled: true,
       priority: Number.isFinite(input.priority) ? Number(input.priority) : models.length,
       capabilities: unique(input.capabilities?.length ? input.capabilities : ["generate"]),
       createdAt: now, updatedAt: now,
     };
-    const next = [...models, model].sort((a, b) => a.priority - b.priority);
-    await this.persist(next); this.syncRuntime(next); return model;
+    const base = requestedRoles.includes("primary")
+      ? models.map((m) => ({ ...m, roles: m.roles.filter((role) => role !== "primary") }))
+      : models;
+    const next = this.ensureSinglePrimary([...base, model]);
+    await this.persist(next);
+    return model;
   }
 
-  async update(id: string, patch: Partial<Pick<ManagedModel, "name" | "roles" | "enabled" | "priority" | "capabilities">>): Promise<ManagedModel> {
+  async update(id: string, patch: Partial<Pick<ManagedModel, "modelId" | "name" | "roles" | "enabled" | "priority" | "capabilities">>): Promise<ManagedModel> {
     const models = await this.read();
     const index = models.findIndex((m) => m.id === id);
     if (index < 0) throw new Error("Model not found");
+    const current = models[index];
+    const nextModelId = patch.modelId?.trim() || current.modelId;
+    if (!nextModelId) throw new Error("modelId is required");
+    if (models.some((m, i) => i !== index && m.modelId === nextModelId)) throw new Error(`Model ${nextModelId} is already registered.`);
+    const roles = patch.roles ? unique(patch.roles.filter((role): role is ModelRole => ROLES.includes(role))) : current.roles;
+    if (roles.includes("primary") && patch.enabled === false) throw new Error("The primary model must remain enabled.");
+    if (current.roles.includes("primary") && patch.enabled === false && !roles.includes("primary")) {
+      throw new Error("Select another primary model before disabling the current primary.");
+    }
     const updated: ManagedModel = {
-      ...models[index], ...patch,
-      roles: patch.roles ? unique(patch.roles.filter((role) => ROLES.includes(role))) : models[index].roles,
+      ...current,
+      ...patch,
+      id: makeId(nextModelId),
+      modelId: nextModelId,
+      name: patch.name?.trim() || current.name,
+      roles,
       updatedAt: new Date().toISOString(),
     };
-    const next = models.map((m, i) => i === index ? updated : m).sort((a, b) => a.priority - b.priority);
-    await this.persist(next); this.syncRuntime(next); return updated;
+    const base = models.map((m, i) => i === index ? updated : m);
+    const normalized = roles.includes("primary") ? base.map((m, i) => i === index ? m : ({ ...m, roles: m.roles.filter((role) => role !== "primary") })) : base;
+    await this.persist(normalized);
+    return updated;
+  }
+
+  async setPrimary(id: string): Promise<ManagedModel> {
+    const models = await this.read();
+    const target = models.find((m) => m.id === id);
+    if (!target) throw new Error("Model not found");
+    if (!target.enabled) throw new Error("Enable the model before making it primary.");
+    const next = models.map((m) => ({ ...m, roles: m.id === id ? unique([...m.roles.filter((r) => r !== "primary"), "primary"]) : m.roles.filter((r) => r !== "primary") }));
+    await this.persist(next);
+    return next.find((m) => m.id === id)!;
   }
 
   async remove(id: string): Promise<void> {
     const models = await this.read();
+    const target = models.find((m) => m.id === id);
+    if (!target) throw new Error("Model not found");
+    if (target.roles.includes("primary")) throw new Error("Select another primary model before deleting the current primary.");
     const next = models.filter((m) => m.id !== id);
-    if (next.length === models.length) throw new Error("Model not found");
-    await this.persist(next); this.syncRuntime(next);
+    await this.persist(next);
   }
 
   async test(modelId: string): Promise<{ ok: boolean; latencyMs: number; error?: string }> {
