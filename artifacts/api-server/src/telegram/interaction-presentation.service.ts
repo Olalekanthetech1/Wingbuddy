@@ -46,6 +46,11 @@ function configuredReaction(): string {
   return configured || "👀";
 }
 
+function configuredThinkingText(): string {
+  const configured = process.env.TELEGRAM_THINKING_TEXT?.trim();
+  return configured || "💭 Thinking";
+}
+
 /**
  * Presentation policy consumes trusted runtime metadata only. It never
  * interprets user vocabulary or performs intent detection.
@@ -53,10 +58,16 @@ function configuredReaction(): string {
 export class InteractionPresentationService {
   private readonly refreshMs: number;
   private readonly defaultReaction: string;
+  private readonly thinkingText: string;
 
-  constructor(options?: { refreshMs?: number; defaultReaction?: string }) {
+  constructor(options?: {
+    refreshMs?: number;
+    defaultReaction?: string;
+    thinkingText?: string;
+  }) {
     this.refreshMs = Math.max(1_000, options?.refreshMs ?? 4_000);
     this.defaultReaction = options?.defaultReaction ?? configuredReaction();
+    this.thinkingText = options?.thinkingText ?? configuredThinkingText();
   }
 
   decide(event: InteractionRuntimeEvent): InteractionPresentationDecision {
@@ -126,6 +137,13 @@ export class InteractionPresentationService {
   private progressText(event: InteractionRuntimeEvent): string | undefined {
     const explicit = event.progressText?.trim();
     if (explicit) return `${explicit}${this.latencySuffix(event)}`;
+
+    // "Thinking" is intentionally tied to a genuine reasoning stage rather
+    // than shown for every incoming message. The runtime must explicitly mark
+    // reasoning as user-facing before this becomes visible.
+    if (event.state === "reasoning") {
+      return `${this.thinkingText}${this.latencySuffix(event)}`;
+    }
 
     const subject = event.operationLabel?.trim() || event.toolName?.trim();
     if (!subject) return undefined;

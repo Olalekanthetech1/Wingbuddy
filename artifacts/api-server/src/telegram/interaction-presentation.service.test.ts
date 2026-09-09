@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import { InteractionPresentationService } from "./interaction-presentation.service";
 
 describe("InteractionPresentationService", () => {
-  const service = new InteractionPresentationService({ defaultReaction: "👀" });
+  const service = new InteractionPresentationService({
+    defaultReaction: "👀",
+    thinkingText: "💭 Thinking",
+  });
 
   it("uses trusted runtime metadata instead of capability-name inference", () => {
     const imageEvent = service.decide({
@@ -35,6 +38,32 @@ describe("InteractionPresentationService", () => {
     expect(service.decide({ state: "failed" })).toEqual({});
   });
 
+  it("shows Thinking only when the runtime enters a user-facing reasoning stage", () => {
+    expect(
+      service.decide({
+        state: "reasoning",
+        userFacingProgress: true,
+      }).visibleProgressText,
+    ).toBe("💭 Thinking");
+
+    expect(
+      service.decide({
+        state: "understanding",
+        userFacingProgress: true,
+      }).visibleProgressText,
+    ).toBeUndefined();
+  });
+
+  it("allows thinking presentation text to be configured", () => {
+    const configured = new InteractionPresentationService({ thinkingText: "🧠 Working" });
+    expect(
+      configured.decide({
+        state: "reasoning",
+        userFacingProgress: true,
+      }).visibleProgressText,
+    ).toBe("🧠 Working");
+  });
+
   it("builds progress from execution stage and trusted operation metadata", () => {
     expect(
       service.decide({
@@ -54,7 +83,7 @@ describe("InteractionPresentationService", () => {
         expectsLongRunning: true,
         elapsedMs: 11_000,
       }).visibleProgressText,
-    ).toBe("Generating: video_generation (11s)" );
+    ).toBe("Generating: video_generation (11s)");
   });
 
   it("allows the runtime to suppress acknowledgement reactions", () => {
