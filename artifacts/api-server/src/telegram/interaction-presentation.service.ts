@@ -25,6 +25,7 @@ export interface InteractionRuntimeEvent {
   state: InteractionProgressState;
   toolName?: string | null;
   operationLabel?: string | null;
+  progressText?: string | null;
   chatAction?: InteractionChatAction | null;
   reaction?: string | null;
   expectsLongRunning?: boolean;
@@ -40,19 +41,10 @@ export interface InteractionPresentationDecision {
 
 export interface InteractionPresentationHints extends Partial<InteractionRuntimeEvent> {}
 
-const STATE_LABELS: Readonly<Record<InteractionProgressState, string>> = {
-  received: "Starting",
-  understanding: "Understanding",
-  retrieving_context: "Loading context",
-  searching: "Searching",
-  executing_tool: "Running tool",
-  reasoning: "Working through it",
-  generating: "Generating",
-  verifying: "Checking the result",
-  finalizing: "Finishing",
-  completed: "Completed",
-  failed: "Unable to complete",
-};
+function configuredReaction(): string {
+  const configured = process.env.TELEGRAM_DEFAULT_REACTION?.trim();
+  return configured || "👀";
+}
 
 /**
  * Presentation policy consumes trusted runtime metadata only. It never
@@ -64,7 +56,7 @@ export class InteractionPresentationService {
 
   constructor(options?: { refreshMs?: number; defaultReaction?: string }) {
     this.refreshMs = Math.max(1_000, options?.refreshMs ?? 4_000);
-    this.defaultReaction = options?.defaultReaction ?? "👀";
+    this.defaultReaction = options?.defaultReaction ?? configuredReaction();
   }
 
   decide(event: InteractionRuntimeEvent): InteractionPresentationDecision {
@@ -82,39 +74,28 @@ export class InteractionPresentationService {
     };
 
     if (event.userFacingProgress) {
-      decision.visibleProgressText = this.progressText(event);
+      const progress = this.progressText(event);
+      if (progress) decision.visibleProgressText = progress;
     }
 
     return decision;
   }
 
   acknowledge(ctx: Context, hints: InteractionPresentationHints = {}): void {
-    const decision = this.decide({
-      state: "received",
-      ...hints,
-    });
-
-    if (decision.reaction) {
-      void ctx.react(decision.reaction).catch(() => undefined);
-    }
+    const decision = this.decide({ state: "received", ...hints });
+    if (decision.reaction) void ctx.react(decision.reaction).catch(() => undefined);
     this.sendChatAction(ctx, decision.chatAction);
   }
 
   startPresence(ctx: Context, hints: InteractionPresentationHints = {}): () => void {
-    const decision = this.decide({
-      state: "generating",
-      ...hints,
-    });
+    const decision = this.decide({ state: "generating", ...hints });
     let stopped = false;
-
     const send = (): void => {
       if (stopped) return;
       this.sendChatAction(ctx, decision.chatAction);
     };
-
     send();
     const timer = setInterval(send, this.refreshMs);
-
     return () => {
       stopped = true;
       clearInterval(timer);
@@ -127,20 +108,13 @@ export class InteractionPresentationService {
     progressMessageId?: number,
   ): Promise<number | undefined> {
     const decision = this.decide(event);
-    if (!decision.visibleProgressText || !event.userFacingProgress) {
-      return progressMessageId;
-    }
+    if (!decision.visibleProgressText) return progressMessageId;
 
     try {
       if (progressMessageId) {
-        await ctx.api.editMessageText(
-          ctx.chat!.id,
-          progressMessageId,
-          decision.visibleProgressText,
-        );
+        await ctx.api.editMessageText(ctx.chat!.id, progressMessageId, decision.visibleProgressText);
         return progressMessageId;
       }
-
       if (!ctx.chat) return undefined;
       const message = await ctx.reply(decision.visibleProgressText);
       return message.message_id;
@@ -149,22 +123,20 @@ export class InteractionPresentationService {
     }
   }
 
-  private progressText(event: InteractionRuntimeEvent): string {
-    const stateLabel = STATE_LABELS[event.state];
+  private progressText(event: InteractionRuntimeEvent): string | undefined {
+    const explicit = event.progressText?.trim();
+    if (explicit) return `${explicit}${this.latencySuffix(event)}`;
+
     const subject = event.operationLabel?.trim() || event.toolName?.trim();
+    if (!subject) return undefined;
 
-    if (subject) {
-      return `${stateLabel}: ${subject}${this.latencySuffix(event)}`;
-    }
-
-    return `${stateLabel}${this.latencySuffix(event)}…`;
+    return `${subject}${this.latencySuffix(event)}`;
   }
 
   private latencySuffix(event: InteractionRuntimeEvent): string {
     const elapsedMs = event.elapsedMs ?? 0;
     if (!event.expectsLongRunning || elapsedMs < 8_000) return "";
-    const seconds = Math.round(elapsedMs / 1_000);
-    return ` (${seconds}s)`;
+    return ` (${Math.round(elapsedMs / 1_000)}s)`;
   }
 
   private defaultChatAction(event: InteractionRuntimeEvent): InteractionChatAction {
@@ -176,7 +148,6 @@ export class InteractionPresentationService {
       case "generating":
       case "verifying":
       case "finalizing":
-        return "typing";
       default:
         return "typing";
     }
