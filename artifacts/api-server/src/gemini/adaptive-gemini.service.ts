@@ -1,7 +1,7 @@
 import { AI_SYSTEM_INSTRUCTION } from "../config/env";
 import { adaptiveAIRouterService } from "../services/adaptive-ai-router.service";
 import type { AIChatRequest, AIChatResponse, AIProviderId } from "../services/ai-provider.types";
-import { GeminiService, type AssistantGuidance, type GenerateReplyOptions, type GeminiMessage, type MultimodalAttachment } from "./gemini.service";
+import { GeminiService, type AssistantGuidance, type GenerateReplyOptions, type GeminiMessage } from "./gemini.service";
 import type { ApiKeyPoolService } from "../services/api-key-pool.service";
 
 export class AdaptiveGeminiService extends GeminiService {
@@ -15,13 +15,13 @@ export class AdaptiveGeminiService extends GeminiService {
     return true;
   }
 
-  private toRequest(history: GeminiMessage[], message: string, guidance?: AssistantGuidance | string, model = ""): AIChatRequest {
+  private toRequest(history: GeminiMessage[], message: string, guidance?: AssistantGuidance | string): AIChatRequest {
     const personality = typeof guidance === "string" ? guidance : guidance?.personalityInstruction;
     const mode = typeof guidance === "string" ? undefined : guidance?.modeInstruction;
     const memory = typeof guidance === "string" ? undefined : guidance?.memoryInstruction;
     const system = [AI_SYSTEM_INSTRUCTION, personality ? `Personality guidance:\n${personality}` : "", mode ? `Assistant mode guidance:\n${mode}` : "", memory || ""].filter(Boolean).join("\n\n");
     return {
-      model,
+      model: "",
       messages: [
         { role: "system", content: system },
         ...history.map((item) => ({ role: item.role === "model" ? "assistant" as const : "user" as const, content: item.content })),
@@ -47,17 +47,36 @@ export class AdaptiveGeminiService extends GeminiService {
 
   override async generateReply(history: GeminiMessage[], message: string, guidance?: AssistantGuidance | string, options?: GenerateReplyOptions): Promise<string> {
     if (!this.canRoute(options)) return super.generateReply(history, message, guidance, options);
-    const request = this.toRequest(history, message, guidance, "");
-    const result = await adaptiveAIRouterService.route(request, this.context(options), () => super.generateReply(history, message, guidance, options).then((text) => ({ provider: "gemini" as AIProviderId, model: request.model || process.env.GEMINI_MODEL || "", text })) as Promise<AIChatResponse>);
+    const request = this.toRequest(history, message, guidance);
+    const result = await adaptiveAIRouterService.route(request, this.context(options), async () => {
+      const text = await super.generateReply(history, message, guidance, options);
+      return { provider: "gemini" as AIProviderId, model: process.env.GEMINI_MODEL?.trim() || "", text } satisfies AIChatResponse;
+    });
     return result.response.text.trim();
   }
 
   override async generateReplyStream(history: GeminiMessage[], message: string, guidance?: AssistantGuidance | string, options?: GenerateReplyOptions, onChunk?: (accumulatedText: string) => Promise<void> | void): Promise<string> {
     if (!this.canRoute(options)) return super.generateReplyStream(history, message, guidance, options, onChunk);
-    const request = this.toRequest(history, message, guidance, "");
+
+    const context = this.context(options);
+    const candidates = await adaptiveAIRouterService.candidates(context);
+    const first = candidates[0];
+
+    // Keep Gemini's native streaming + multi-key pool when Gemini wins the adaptive decision.
+    // For non-Gemini winners, use the unified provider stream with transparent fallback.
+    if (first?.model.provider === "gemini") {
+      try {
+        return await super.generateReplyStream(history, message, guidance, options, onChunk);
+      } catch (error) {
+        adaptiveAIRouterService.recordFailure(first.model.id, error);
+        throw error;
+      }
+    }
+
+    const request = this.toRequest(history, message, guidance);
     let accumulated = "";
     let lastDelivered = "";
-    for await (const chunk of adaptiveAIRouterService.routeStream(request, this.context(options), (emit) => super.generateReplyStream(history, message, guidance, options, (text) => { accumulated = text; return emit?.(text); })) ) {
+    for await (const chunk of adaptiveAIRouterService.routeStream(request, context)) {
       if (chunk.delta) {
         accumulated += chunk.delta;
         if (onChunk && accumulated !== lastDelivered) {
