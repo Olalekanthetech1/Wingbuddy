@@ -1,5 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import type { AIProviderId } from "../services/ai-provider.types";
+import { aiModelCatalogService } from "../services/ai-model-catalog.service";
 import { unifiedModelRegistryService, type UnifiedModelRole } from "../services/unified-model-registry.service";
 
 const router: IRouter = Router();
@@ -25,6 +26,24 @@ router.get("/models", async (_req: Request, res: Response) => {
   }
 });
 
+router.get("/models/catalog/:provider", async (req: Request, res: Response) => {
+  try {
+    const rawProvider = Array.isArray(req.params.provider) ? req.params.provider[0] : req.params.provider;
+    const provider = normalizeProvider(rawProvider);
+    if (rawProvider !== provider) {
+      res.status(400).json({ error: `Unsupported provider: ${String(rawProvider)}` });
+      return;
+    }
+    const force = req.query.refresh === "true";
+    const catalog = await aiModelCatalogService.list(provider, force);
+    const registered = await unifiedModelRegistryService.list();
+    const registeredIds = new Set(registered.filter((model) => model.provider === provider).map((model) => model.modelId));
+    res.json({ provider, timestamp: new Date().toISOString(), source: "provider_api", models: catalog, registeredModelIds: [...registeredIds] });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
 router.post("/models", async (req: Request, res: Response) => {
   try {
     const { modelId, name, roles, priority, capabilities } = req.body ?? {};
@@ -32,15 +51,22 @@ router.post("/models", async (req: Request, res: Response) => {
       res.status(400).json({ error: "modelId is required" });
       return;
     }
+    const provider = normalizeProvider(req.body?.provider);
+    const catalog = await aiModelCatalogService.list(provider);
+    const selected = catalog.find((item) => item.modelId === modelId.trim());
+    if (!selected) {
+      res.status(400).json({ error: `Model ${provider}/${modelId.trim()} is not present in the provider's current model catalog` });
+      return;
+    }
     const model = await unifiedModelRegistryService.add({
-      provider: normalizeProvider(req.body?.provider),
-      modelId,
-      name: typeof name === "string" ? name : undefined,
+      provider,
+      modelId: selected.modelId,
+      name: typeof name === "string" && name.trim() ? name : selected.name,
       roles: normalizeRoles(roles),
       priority: typeof priority === "number" ? priority : undefined,
-      capabilities: Array.isArray(capabilities) ? capabilities.filter((v): v is string => typeof v === "string") : undefined,
+      capabilities: selected.capabilities.length ? selected.capabilities : (Array.isArray(capabilities) ? capabilities.filter((v): v is string => typeof v === "string") : undefined),
     });
-    res.status(201).json({ message: "Model registered and saved to PostgreSQL", model });
+    res.status(201).json({ message: "Model registered and saved to PostgreSQL", model, catalog: selected });
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
   }
@@ -51,9 +77,23 @@ router.patch("/models/:id", async (req: Request, res: Response) => {
     const rawId = req.params.id;
     const id = Array.isArray(rawId) ? rawId[0] : rawId;
     const patch = req.body ?? {};
+    const current = (await unifiedModelRegistryService.list()).find((model) => model.id === id);
+    if (!current) {
+      res.status(404).json({ error: "Model not found" });
+      return;
+    }
+    const provider = patch.provider ? normalizeProvider(patch.provider) : current.provider;
+    const requestedModelId = typeof patch.modelId === "string" ? patch.modelId.trim() : current.modelId;
+    if (requestedModelId !== current.modelId || provider !== current.provider) {
+      const catalog = await aiModelCatalogService.list(provider);
+      if (!catalog.some((model) => model.modelId === requestedModelId)) {
+        res.status(400).json({ error: `Model ${provider}/${requestedModelId} is not present in the provider's current model catalog` });
+        return;
+      }
+    }
     const model = await unifiedModelRegistryService.update(id, {
-      ...(patch.provider ? { provider: normalizeProvider(patch.provider) } : {}),
-      ...(typeof patch.modelId === "string" ? { modelId: patch.modelId } : {}),
+      ...(patch.provider ? { provider } : {}),
+      ...(typeof patch.modelId === "string" ? { modelId: requestedModelId } : {}),
       ...(typeof patch.name === "string" ? { name: patch.name } : {}),
       ...(typeof patch.enabled === "boolean" ? { enabled: patch.enabled } : {}),
       ...(typeof patch.priority === "number" ? { priority: patch.priority } : {}),
@@ -82,6 +122,7 @@ router.delete("/models/:id", async (req: Request, res: Response) => {
     const rawId = req.params.id;
     const id = Array.isArray(rawId) ? rawId[0] : rawId;
     await unifiedModelRegistryService.remove(id);
+    aiModelCatalogService.invalidate();
     res.json({ message: "Model removed from unified PostgreSQL registry" });
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
