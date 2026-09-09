@@ -28,6 +28,10 @@ export interface ExecutionPlan {
   formattingProfile: string;
 }
 
+/**
+ * Converts a semantic interaction decision into an executable presentation plan.
+ * Natural-language interpretation belongs exclusively to the semantic resolver.
+ */
 export class ExecutionPlannerService {
   constructor(private readonly modeService: ModeService) {}
 
@@ -36,33 +40,19 @@ export class ExecutionPlannerService {
     persistentMode: ModeKey,
     history: Array<{ role: string; content: string }> = [],
   ): ExecutionPlan {
-    const trimmed = text.trim();
-    const isGreeting = /^(?:hi|hello|hey|good\s+(?:morning|afternoon|evening)|how\s+are\s+you|greetings)\b/i.test(trimmed);
+    const semantic = semanticInteractionCache.get(text, persistentMode, history) || this.failSafeDecision(persistentMode);
 
-    // Check for temporary turn mode override
-    let turnModeOverride: ModeKey | undefined;
-    const tempOverrideMatch = trimmed.match(
-      /^(?:for this (?:question|turn|prompt|request)|just for now|temporarily)[,\s]+(?:act as|be|switch to|use)\s+(?:a\s+|an\s+)?([a-z_]+(?:\s+[a-z_]+)?)/i,
-    );
-    if (tempOverrideMatch) {
-      const target = tempOverrideMatch[1].trim().split(/\s+/)[0];
-      const resolved = this.modeService.resolveMode(target) || this.modeService.resolveMode(tempOverrideMatch[1].trim());
-      if (resolved) {
-        turnModeOverride = resolved;
-      }
-    }
+    const semanticOverride = semantic.isModeSwitch && semantic.requestedMode
+      ? (semantic.requestedMode as ModeKey)
+      : undefined;
 
-    const cachedSemantic = semanticInteractionCache.get(text, persistentMode, history);
-    const semantic = cachedSemantic || this.fallbackDecision(persistentMode, isGreeting);
     let effectiveMode: ModeKey;
-    if (turnModeOverride) {
-      effectiveMode = turnModeOverride;
+    if (semanticOverride && this.modeService.validateMode(semanticOverride)) {
+      effectiveMode = semanticOverride;
     } else if (persistentMode === "auto") {
-      effectiveMode =
-        (cachedSemantic?.effectiveMode && cachedSemantic.effectiveMode !== "auto" ? cachedSemantic.effectiveMode : null) ||
-        this.inferAutoTurnMode(trimmed) ||
-        this.modeService.resolveMode("general") ||
-        "general";
+      effectiveMode = semantic.effectiveMode && semantic.effectiveMode !== "auto"
+        ? semantic.effectiveMode
+        : "general";
     } else {
       effectiveMode = persistentMode;
     }
@@ -71,16 +61,13 @@ export class ExecutionPlannerService {
     const capabilities = new Set<Capability>(profile.capabilitiesList);
 
     for (const capability of semantic.requiredCapabilities) {
-      if ([
-        "tutoring", "active_recall", "socratic_questioning", "code_generation", "code_analysis",
-        "debugging", "web_research", "source_verification", "document_analysis",
-        "mathematical_reasoning", "image_analysis", "file_generation", "memory", "calculator",
-      ].includes(capability as Capability)) {
-        capabilities.add(capability as Capability);
+      const candidate = capability as Capability;
+      if (profile.capabilitiesList.includes(candidate) || semantic.requiredCapabilities.includes(capability)) {
+        capabilities.add(candidate);
       }
     }
 
-    const enableSearch = effectiveMode === "deep_research" ? !isGreeting : (semantic.enableSearch && profile.capabilities.toolPermissions.searchAllowed);
+    const enableSearch = semantic.enableSearch && profile.capabilities.toolPermissions.searchAllowed;
     if (enableSearch) {
       capabilities.add("web_research");
       capabilities.add("source_verification");
@@ -91,6 +78,7 @@ export class ExecutionPlannerService {
 
     const detectedIntent: ExecutionPlan["detectedIntent"] =
       semantic.intent === "greeting" ? "general" : semantic.intent as ExecutionPlan["detectedIntent"];
+
     const providerPreference: ExecutionPlan["providerPreference"] =
       semantic.thinkingLevel || ["deep_research", "coding", "image_generation", "video_generation"].includes(semantic.intent)
         ? "gemini_pro"
@@ -107,7 +95,7 @@ export class ExecutionPlannerService {
     const plan: ExecutionPlan = {
       persistentMode,
       effectiveMode,
-      turnModeOverride,
+      turnModeOverride: semanticOverride,
       detectedIntent,
       requiredCapabilities: Array.from(capabilities),
       enableSearch,
@@ -133,36 +121,17 @@ export class ExecutionPlannerService {
     return plan;
   }
 
-  private inferAutoTurnMode(text: string): ModeKey | null {
-    if (/\b(?:debug|typescript|python|javascript|code|coding|function|class|compiler|bug|stack\s*trace)\b/i.test(text)) {
-      return "coder";
-    }
-    if (/\b(?:solve\s+equation|equation|\d+x|\d+\s*[+\-*/=]\s*\d+|integral|derivative|calculus|algebra|theorem)\b/i.test(text)) {
-      return "math";
-    }
-    if (/\b(?:latest|news|today|current\s+price|score|weather|announcement)\b/i.test(text)) {
-      return "deep_research";
-    }
-    if (/\b(?:explain\s+.*(?:exam|class|lesson)|exam|quiz|tutor|tutoring|teach\s+me)\b/i.test(text)) {
-      return "study";
-    }
-    if (/\b(?:poem|creative|story|fiction|narrative|rhyme)\b/i.test(text)) {
-      return "creative";
-    }
-    return null;
-  }
-
-  private fallbackDecision(mode: ModeKey, isGreeting = false): SemanticInteractionDecision {
+  private failSafeDecision(mode: ModeKey): SemanticInteractionDecision {
     const resolvedMode = mode === "auto" ? "general" : mode;
     const profile = MODES[resolvedMode] || MODES.general;
     return {
       intent: "general",
       effectiveMode: resolvedMode,
-      requiredCapabilities: profile.capabilitiesList,
-      enableSearch: resolvedMode === "deep_research" ? !isGreeting : profile.researchPolicy === "always",
-      thinkingLevel: profile.capabilities.thinkingLevelDefault,
+      requiredCapabilities: [],
+      enableSearch: false,
+      thinkingLevel: undefined,
       isModeSwitch: false,
-      isGreeting,
+      isGreeting: false,
       complexity: "simple",
       confidence: 0,
     };

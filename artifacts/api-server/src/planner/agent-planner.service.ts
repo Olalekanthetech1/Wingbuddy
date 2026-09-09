@@ -72,11 +72,7 @@ export class AgentPlannerService {
       if (autonomyDecision.route === "direct" || autonomyDecision.route === "clarify") {
         return {
           success: true,
-          diagnostics: [{
-            severity: "warning",
-            code: autonomyDecision.route === "direct" ? "DIRECT_CONVERSATION_ROUTE" : "CLARIFICATION_CONVERSATION_ROUTE",
-            message: autonomyDecision.rationale,
-          }],
+          diagnostics: [{ severity: "warning", code: autonomyDecision.route === "direct" ? "DIRECT_CONVERSATION_ROUTE" : "CLARIFICATION_CONVERSATION_ROUTE", message: autonomyDecision.rationale }],
           isDirectResponse: true,
         };
       }
@@ -96,15 +92,8 @@ export class AgentPlannerService {
     }
 
     candidate = this.normalizeCandidateForExecution(candidate, registry, request);
-
     const toolTypes = Array.from(new Set((candidate.nodes || []).map((node) => node.actionSpec?.toolName).filter(Boolean) as string[]));
-    const effectivePolicy = AdaptiveEngineService.computeAdaptiveExecutionPolicy({
-      goal: candidate.goal || request.goal,
-      subgoalCount: candidate.nodes?.length || 0,
-      mode: request.context?.mode,
-      toolTypes,
-    });
-
+    const effectivePolicy = AdaptiveEngineService.computeAdaptiveExecutionPolicy({ goal: candidate.goal || request.goal, subgoalCount: candidate.nodes?.length || 0, mode: request.context?.mode, toolTypes });
     const compilerContext: CompilerContext = {
       telegramUserId: request.telegramUserId,
       requestId: request.requestId,
@@ -120,37 +109,22 @@ export class AgentPlannerService {
     const compilationResult = PlannerCompiler.compile(candidate, compilerContext);
     if (!compilationResult.success || !compilationResult.graph) {
       logger.warn({ requestId: request.requestId, graphId, diagnostics: compilationResult.diagnostics }, "PLAN_REJECTED");
-      return {
-        success: false,
-        errorCode: compilationResult.errorCode || "PLAN_VALIDATION_FAILED",
-        errorMessage: compilationResult.diagnostics[0]?.message || "Plan compilation or validation failed.",
-        diagnostics: compilationResult.diagnostics,
-        isDirectResponse,
-      };
+      return { success: false, errorCode: compilationResult.errorCode || "PLAN_VALIDATION_FAILED", errorMessage: compilationResult.diagnostics[0]?.message || "Plan compilation or validation failed.", diagnostics: compilationResult.diagnostics, isDirectResponse };
     }
 
     try {
       await this.persistenceService.saveGraph(compilationResult.graph);
     } catch (err: any) {
       logger.error({ requestId: request.requestId, graphId, error: err?.message }, "PLAN_PERSISTENCE_FAILED");
-      return {
-        success: false,
-        errorCode: "PLAN_COMPILATION_FAILED",
-        errorMessage: "The validated plan could not be durably persisted, so no autonomous action was executed.",
-        diagnostics: [{ severity: "error", code: "PERSISTENCE_ERROR", message: err?.message || "Persistence failed." }],
-        isDirectResponse,
-      };
+      return { success: false, errorCode: "PLAN_COMPILATION_FAILED", errorMessage: "The validated plan could not be durably persisted, so no autonomous action was executed.", diagnostics: [{ severity: "error", code: "PERSISTENCE_ERROR", message: err?.message || "Persistence failed." }], isDirectResponse };
     }
 
     logger.info({ requestId: request.requestId, graphId, revisionId, nodes: Object.keys(compilationResult.graph.nodes).length, toolTypes }, "PLAN_PERSISTED");
-    isDirectResponse =
-      candidate.nodes?.length === 1 && (!candidate.edges || candidate.edges.length === 0);
+    isDirectResponse = candidate.nodes?.length === 1 && (!candidate.edges || candidate.edges.length === 0);
     return { success: true, graph: compilationResult.graph, diagnostics: compilationResult.diagnostics, isDirectResponse };
   }
 
-  async planAndCompile(request: PlannerRequest, customCandidate?: CandidatePlan): Promise<PlannerResult> {
-    return this.plan(request, customCandidate);
-  }
+  async planAndCompile(request: PlannerRequest, customCandidate?: CandidatePlan): Promise<PlannerResult> { return this.plan(request, customCandidate); }
 
   async replan(replanRequest: ReplannerRequest, customCandidate?: CandidatePlan): Promise<PlannerResult> {
     const nextRevision = replanRequest.previousRevision + 1;
@@ -160,14 +134,7 @@ export class AgentPlannerService {
     const registry = replanRequest.toolRegistry || this.defaultToolRegistry || getProductionToolRegistry();
     const previousGraph = await this.persistenceService.getGraph(graphId, replanRequest.previousRevision);
 
-    if (!previousGraph) {
-      return {
-        success: false,
-        errorCode: "PLAN_GENERATION_FAILED",
-        errorMessage: `Previous plan revision "${parentRevisionId}" not found for replanning.`,
-        diagnostics: [{ severity: "error", code: "PARENT_REVISION_NOT_FOUND", message: parentRevisionId }],
-      };
-    }
+    if (!previousGraph) return { success: false, errorCode: "PLAN_GENERATION_FAILED", errorMessage: `Previous plan revision "${parentRevisionId}" not found for replanning.`, diagnostics: [{ severity: "error", code: "PARENT_REVISION_NOT_FOUND", message: parentRevisionId }] };
 
     const request: PlannerRequest = {
       requestId: replanRequest.requestId,
@@ -183,30 +150,16 @@ export class AgentPlannerService {
     let candidate = customCandidate;
     if (!candidate) {
       try {
-        candidate = await this.generateDynamicCandidate(request, registry, [
-          `Recover failed node ${replanRequest.failedNodeId || "unknown"}.`,
-          replanRequest.replanReason,
-        ], previousGraph);
+        candidate = await this.generateDynamicCandidate(request, registry, [`Recover failed node ${replanRequest.failedNodeId || "unknown"}.`, replanRequest.replanReason], previousGraph);
       } catch (error) {
-        return {
-          success: false,
-          errorCode: "PLAN_GENERATION_FAILED",
-          errorMessage: "A safe recovery plan could not be constructed; the failed execution was not silently retried.",
-          diagnostics: [{ severity: "error", code: "DYNAMIC_REPLAN_FAILED", message: error instanceof Error ? error.message : String(error) }],
-        };
+        return { success: false, errorCode: "PLAN_GENERATION_FAILED", errorMessage: "A safe recovery plan could not be constructed; the failed execution was not silently retried.", diagnostics: [{ severity: "error", code: "DYNAMIC_REPLAN_FAILED", message: error instanceof Error ? error.message : String(error) }] };
       }
     }
 
     candidate.graphId = graphId;
     candidate = this.normalizeCandidateForExecution(candidate, registry, request);
     const toolTypes = Array.from(new Set(candidate.nodes.map((node) => node.actionSpec?.toolName).filter(Boolean) as string[]));
-    const effectivePolicy = AdaptiveEngineService.computeAdaptiveExecutionPolicy({
-      goal: candidate.goal,
-      subgoalCount: candidate.nodes.length,
-      mode: replanRequest.context?.mode,
-      toolTypes,
-    });
-
+    const effectivePolicy = AdaptiveEngineService.computeAdaptiveExecutionPolicy({ goal: candidate.goal, subgoalCount: candidate.nodes.length, mode: replanRequest.context?.mode, toolTypes });
     const compilationResult = PlannerCompiler.compile(candidate, {
       telegramUserId: replanRequest.telegramUserId,
       requestId: replanRequest.requestId,
@@ -220,43 +173,20 @@ export class AgentPlannerService {
       effectivePolicy,
     });
 
-    if (!compilationResult.success || !compilationResult.graph) {
-      return {
-        success: false,
-        errorCode: compilationResult.errorCode || "PLAN_VALIDATION_FAILED",
-        errorMessage: compilationResult.diagnostics[0]?.message || "Recovery plan validation failed.",
-        diagnostics: compilationResult.diagnostics,
-      };
-    }
-
+    if (!compilationResult.success || !compilationResult.graph) return { success: false, errorCode: compilationResult.errorCode || "PLAN_VALIDATION_FAILED", errorMessage: compilationResult.diagnostics[0]?.message || "Recovery plan validation failed.", diagnostics: compilationResult.diagnostics };
     await this.persistenceService.saveGraph(compilationResult.graph);
     logger.info({ requestId: replanRequest.requestId, graphId, revisionId, parentRevisionId }, "PLAN_REPLAN_PERSISTED");
     return { success: true, graph: compilationResult.graph, diagnostics: compilationResult.diagnostics };
   }
 
-  private async generateDynamicCandidate(
-    request: PlannerRequest,
-    registry: ToolRegistry,
-    reasons: string[],
-    previousGraph?: ExecutionGraph,
-  ): Promise<CandidatePlan> {
-    const tools = registry.list().map((tool) => ({
-      name: tool.name,
-      description: tool.description,
-      policy: registry.getPolicy(tool.name),
-    }));
-
+  private async generateDynamicCandidate(request: PlannerRequest, registry: ToolRegistry, reasons: string[], previousGraph?: ExecutionGraph): Promise<CandidatePlan> {
+    const tools = registry.list().map((tool) => ({ name: tool.name, description: tool.description, policy: registry.getPolicy(tool.name) }));
     const context = {
       mode: request.context?.mode || "general",
       capabilities: request.context?.capabilities || [],
       activeTask: request.context?.activeTask || null,
       recentHistory: (request.context?.conversationHistory || []).slice(-10),
-      previousGraph: previousGraph ? {
-        graphId: previousGraph.graphId,
-        revision: previousGraph.planRevision,
-        goal: previousGraph.goal,
-        nodes: Object.values(previousGraph.nodes).map((node) => ({ id: node.id, title: node.title, type: node.type, toolName: node.actionSpec?.toolName })),
-      } : null,
+      previousGraph: previousGraph ? { graphId: previousGraph.graphId, revision: previousGraph.planRevision, goal: previousGraph.goal, nodes: Object.values(previousGraph.nodes).map((node) => ({ id: node.id, title: node.title, type: node.type, toolName: node.actionSpec?.toolName })) } : null,
     };
 
     const prompt = [
@@ -289,12 +219,12 @@ export class AgentPlannerService {
       `CURRENT USER GOAL:\n${request.goal}`,
     ].join("\n");
 
-    let raw = "";
+    let raw: string;
     try {
       raw = await this.getGemini().generateReply([], prompt);
     } catch (error) {
-      logger.warn({ error: error instanceof Error ? error.message : String(error) }, "Dynamic planner model call failed; falling back to deterministic goal decomposition");
-      return this.fallbackGoalPlan(request);
+      logger.warn({ error: error instanceof Error ? error.message : String(error) }, "Dynamic planner model call failed; refusing to guess an execution plan");
+      throw new Error("Dynamic planner model call failed; execution plan generation is unavailable.");
     }
 
     try {
@@ -304,65 +234,11 @@ export class AgentPlannerService {
       if (!Array.isArray(parsed.nodes) || parsed.nodes.length === 0) throw new Error("Dynamic planner returned an empty plan.");
       return parsed;
     } catch (parseError) {
-      logger.warn({ error: parseError instanceof Error ? parseError.message : String(parseError) }, "Candidate parsing failed; falling back to deterministic goal decomposition");
-      return this.fallbackGoalPlan(request);
+      logger.warn({ error: parseError instanceof Error ? parseError.message : String(parseError) }, "Candidate parsing failed; refusing to execute an ambiguous plan");
+      throw new Error("Dynamic planner returned an invalid execution plan.");
     }
   }
 
-  private fallbackGoalPlan(request: PlannerRequest): CandidatePlan {
-    const goal = request.goal;
-    const parts = goal.split(/(?=Step\s+\d+[:.-])/i).map((s) => s.trim()).filter(Boolean);
-    if (parts.length > 1) {
-      const nodes = parts.map((part, idx) => {
-        const match = part.match(/^Step\s+(\d+)[:.-]\s*(.*)$/is);
-        const title = match ? match[2].trim() : part;
-        const num = match ? match[1] : `${idx + 1}`;
-        const isLast = idx === parts.length - 1;
-        const isAggregate = isLast || /aggregate|synthesize|summarize/i.test(title);
-        const id = isAggregate ? `step_${num}_synthesize` : `step_${num}_reasoning`;
-        return {
-          id,
-          title: title.slice(0, 100),
-          type: "llm_reasoning" as const,
-          reasoningSpec: { prompt: title, targetFormat: "markdown" as const },
-          dependsOn: [] as string[],
-        };
-      });
-      for (let i = 1; i < nodes.length; i++) {
-        nodes[i].dependsOn = [nodes[i - 1].id];
-      }
-      const edges = nodes.slice(1).map((node, idx) => ({
-        fromNodeId: nodes[idx].id,
-        toNodeId: node.id,
-        dependencyType: "hard" as const,
-      }));
-      return {
-        goal,
-        strategy: "Sequential multi-step goal plan",
-        nodes,
-        edges,
-      };
-    }
-
-    return {
-      goal,
-      strategy: "Autonomous execution plan",
-      nodes: [{
-        id: "step_1",
-        title: goal.slice(0, 80),
-        type: "llm_reasoning" as const,
-        reasoningSpec: { prompt: goal, targetFormat: "markdown" as const },
-        dependsOn: [],
-      }],
-      edges: [],
-    };
-  }
-
-  /**
-   * Structural safety pass over model output.
-   * It never invents a tool. It only repairs shape violations that are
-   * mechanically unambiguous from the candidate graph itself.
-   */
   private normalizeCandidateForExecution(candidate: CandidatePlan, registry: ToolRegistry, request: PlannerRequest): CandidatePlan {
     const nodes = Array.isArray(candidate.nodes) ? candidate.nodes.map((node) => ({ ...node })) : [];
     const normalizedNodes: CandidateNode[] = [];
@@ -375,45 +251,16 @@ export class AgentPlannerService {
           normalizedNodes.push(node);
           continue;
         }
-
         const toolNodeId = `${node.id || "node"}_tool`;
         const reasoningNodeId = node.id || `${toolNodeId}_synthesis`;
         const malformedOrDerivedBindings = Object.keys(node.inputBindings || {});
-
-        normalizedNodes.push({
-          ...node,
-          id: toolNodeId,
-          type: "tool_call",
-          title: `${node.title} — execute tool`,
-          actionSpec: node.actionSpec,
-          reasoningSpec: undefined,
-          inputBindings: undefined,
-        });
-
-        const shouldKeepReasoning = Boolean(node.reasoningSpec?.prompt?.trim());
-        if (shouldKeepReasoning) {
+        normalizedNodes.push({ ...node, id: toolNodeId, type: "tool_call", title: `${node.title} — execute tool`, actionSpec: node.actionSpec, reasoningSpec: undefined, inputBindings: undefined });
+        if (node.reasoningSpec?.prompt?.trim()) {
           const reasoningBindings: Record<string, InputBinding> = {};
-          for (const parameterName of malformedOrDerivedBindings) {
-            reasoningBindings[parameterName] = {
-              source: {
-                type: "node_output",
-                nodeId: toolNodeId,
-                path: "output",
-              },
-            };
-          }
-          normalizedNodes.push({
-            ...node,
-            id: reasoningNodeId,
-            type: "llm_reasoning",
-            actionSpec: undefined,
-            inputBindings: reasoningBindings,
-            dependsOn: [toolNodeId],
-            reasoningSpec: node.reasoningSpec,
-          });
+          for (const parameterName of malformedOrDerivedBindings) reasoningBindings[parameterName] = { source: { type: "node_output", nodeId: toolNodeId, path: "output" } };
+          normalizedNodes.push({ ...node, id: reasoningNodeId, type: "llm_reasoning", actionSpec: undefined, inputBindings: reasoningBindings, dependsOn: [toolNodeId], reasoningSpec: node.reasoningSpec });
           extraEdges.push({ fromNodeId: toolNodeId, toNodeId: reasoningNodeId, dependencyType: "hard" });
         }
-
         logger.warn({ requestId: request.requestId, originalNodeId: node.id, toolNodeId, repairedHybridNode: true }, "PLANNER_CANDIDATE_SHAPE_REPAIRED");
         continue;
       }
@@ -421,57 +268,32 @@ export class AgentPlannerService {
       if (node.inputBindings) {
         const validBindings: Record<string, InputBinding> = {};
         for (const [key, binding] of Object.entries(node.inputBindings)) {
-          if (!binding?.source || typeof binding.source !== "object" || typeof (binding.source as any).type !== "string") {
-            continue;
-          }
+          if (!binding?.source || typeof binding.source !== "object" || typeof (binding.source as any).type !== "string") continue;
           const source = binding.source as any;
-          if (source.type === "node_output" && typeof source.nodeId === "string" && source.nodeId.trim()) {
-            validBindings[key] = {
-              source: {
-                type: "node_output",
-                nodeId: source.nodeId,
-                path: typeof source.path === "string" && source.path.trim() ? source.path : "output",
-              },
-            };
-          } else if (source.type === "literal" || source.type === "context") {
-            validBindings[key] = binding;
-          }
+          if (source.type === "node_output" && typeof source.nodeId === "string" && source.nodeId.trim()) validBindings[key] = { source: { type: "node_output", nodeId: source.nodeId, path: typeof source.path === "string" && source.path.trim() ? source.path : "output" } };
+          else if (source.type === "literal" || source.type === "context") validBindings[key] = binding;
         }
         node.inputBindings = validBindings;
       }
-
       normalizedNodes.push(node);
     }
 
-    const result: CandidatePlan = {
-      ...candidate,
-      goal: candidate.goal || request.goal,
-      nodes: normalizedNodes,
-      edges: extraEdges,
-    };
-    return result;
+    return { ...candidate, goal: candidate.goal || request.goal, nodes: normalizedNodes, edges: extraEdges };
   }
 
   private parseCandidate(raw: string): CandidatePlan {
     const jsonText = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
     let candidateText = jsonText;
-    try {
-      JSON.parse(candidateText);
-    } catch {
+    try { JSON.parse(candidateText); }
+    catch {
       const first = candidateText.indexOf("{");
       const last = candidateText.lastIndexOf("}");
       if (first < 0 || last <= first) throw new Error("Dynamic planner did not return a JSON object.");
       candidateText = candidateText.slice(first, last + 1);
     }
-
     const parsed = JSON.parse(candidateText) as CandidatePlan;
     if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.nodes)) throw new Error("Dynamic planner response does not match CandidatePlan.");
-
-    parsed.nodes = parsed.nodes.map((node) => ({
-      ...node,
-      type: node.type,
-      title: String(node.title || "Untitled step").trim(),
-    })) as CandidateNode[];
+    parsed.nodes = parsed.nodes.map((node) => ({ ...node, type: node.type, title: String(node.title || "Untitled step").trim() })) as CandidateNode[];
     parsed.edges = Array.isArray(parsed.edges) ? parsed.edges : [];
     return parsed;
   }
