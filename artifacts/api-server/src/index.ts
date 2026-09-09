@@ -53,12 +53,22 @@ const server = app.listen(port, "0.0.0.0", async () => {
   }
 
   const execConfig = getExecutionConfig();
-  logger.info({ enabled: execConfig.enabled, maxConcurrency: execConfig.maxConcurrency, maxPerUser: execConfig.maxPerUser, maxPerGraph: execConfig.maxPerGraph, leaseDurationMs: execConfig.leaseDurationMs, staleLeaseThresholdMs: execConfig.staleLeaseThresholdMs, defaultTimeoutMs: execConfig.defaultTimeoutMs, maxRetries: execConfig.maxRetries }, "AUTONOMOUS_EXECUTION_ENGINE_STATUS");
+  logger.info({
+    enabled: execConfig.enabled,
+    maxConcurrency: execConfig.maxConcurrency,
+    maxPerUser: execConfig.maxPerUser,
+    maxPerGraph: execConfig.maxPerGraph,
+    maxPerTool: execConfig.maxPerTool,
+    leaseDurationMs: execConfig.leaseDurationMs,
+    staleLeaseThresholdMs: execConfig.staleLeaseThresholdMs,
+    defaultTimeoutMs: execConfig.defaultTimeoutMs,
+    maxRetries: execConfig.maxRetries,
+  }, "AUTONOMOUS_EXECUTION_ENGINE_STATUS");
 
   if (startupStateReady) {
     void telegramRuntime.start().catch((error: unknown) => logger.error({ err: error }, "Telegram bot failed to start"));
   } else {
-    logger.error("Telegram bot startup skipped because authoritative runtime hydration did not complete");
+    logger.error("Telegram bot startup skipped because authoritative PostgreSQL state did not complete hydration");
   }
 });
 
