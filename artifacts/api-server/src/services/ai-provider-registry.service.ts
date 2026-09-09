@@ -13,7 +13,7 @@ const BUILT_IN_PROVIDERS: Record<AIProviderId, Omit<AIProviderRecord, "createdAt
     adapter: "gemini",
     baseUrl: "https://generativelanguage.googleapis.com",
     apiKeyEnv: "GEMINI_API_KEY",
-    capabilities: ["chat", "streaming", "tool_calling", "vision", "reasoning", "long_context"],
+    capabilities: ["chat", "streaming"],
   },
   groq: {
     id: "groq",
@@ -21,7 +21,7 @@ const BUILT_IN_PROVIDERS: Record<AIProviderId, Omit<AIProviderRecord, "createdAt
     adapter: "groq",
     baseUrl: "https://api.groq.com/openai/v1",
     apiKeyEnv: "GROQ_API_KEY",
-    capabilities: ["chat", "streaming", "tool_calling", "reasoning", "long_context"],
+    capabilities: ["chat", "streaming"],
   },
   mistral: {
     id: "mistral",
@@ -29,7 +29,7 @@ const BUILT_IN_PROVIDERS: Record<AIProviderId, Omit<AIProviderRecord, "createdAt
     adapter: "mistral",
     baseUrl: "https://api.mistral.ai",
     apiKeyEnv: "MISTRAL_API_KEY",
-    capabilities: ["chat", "streaming", "tool_calling", "vision", "reasoning", "long_context"],
+    capabilities: ["chat", "streaming"],
   },
 };
 
