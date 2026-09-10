@@ -77,10 +77,17 @@ export class ContextManagerService {
       ? `\n\n[RELEVANT LONG-TERM MEMORY]\n${memories.map((m) => `- ${m.content}`).join("\n")}\n\nUse only when relevant. Do not mention the memory system to the user.`
       : "";
 
-    // Task context is explicit: the Telegram request path decides when a tracked task
-    // is actually relevant and passes it here. Do not implicitly attach the user's first
-    // active task to every unrelated conversation turn.
-    const activeTaskData = options.activeTask || null;
+    // Active task state is background state, not a default conversation context.
+    // Only attach it when semantic resolution says the current turn is managing or
+    // continuing tracked work. This prevents an unrelated message from inheriting
+    // whichever active task happens to be first in the user's task list.
+    const cachedInteraction = semanticInteractionCache.getLatestForText(options.userMessage);
+    const taskIntent = cachedInteraction?.taskIntent;
+    const activeTaskIsRelevant = Boolean(
+      options.activeTask &&
+      (taskIntent === "CONTINUE_TASK" || taskIntent === "PAUSE_TASK" || taskIntent === "COMPLETE_TASK" || taskIntent === "CANCEL_TASK" || taskIntent === "VIEW_TASKS"),
+    );
+    const activeTaskData = activeTaskIsRelevant ? options.activeTask || null : null;
     const formattedTaskContext = activeTaskData
       ? taskService.formatTaskForPrompt(activeTaskData.task, activeTaskData.steps)
       : "";
@@ -100,7 +107,6 @@ export class ContextManagerService {
     let semanticState = options.semanticState || null;
 
     if (!semanticState && rawHistory.length > 0 && options.userMessage.trim()) {
-      const cachedInteraction = semanticInteractionCache.getLatestForText(options.userMessage);
       const isSimpleCachedTurn = Boolean(
         cachedInteraction &&
         cachedInteraction.complexity === "simple" &&
@@ -180,6 +186,7 @@ export class ContextManagerService {
       isTruncated,
       historyLength: rawHistory.length,
       relevantMemoryCount: memories.length,
+      activeTaskContextAttached: Boolean(activeTaskData),
       appliedPreferencesCount: resolution.appliedPreferences.length,
       suppressedCount: resolution.suppressedInstructions.length,
       semanticFollowUp: semanticState?.isFollowUp ?? false,
