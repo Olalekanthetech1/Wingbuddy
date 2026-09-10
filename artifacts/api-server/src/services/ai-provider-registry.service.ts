@@ -11,6 +11,7 @@ const BUILT_IN_PROVIDERS: Record<AIProviderId, Omit<AIProviderRecord, "createdAt
   gemini: { id: "gemini", name: "Google Gemini", adapter: "gemini", baseUrl: "https://generativelanguage.googleapis.com", apiKeyEnv: "GEMINI_API_KEY", capabilities: ["chat", "streaming", "vision", "reasoning", "long_context", "web_search"] },
   groq: { id: "groq", name: "Groq", adapter: "groq", baseUrl: "https://api.groq.com/openai/v1", apiKeyEnv: "GROQ_API_KEY", capabilities: ["chat", "streaming"] },
   mistral: { id: "mistral", name: "Mistral AI", adapter: "mistral", baseUrl: "https://api.mistral.ai", apiKeyEnv: "MISTRAL_API_KEY", capabilities: ["chat", "streaming"] },
+  huggingface: { id: "huggingface", name: "Hugging Face", adapter: "huggingface", baseUrl: "https://huggingface.co", apiKeyEnv: "HF_TOKEN", capabilities: ["chat", "streaming", "image_generation", "video_generation"] },
 };
 
 function normalize(value: unknown): AIProviderRecord[] {
@@ -34,7 +35,7 @@ function normalize(value: unknown): AIProviderRecord[] {
       capabilities,
       baseUrl: typeof item.baseUrl === "string" && item.baseUrl.trim() ? item.baseUrl.trim().replace(/\/+$/, "") : defaults.baseUrl,
       name: typeof item.name === "string" && item.name.trim() ? item.name.trim() : defaults.name,
-      enabled: item.enabled === true,
+      enabled: item.id === "huggingface" ? item.enabled !== false : item.enabled === true,
       createdAt: item.createdAt || new Date().toISOString(),
       updatedAt: item.updatedAt || new Date().toISOString(),
     };
@@ -45,7 +46,7 @@ function bootstrapProviders(): AIProviderRecord[] {
   const now = new Date().toISOString();
   return Object.values(BUILT_IN_PROVIDERS).map((provider) => ({
     ...provider,
-    enabled: Boolean(process.env[provider.apiKeyEnv]?.trim()),
+    enabled: provider.id === "huggingface" ? true : Boolean(process.env[provider.apiKeyEnv]?.trim()),
     createdAt: now,
     updatedAt: now,
   }));
@@ -65,7 +66,7 @@ export class AIProviderRegistryService {
         const byId = new Map(stored.map((provider) => [provider.id, provider]));
         const merged = Object.values(BUILT_IN_PROVIDERS).map((defaults) => byId.get(defaults.id) || {
           ...defaults,
-          enabled: false,
+          enabled: defaults.id === "huggingface" ? true : false,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         });
@@ -106,7 +107,7 @@ export class AIProviderRegistryService {
       return {
         ...provider,
         capabilities: [...provider.capabilities],
-        configured: keyCount > 0 || Boolean(process.env[provider.apiKeyEnv]?.trim()),
+        configured: provider.id === "huggingface" ? keyCount > 0 || Boolean(process.env.HF_TOKEN?.trim()) : keyCount > 0 || Boolean(process.env[provider.apiKeyEnv]?.trim()),
         adapterAvailable: Boolean(aiProviderAdapters[provider.adapter]),
         keyCount,
       };
