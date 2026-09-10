@@ -14,6 +14,7 @@ export interface AIRoutingCandidate { model: UnifiedModelRecord; score: number; 
 
 const POLICY_KEY = "AI_ROUTING_POLICY";
 const DEFAULT_POLICY: AIRoutingPolicy = { strategy: "adaptive", capabilityWeight: 50, healthWeight: 25, latencyWeight: 15, priorityWeight: 10, maxAttempts: 3, updatedAt: new Date().toISOString() };
+const PRIMARY_ROLE_BONUS = 15;
 
 interface ModelHealth { successes: number; failures: number; consecutiveFailures: number; ewmaLatencyMs: number; lastSuccessAt?: string; lastFailureAt?: string; lastError?: string; cooldownUntil?: number; }
 function finite(value: unknown, fallback: number): number { return typeof value === "number" && Number.isFinite(value) ? value : fallback; }
@@ -86,9 +87,7 @@ export class AdaptiveAIRouterService {
   }
 
   private normalizePolicy(raw: Partial<AIRoutingPolicy>): AIRoutingPolicy {
-    // primary_first is retained only as a backward-compatible read value; it is normalized
-    // to adaptive so persisted legacy settings cannot privilege one provider/model.
-    const strategy: AIRoutingStrategy = raw.strategy === "priority_only" ? "priority_only" : "adaptive";
+    const strategy: AIRoutingStrategy = raw.strategy === "primary_first" || raw.strategy === "priority_only" ? raw.strategy : "adaptive";
     return {
       strategy,
       capabilityWeight: clamp(finite(raw.capabilityWeight, DEFAULT_POLICY.capabilityWeight), 0, 100),
@@ -126,7 +125,7 @@ export class AdaptiveAIRouterService {
     });
     const hasRole = (model: UnifiedModelRecord, role: UnifiedModelRole): boolean => model.roles.includes(role);
     const preferredRole: UnifiedModelRole | undefined = context.isExtraction ? "extraction" : context.isDeepReasoning ? "reasoning" : undefined;
-    return eligible.map((model) => {
+    const scored = eligible.map((model) => {
       const capabilityMatches = [
         context.requiresVision ? (model.capabilities.includes("vision") || providerMap.get(model.provider)?.capabilities.includes("vision") ? 1 : 0) : undefined,
         context.requiresTools ? (model.capabilities.includes("tool_calling") || providerMap.get(model.provider)?.capabilities.includes("tool_calling") ? 1 : 0) : undefined,
@@ -136,20 +135,29 @@ export class AdaptiveAIRouterService {
       ].filter((value): value is number => value !== undefined);
       const capabilityMatch = capabilityMatches.length ? (capabilityMatches.reduce((a, b) => a + b, 0) / capabilityMatches.length) * 100 : 70;
       const roleBonus = preferredRole && hasRole(model, preferredRole) ? 20 : 0;
+      const primaryBonus = hasRole(model, "primary") ? PRIMARY_ROLE_BONUS : 0;
       const priorityScore = 100 - clamp(model.priority * 8, 0, 100);
       const healthScore = this.healthScore(model);
       const latencyScore = this.latencyScore(model);
       const totalWeight = Math.max(1, policy.capabilityWeight + policy.healthWeight + policy.latencyWeight + policy.priorityWeight);
       let score = (capabilityMatch * policy.capabilityWeight + healthScore * policy.healthWeight + latencyScore * policy.latencyWeight + priorityScore * policy.priorityWeight) / totalWeight;
       if (policy.strategy === "priority_only") score = priorityScore;
-      score += roleBonus;
+      if (policy.strategy === "adaptive" && !context.preferredProvider && !context.preferredModelId) score += primaryBonus;
+      if (policy.strategy === "primary_first" && hasRole(model, "primary")) score += PRIMARY_ROLE_BONUS;
+      if (context.preferredProvider || context.preferredModelId) score += hasRole(model, "primary") ? PRIMARY_ROLE_BONUS / 2 : 0;
       const reasons: string[] = [];
+      if (hasRole(model, "primary")) reasons.push("primary");
       if (preferredRole && hasRole(model, preferredRole)) reasons.push(preferredRole);
       if (capabilityMatch >= 90) reasons.push("capability match");
       if (healthScore >= 85) reasons.push("healthy");
       if (latencyScore >= 85) reasons.push("low latency");
       return { model, score, reasons, healthScore, latencyMs: this.getHealth(model).ewmaLatencyMs };
-    }).sort((a, b) => b.score - a.score || a.model.priority - b.model.priority || a.model.provider.localeCompare(b.model.provider));
+    });
+    const sorted = scored.sort((a, b) => b.score - a.score || a.model.priority - b.model.priority || a.model.provider.localeCompare(b.model.provider));
+    if (policy.strategy !== "primary_first") return sorted;
+    const primary = sorted.filter((candidate) => candidate.model.roles.includes("primary"));
+    const rest = sorted.filter((candidate) => !candidate.model.roles.includes("primary"));
+    return [...primary, ...rest];
   }
 
   recordSuccess(modelId: string, latencyMs: number): void {
@@ -192,13 +200,14 @@ export class AdaptiveAIRouterService {
         const latencyMs = Date.now() - started;
         this.recordSuccess(candidate.model.id, latencyMs);
         aiObservabilityService.recordSuccess(candidate.model.provider, candidate.model.modelId, latencyMs);
+        logger.info({ provider: candidate.model.provider, model: candidate.model.modelId, roles: candidate.model.roles, strategy: policy.strategy, reasons: candidate.reasons, attempts }, "Unified AI model selected");
         return { response: { ...response, provider: candidate.model.provider, model: candidate.model.modelId }, candidate, attempts };
       } catch (error) {
         const latencyMs = Date.now() - started;
         lastError = error;
         this.recordFailure(candidate.model.id, error);
         aiObservabilityService.recordFailure(candidate.model.provider, candidate.model.modelId, latencyMs, error);
-        logger.warn({ provider: candidate.model.provider, model: candidate.model.modelId, error: error instanceof Error ? error.message : String(error) }, "Adaptive AI candidate failed; selecting next eligible provider/model");
+        logger.warn({ provider: candidate.model.provider, model: candidate.model.modelId, roles: candidate.model.roles, error: error instanceof Error ? error.message : String(error) }, "Adaptive AI candidate failed; selecting next eligible provider/model");
       }
     }
     throw new Error(`Adaptive AI routing exhausted ${attempts.length} candidate(s). Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
@@ -222,6 +231,7 @@ export class AdaptiveAIRouterService {
         const latencyMs = Date.now() - started;
         this.recordSuccess(candidate.model.id, latencyMs);
         aiObservabilityService.recordSuccess(candidate.model.provider, candidate.model.modelId, latencyMs);
+        logger.info({ provider: candidate.model.provider, model: candidate.model.modelId, roles: candidate.model.roles, strategy: policy.strategy, reasons: candidate.reasons }, "Unified AI streaming model selected");
         return;
       } catch (error) {
         const latencyMs = Date.now() - started;
@@ -229,7 +239,7 @@ export class AdaptiveAIRouterService {
         this.recordFailure(candidate.model.id, error);
         aiObservabilityService.recordFailure(candidate.model.provider, candidate.model.modelId, latencyMs, error, true);
         if (emitted) throw error;
-        logger.warn({ provider: candidate.model.provider, model: candidate.model.modelId, error: error instanceof Error ? error.message : String(error) }, "Adaptive AI stream candidate failed before output; selecting next eligible provider/model");
+        logger.warn({ provider: candidate.model.provider, model: candidate.model.modelId, roles: candidate.model.roles, error: error instanceof Error ? error.message : String(error) }, "Adaptive AI stream candidate failed before output; selecting next eligible provider/model");
       }
     }
     throw new Error(`Adaptive AI streaming exhausted candidates. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
@@ -239,7 +249,7 @@ export class AdaptiveAIRouterService {
     const models = await unifiedModelRegistryService.list();
     return models.filter((model) => !model.roles.includes("embedding")).map((model) => {
       const health = this.getHealth(model);
-      return { provider: model.provider, modelId: model.modelId, id: model.id, successes: health.successes, failures: health.failures, consecutiveFailures: health.consecutiveFailures, ewmaLatencyMs: Math.round(health.ewmaLatencyMs), healthScore: Math.round(this.healthScore(model)), lastSuccessAt: health.lastSuccessAt || null, lastFailureAt: health.lastFailureAt || null, cooldownUntil: health.cooldownUntil || null, lastError: health.lastError || null };
+      return { provider: model.provider, modelId: model.modelId, id: model.id, roles: [...model.roles], successes: health.successes, failures: health.failures, consecutiveFailures: health.consecutiveFailures, ewmaLatencyMs: Math.round(health.ewmaLatencyMs), healthScore: Math.round(this.healthScore(model)), lastSuccessAt: health.lastSuccessAt || null, lastFailureAt: health.lastFailureAt || null, cooldownUntil: health.cooldownUntil || null, lastError: health.lastError || null };
     });
   }
 }
