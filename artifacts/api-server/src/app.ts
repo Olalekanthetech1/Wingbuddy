@@ -17,7 +17,7 @@ import { renderDashboardThemeLayer } from "./dashboard-theme";
 import { renderDashboardAIRoutingControls } from "./dashboard-ai-routing-controls";
 import { renderDashboardProviderKeyControls } from "./dashboard-provider-key-controls";
 import { apiKeyPoolService } from "./services/api-key-pool.service";
-import { aiProviderRegistryService } from "./services/ai-provider-registry-service";
+import { aiProviderRegistryService } from "./services/ai-provider-registry.service";
 import { unifiedModelRegistryService } from "./services/unified-model-registry.service";
 import { adaptiveAIRouterService } from "./services/adaptive-ai-router.service";
 import { aiObservabilityService } from "./services/ai-observability.service";
