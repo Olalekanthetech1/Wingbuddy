@@ -1,38 +1,131 @@
-import type { PersonalityKey } from "../config/personality";
-import { PERSONALITIES } from "../config/personality";
 import type { ModeKey } from "../config/mode";
-import { MODES } from "../config/mode";
 
 export interface AdaptiveStartExperienceInput {
   displayName: string;
   isReturningUser: boolean;
   mode: ModeKey;
-  personality: PersonalityKey;
   activeTaskCount: number;
   activeReminderCount: number;
-  activeSessionCount: number;
-  capabilities: readonly string[];
+  nextReminderDueAt?: Date | null;
+  recentSessionAvailable: boolean;
+  timezone: string;
+  now?: Date;
+}
+
+type DayPart = "morning" | "afternoon" | "evening" | "lateNight";
+
+const MODE_PRESENTATION: Record<ModeKey, { emoji: string; focus: string }> = {
+  general: { emoji: "💬", focus: "Chat, think, plan, or explore" },
+  study: { emoji: "📚", focus: "Learn, revise, solve, or practice" },
+  coding: { emoji: "💻", focus: "Build, debug, review, or ship" },
+  research: { emoji: "🔎", focus: "Research, compare, verify, or analyze" },
+  reasoning: { emoji: "🧩", focus: "Break down a difficult problem" },
+  writing: { emoji: "✍️", focus: "Write, rewrite, edit, or polish" },
+  brainstorming: { emoji: "💡", focus: "Brainstorm, explore, or create" },
+  travel: { emoji: "🧳", focus: "Plan routes, trips, and travel details" },
+};
+
+function escapeHtml(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function getDayPart(hour: number): DayPart {
+  if (hour >= 5 && hour < 12) return "morning";
+  if (hour >= 12 && hour < 17) return "afternoon";
+  if (hour >= 17 && hour < 22) return "evening";
+  return "lateNight";
+}
+
+function getGreeting(dayPart: DayPart, isReturningUser: boolean, displayName: string): string {
+  const name = escapeHtml(displayName);
+  if (dayPart === "morning") return `Good morning, ${name}! ☀️`;
+  if (dayPart === "afternoon") return `${isReturningUser ? "Welcome back" : "Good afternoon"}, ${name}! 🌤️`;
+  if (dayPart === "evening") return `Good evening, ${name}! 🌆`;
+  return `${isReturningUser ? "Still up" : "Hey"}, ${name}? 🌙`;
+}
+
+function formatLocalTime(date: Date, timezone: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(date);
+  } catch {
+    return date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  }
+}
+
+function formatLocalDate(date: Date, timezone: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      weekday: "long",
+      month: "short",
+      day: "numeric",
+    }).format(date);
+  } catch {
+    return date.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+  }
 }
 
 export class AdaptiveStartExperienceService {
   build(input: AdaptiveStartExperienceInput): string {
-    const personality = PERSONALITIES[input.personality];
-    const mode = MODES[input.mode];
-    const greeting = input.isReturningUser ? "Welcome back" : "Welcome";
+    const now = input.now ?? new Date();
+    let localHour = 12;
+    try {
+      const hourParts = new Intl.DateTimeFormat("en-US", { timeZone: input.timezone, hour: "2-digit", hourCycle: "h23" })
+        .formatToParts(now);
+      localHour = Number(hourParts.find((part) => part.type === "hour")?.value ?? 12);
+      if (!Number.isFinite(localHour)) localHour = 12;
+    } catch {
+      localHour = now.getHours();
+    }
+
+    const dayPart = getDayPart(localHour);
+    const presentation = MODE_PRESENTATION[input.mode] ?? MODE_PRESENTATION.general;
     const stateLines: string[] = [];
-    if (input.activeTaskCount > 0) stateLines.push(`🎯 You have <b>${input.activeTaskCount}</b> active task${input.activeTaskCount === 1 ? "" : "s"} ready to continue.`);
-    if (input.activeReminderCount > 0) stateLines.push(`⏰ You have <b>${input.activeReminderCount}</b> pending reminder${input.activeReminderCount === 1 ? "" : "s"}.`);
-    if (input.activeSessionCount > 1) stateLines.push(`💬 You have <b>${input.activeSessionCount}</b> active conversation sessions.`);
-    const capabilities = input.capabilities.length ? input.capabilities.map((capability) => `• ${escapeHtml(capability)}`).join("\n") : "• Conversation and context-aware assistance";
+
+    if (input.activeTaskCount > 0) {
+      stateLines.push(`✅ <b>${input.activeTaskCount}</b> active task${input.activeTaskCount === 1 ? "" : "s"} ready to continue.`);
+    }
+
+    if (input.activeReminderCount > 0) {
+      if (input.nextReminderDueAt) {
+        const due = formatLocalTime(input.nextReminderDueAt, input.timezone);
+        stateLines.push(`⏰ Next reminder: <b>${escapeHtml(due)}</b>`);
+      } else {
+        stateLines.push(`⏰ <b>${input.activeReminderCount}</b> reminder${input.activeReminderCount === 1 ? "" : "s"} scheduled.`);
+      }
+    }
+
+    if (input.recentSessionAvailable && stateLines.length < 2) {
+      stateLines.push("↩️ Your recent session is ready to pick up where you left off.");
+    }
+
+    const contextBlock = stateLines.length
+      ? `\n${stateLines.join("\n")}`
+      : "\n✨ Nothing urgent is waiting. Bring me whatever you have in mind.";
+
+    const dayLabel = formatLocalDate(now, input.timezone);
+    const setupLine = `${presentation.emoji} <b>${escapeHtml(input.mode.replace(/^./, (char) => char.toUpperCase()))} focus:</b> ${escapeHtml(presentation.focus)}`;
+    const footer = dayPart === "lateNight"
+      ? "Keep it focused — I’m here. 🌙"
+      : input.isReturningUser
+        ? "What should we tackle next? 🚀"
+        : "Let’s get started. 🚀";
+
     return [
-      `Hey ${escapeHtml(input.displayName)}! 👋`,
-      `${greeting} — I’m your adaptive AI partner.`,
-      `\n⚡ <b>Current setup</b>\n• Mode: <b>${escapeHtml(mode.label)}</b>\n• Personality: <b>${escapeHtml(personality.label)}</b>`,
-      `\n🧩 <b>Available capabilities</b>\n${capabilities}`,
-      stateLines.length ? `\n${stateLines.join("\n")}` : "\n✨ Nothing is waiting on you right now. Start with whatever you have in mind.",
-      "\nSend me a message normally — you don’t need to choose a mode or tool first. I’ll route the request through the available execution path.",
+      `🪽 <b>${getGreeting(dayPart, input.isReturningUser, input.displayName)}</b>`,
+      `${escapeHtml(dayLabel)} • ${escapeHtml(formatLocalTime(now, input.timezone))}`,
+      "",
+      setupLine,
+      contextBlock,
+      "",
+      footer,
+      "Send me a message naturally — you don’t need to pick a mode or tool first.",
     ].join("\n");
   }
 }
-function escapeHtml(value: string): string { return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+
 export const adaptiveStartExperienceService = new AdaptiveStartExperienceService();
