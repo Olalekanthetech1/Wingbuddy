@@ -11,6 +11,7 @@ import {
 import { isPersonalityKey, type PersonalityKey } from "../config/personality";
 import { isModeKey, type ModeKey } from "../config/mode";
 import { runtimeBehaviorConfigService } from "./runtime-behavior-config.service";
+import { mediaArtifactContextService } from "./media-artifact-context.service";
 
 export interface TelegramUserProfile {
   id: number;
@@ -77,7 +78,10 @@ export class ConversationService {
   }
 
   async addMessage(conversationId: number, role: "user" | "model", content: string): Promise<void> {
-    await db.insert(messagesTable).values({ conversationId, role, content });
+    const persistedContent = role === "model"
+      ? mediaArtifactContextService.enrichGeneratedMessage(content)
+      : content;
+    await db.insert(messagesTable).values({ conversationId, role, content: persistedContent });
     await db.update(conversationsTable).set({ updatedAt: new Date() }).where(eq(conversationsTable.id, conversationId));
   }
 
