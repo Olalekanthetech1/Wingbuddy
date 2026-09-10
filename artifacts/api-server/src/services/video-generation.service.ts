@@ -1,6 +1,7 @@
 import { logger } from "../lib/logger";
 import type { GeminiService } from "../gemini/gemini.service";
 import { aiProviderGatewayService } from "./ai-provider-gateway.service";
+import { cloudinaryMediaStorageService } from "./cloudinary-media-storage.service";
 import { huggingFaceCapabilityService } from "./huggingface-capability.service";
 
 export interface GeneratedVideoResult {
@@ -14,6 +15,8 @@ export interface GeneratedVideoResult {
   fallbackUsed?: boolean;
   isVideo: boolean;
   mimeType: string;
+  storageProvider?: "cloudinary" | "source";
+  cloudinaryPublicId?: string;
 }
 
 function detectMediaType(buffer: Buffer): { isVideo: boolean; mimeType: string } {
@@ -58,9 +61,27 @@ export class VideoGenerationService {
     const media = detectMediaType(result.buffer);
     const provider = result.route === "community" ? "community" : "huggingface";
 
+    let deliveryUrl = result.sourceUrl || `huggingface://video/${encodeURIComponent(result.model)}`;
+    let storageProvider: GeneratedVideoResult["storageProvider"] = "source";
+    let cloudinaryPublicId: string | undefined;
+
+    if (media.isVideo && cloudinaryMediaStorageService.isConfigured()) {
+      try {
+        const uploaded = await cloudinaryMediaStorageService.uploadGeneratedMedia(result.buffer, {
+          resourceType: "video",
+          mimeType: media.mimeType,
+        });
+        deliveryUrl = uploaded.secureUrl;
+        storageProvider = "cloudinary";
+        cloudinaryPublicId = uploaded.publicId;
+      } catch (error) {
+        logger.warn({ error: String(error), model: result.model }, "Cloudinary video storage failed; retaining generation source");
+      }
+    }
+
     return {
       buffer: result.buffer,
-      url: result.sourceUrl || `huggingface://video/${encodeURIComponent(result.model)}`,
+      url: deliveryUrl,
       originalPrompt,
       enhancedPrompt,
       provider,
@@ -69,6 +90,8 @@ export class VideoGenerationService {
       fallbackUsed: result.fallbackUsed,
       isVideo: media.isVideo,
       mimeType: media.mimeType,
+      storageProvider,
+      cloudinaryPublicId,
     };
   }
 
