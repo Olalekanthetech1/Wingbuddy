@@ -21,7 +21,6 @@ import { formatTelegramMessage, stripTelegramHtml } from "../utils/telegram-form
 import { safeErrorMetadata } from "../utils/safe-error";
 import { startTypingIndicator } from "./typing-indicator";
 import { interactionPresentationService } from "./interaction-presentation.service";
-import { adaptiveStartExperienceService } from "../services/adaptive-start-experience.service";
 import {
   PERSONALITIES,
   PERSONALITY_KEYS,
@@ -70,6 +69,8 @@ import {
   reminderService,
 } from "../services/reminder.service";
 import { StreamingResponder } from "./streaming-responder";
+import { onboardingService } from "../services/onboarding.service";
+import { registerOnboardingHandlers, startOnboarding } from "./onboarding";
 
 const PRIVATE_MESSAGE = "Sorry, this bot is currently private.";
 const GENERIC_ERROR_MESSAGE =
@@ -172,45 +173,16 @@ export function createTelegramBot(): TelegramBotRuntime {
     });
   };
 
+  registerOnboardingHandlers(bot, {
+    authorized,
+    upsertUser,
+    conversations,
+    modeService,
+  });
+
   bot.command("start", async (ctx) => {
     if (!(await requireAuthorized(ctx))) return;
-    await upsertUser(ctx);
-    if (!ctx.from) return;
-
-    const userContext = await conversations.getUserWithFullContext(ctx.from.id);
-    const rawPersonality = (userContext?.personality as PersonalityKey) || "playful";
-    const rawMode = (userContext?.mode as ModeKey) || "general";
-    const personality = isPersonalityKey(rawPersonality) ? rawPersonality : "playful";
-    const mode = isModeKey(rawMode) ? rawMode : "general";
-    const activeTasks = await taskService.getActiveTasksForUser(ctx.from.id);
-    const activeReminders = await reminderService.getActiveUserReminders(ctx.from.id);
-    const sessions = userContext?.conversations?.length ?? 0;
-    const isReturningUser = sessions > 0 || (userContext?.memories?.length ?? 0) > 0;
-    const capabilities = [
-      "Context-aware conversation",
-      "Long-term memory",
-      "Task workflows",
-      "Reminders",
-      "Image generation",
-      "Video generation",
-      ...(getExecutionConfig().enabled ? ["Autonomous tool execution"] : []),
-    ];
-
-    const welcome = adaptiveStartExperienceService.build({
-      displayName: ctx.from.first_name || ctx.from.username || "there",
-      isReturningUser,
-      mode,
-      personality,
-      activeTaskCount: activeTasks.length,
-      activeReminderCount: activeReminders.length,
-      activeSessionCount: sessions,
-      capabilities,
-    });
-
-    await ctx.reply(welcome, {
-      parse_mode: "HTML",
-      reply_markup: mainMenuKeyboard(),
-    });
+    await startOnboarding(ctx, { authorized, upsertUser, conversations, modeService });
   });
 
   bot.command("help", async (ctx) => {
@@ -470,13 +442,13 @@ export function createTelegramBot(): TelegramBotRuntime {
       return;
     }
     if (!await rateLimiter.consumeAsync(ctx.from.id)) {
-      await ctx.reply("You’re sending requests a little too quickly. Please wait a moment and try again.");
+      await ctx.reply("You’re sending messages a little too quickly. Please wait a moment and try again.");
       return;
     }
     const stopPresence = startTypingIndicator(ctx, { state: "executing_tool", toolName: "video_generation", operationLabel: "video generation", chatAction: "upload_video", expectsLongRunning: true, userFacingProgress: false });
     let progressMsg: number | undefined;
     try {
-      progressMsg = await interactionPresentationService.renderProgress(ctx, { state: "executing_tool", toolName: "video_generation", operationLabel: "video generation", chatAction: "upload_video", expectsLongRunning: true, userFacingProgress: true, elapsedMs: 0 });
+      progressMsg = await interactionPresentationService.renderProgress(ctx, { state: "executing_tool", toolName: "video_generation", operationLabel: "video generation", chatAction: "upload_video", expectsLongRunning: true, elapsedMs: 0 });
       const startedAt = Date.now();
       const result = await VideoGenerationService.generate(rawPrompt, gemini);
       const conversationId = await conversations.getOrCreateConversation(ctx.from.id, ctx.chat.id);
@@ -760,7 +732,7 @@ export function createTelegramBot(): TelegramBotRuntime {
       await runStage("user_message_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => conversations.addMessage(globalContextData.conversationId, "user", persistentUserMessage));
       await runStage("model_response_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => conversations.addMessage(globalContextData.conversationId, "model", reply));
       if (activeTaskContext) await taskService.syncTaskProgressFromResponse(activeTaskContext.task.id, reply);
-      void memoryService.processBackgroundExtraction(ctx.from.id, currentPrompt, globalContextData.conversationId);
+      if (await onboardingService.memoryEnabled(ctx.from.id)) void memoryService.processBackgroundExtraction(ctx.from.id, currentPrompt, globalContextData.conversationId);
       if (registeredRequest) requestRegistryService.markCompleted(registeredRequest.requestId);
     } catch (error) {
       if (ctx.message?.message_id && ctx.from?.id && ctx.chat?.id) {
