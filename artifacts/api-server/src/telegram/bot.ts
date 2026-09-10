@@ -20,7 +20,7 @@ import { splitTelegramMessage } from "../utils/split-message";
 import { formatTelegramMessage, stripTelegramHtml } from "../utils/telegram-formatter";
 import { safeErrorMetadata } from "../utils/safe-error";
 import { startTypingIndicator } from "./typing-indicator";
-import { interactionPresentationService } from "./interaction-presentation.service";
+import { interactionPresentationService } from "./interaction-presentation-service";
 import {
   PERSONALITIES,
   PERSONALITY_KEYS,
@@ -296,7 +296,7 @@ export function createTelegramBot(): TelegramBotRuntime {
       }
       messageText += taskLines.join("\n\n");
     }
-    await ctx.reply(messageText, { parse_mode: "HTML", reply_markup: tasksKeyboard(activeTasks) });
+    await ctx.reply(messageText, { reply_markup: tasksKeyboard(activeTasks) });
   });
 
   bot.callbackQuery(/^task:(view|cancel|continue):(\d+)$/, async (ctx) => {
@@ -442,7 +442,7 @@ export function createTelegramBot(): TelegramBotRuntime {
       return;
     }
     if (!await rateLimiter.consumeAsync(ctx.from.id)) {
-      await ctx.reply("You’re sending messages a little too quickly. Please wait a moment and try again.");
+      await ctx.reply("You’re sending requests a little too quickly. Please wait a moment and try again.");
       return;
     }
     const stopPresence = startTypingIndicator(ctx, { state: "executing_tool", toolName: "video_generation", operationLabel: "video generation", chatAction: "upload_video", expectsLongRunning: true, userFacingProgress: false });
@@ -651,8 +651,9 @@ export function createTelegramBot(): TelegramBotRuntime {
           if (registeredRequest) requestRegistryService.markCompleted(registeredRequest.requestId, { provider: videoResult.provider, mediaType: "video" });
           return;
         } catch (vidError) {
-          logger.warn({ vidError: safeErrorMetadata(vidError) }, "Natural video generation failed; falling back to conversational Gemini reply");
+          logger.error({ vidError: safeErrorMetadata(vidError) }, "Natural video generation failed; terminating media request");
           if (progressMessageId) await ctx.api.deleteMessage(ctx.chat.id, progressMessageId).catch(() => {});
+          throw vidError;
         } finally { stopVideoPresence(); }
       }
 
@@ -770,7 +771,7 @@ export function createTelegramBot(): TelegramBotRuntime {
       app.post("/api/telegram/webhook", (req: Request, res: Response) => {
         if (config.telegramWebhookSecret) { const secretHeader = req.header("X-Telegram-Bot-Api-Secret-Token"); if (secretHeader !== config.telegramWebhookSecret) { logger.warn("Telegram webhook received update with invalid secret token"); res.status(403).json({ error: "Unauthorized" }); return; } }
         const update = req.body;
-        if (!update || typeof update !== "object" || typeof update.update_id !== "number") { res.status(400).json({ error: "Invalid Telegram update payload" }); return; }
+        if (!update || typeof update !== "object" || typeof update.update_id !== "number") { res.status(400).json({ error: "Invalid Telegram webhook payload" }); return; }
         res.status(200).json({ ok: true });
         try { telegramWorkerQueue.enqueue(update); } catch (err) { logger.error({ error: safeErrorMetadata(err), updateId: update.update_id }, "Failed to enqueue update"); }
       });
