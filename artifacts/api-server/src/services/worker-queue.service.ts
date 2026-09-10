@@ -2,6 +2,7 @@ import type { Update } from "grammy/types";
 import { logger } from "../lib/logger";
 import { safeErrorMetadata } from "../utils/safe-error";
 import { apiKeyPoolService } from "./api-key-pool.service";
+import { requestRegistryService } from "./request-registry.service";
 
 export interface QueueTask {
   id: string;
@@ -37,7 +38,6 @@ export class TelegramWorkerQueueService {
 
   setUpdateHandler(handler: (update: Update) => Promise<void>): void {
     this.handler = handler;
-    // Drain updates that may have arrived while runtime hydration/handler wiring was completing.
     this.scheduleProcessing();
   }
 
@@ -77,10 +77,19 @@ export class TelegramWorkerQueueService {
       retries: 0,
     };
 
+    // Transport queue task is not the durable user task model. Register every delivery
+    // as a request/event before any intent or autonomous-task decision is made.
+    const registered = requestRegistryService.register({
+      telegramUserId: task.userId ?? 0,
+      chatId: task.chatId ?? 0,
+      messageId: this.extractMessageId(update),
+    });
+
     this.processedUpdates.set(update.update_id, { taskId, status: 'queued', timestamp: Date.now() });
     if (!this.userQueues.has(userOrChatKey)) this.userQueues.set(userOrChatKey, []);
     this.userQueues.get(userOrChatKey)!.push(task);
     this.enqueuedTotal += 1;
+    logger.debug({ updateId: update.update_id, requestId: registered.requestId, queueTaskId: taskId }, "TELEGRAM_REQUEST_BOUND_TO_QUEUE");
     this.scheduleProcessing();
     return { taskId, queueLength: this.getPendingCount() };
   }
@@ -99,6 +108,10 @@ export class TelegramWorkerQueueService {
 
   private extractChatId(update: Update): number | undefined {
     return update.message?.chat?.id || update.callback_query?.message?.chat?.id || update.edited_message?.chat?.id;
+  }
+
+  private extractMessageId(update: Update): number | undefined {
+    return update.message?.message_id || update.edited_message?.message_id || update.callback_query?.message?.message_id;
   }
 
   private scheduleProcessing(): void {
