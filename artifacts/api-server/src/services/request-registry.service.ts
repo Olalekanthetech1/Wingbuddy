@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { logger } from "../lib/logger";
-import type { SemanticInteractionDecision } from "./semantic-interaction-cache.service";
+import type { SemanticInteractionDecision, PromptType, RequestExecutionProfile } from "./semantic-interaction-cache.service";
 
 export type RequestKind = "conversational" | "one_shot" | "durable" | "clarification" | "unknown";
 export type RequestStatus = "received" | "classified" | "executing" | "completed" | "failed" | "waiting_for_user";
@@ -14,6 +14,9 @@ export interface RegisteredRequest {
   kind: RequestKind;
   status: RequestStatus;
   intent?: string;
+  promptTypes?: PromptType[];
+  primaryPromptType?: PromptType;
+  executionProfile?: RequestExecutionProfile;
   complexity?: SemanticInteractionDecision["complexity"];
   confidence?: number;
   taskRequired: boolean;
@@ -42,13 +45,14 @@ class RequestRegistryService {
     const mediaPresent = Boolean(input.mediaPresent);
     const taskIntent = semantic?.taskIntent ?? "NO_TASK";
     const isTaskContinuation = taskIntent === "CONTINUE_TASK" || taskIntent === "PAUSE_TASK" || taskIntent === "COMPLETE_TASK" || taskIntent === "CANCEL_TASK" || taskIntent === "VIEW_TASKS";
-    const isDurableTask = taskIntent === "NEW_TASK" || isTaskContinuation;
-    const kind: RequestKind =
-      semantic?.isGreeting || semantic?.intent === "greeting"
-        ? "conversational"
+    const isDurableTask = taskIntent === "NEW_TASK" || isTaskContinuation || semantic?.executionProfile === "durable";
+    const resolvedKind: RequestKind = semantic?.isGreeting || semantic?.intent === "greeting"
+      ? "conversational"
+      : semantic?.executionProfile === "clarification"
+        ? "clarification"
         : isDurableTask
           ? "durable"
-          : semantic?.intent === "image_generation" || semantic?.intent === "video_generation" || semantic?.intent === "search_grounding" || semantic?.intent === "deep_reasoning"
+          : semantic?.executionProfile === "one_shot"
             ? "one_shot"
             : "unknown";
 
@@ -58,24 +62,55 @@ class RequestRegistryService {
       chatId: input.chatId,
       messageId: input.messageId,
       receivedAt: new Date().toISOString(),
-      kind,
+      kind: resolvedKind,
       status: "received",
       intent: semantic?.intent,
+      promptTypes: semantic?.promptTypes,
+      primaryPromptType: semantic?.primaryPromptType,
+      executionProfile: semantic?.executionProfile,
       complexity: semantic?.complexity,
       confidence: semantic?.confidence,
       taskRequired: isDurableTask,
-      toolRequired: Boolean(semantic && (semantic.intent === "image_generation" || semantic.intent === "video_generation" || semantic.enableSearch || semantic.intent === "deep_reasoning")),
+      toolRequired: Boolean(semantic && (
+        semantic.requiredCapabilities.length > 0 ||
+        semantic.intent === "image_generation" ||
+        semantic.intent === "video_generation" ||
+        semantic.enableSearch ||
+        semantic.intent === "deep_reasoning"
+      )),
       mediaRequired: semantic?.intent === "image_generation" || semantic?.intent === "video_generation" || mediaPresent,
       activeTaskContinuation: isTaskContinuation,
     };
 
     this.requests.set(requestId, request);
     this.trim();
-    logger.info({ requestId, telegramUserId: request.telegramUserId, chatId: request.chatId, messageId: request.messageId, kind: request.kind, intent: request.intent, complexity: request.complexity, confidence: request.confidence, taskRequired: request.taskRequired, toolRequired: request.toolRequired, mediaRequired: request.mediaRequired, activeTaskContinuation: request.activeTaskContinuation }, "TELEGRAM_REQUEST_REGISTERED");
+    logger.info({
+      requestId,
+      telegramUserId: request.telegramUserId,
+      chatId: request.chatId,
+      messageId: request.messageId,
+      kind: request.kind,
+      intent: request.intent,
+      promptTypes: request.promptTypes,
+      primaryPromptType: request.primaryPromptType,
+      executionProfile: request.executionProfile,
+      complexity: request.complexity,
+      confidence: request.confidence,
+      taskRequired: request.taskRequired,
+      toolRequired: request.toolRequired,
+      mediaRequired: request.mediaRequired,
+      activeTaskContinuation: request.activeTaskContinuation,
+    }, "TELEGRAM_REQUEST_REGISTERED");
     return request;
   }
 
-  markClassified(requestId: string, patch: Partial<Pick<RegisteredRequest, "kind" | "intent" | "complexity" | "confidence" | "taskRequired" | "toolRequired" | "mediaRequired" | "activeTaskContinuation">>): RegisteredRequest | undefined {
+  markClassified(
+    requestId: string,
+    patch: Partial<Pick<
+      RegisteredRequest,
+      "kind" | "intent" | "promptTypes" | "primaryPromptType" | "executionProfile" | "complexity" | "confidence" | "taskRequired" | "toolRequired" | "mediaRequired" | "activeTaskContinuation"
+    >>,
+  ): RegisteredRequest | undefined {
     return this.update(requestId, { ...patch, status: "classified" });
   }
 
@@ -93,6 +128,13 @@ class RequestRegistryService {
 
   get(requestId: string): RegisteredRequest | undefined {
     return this.requests.get(requestId);
+  }
+
+  getByTelegramMessage(telegramUserId: number, chatId: number, messageId: number): RegisteredRequest | undefined {
+    for (const request of this.requests.values()) {
+      if (request.telegramUserId === telegramUserId && request.chatId === chatId && request.messageId === messageId) return request;
+    }
+    return undefined;
   }
 
   private update(requestId: string, patch: Partial<RegisteredRequest>): RegisteredRequest | undefined {
