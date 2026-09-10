@@ -1,6 +1,7 @@
 import { logger } from "../lib/logger";
 import type { GeminiService } from "../gemini/gemini.service";
 import { aiProviderGatewayService } from "./ai-provider-gateway.service";
+import { huggingFaceCapabilityService } from "./huggingface-capability.service";
 
 export interface GeneratedImageResult {
   buffer: Buffer;
@@ -14,10 +15,6 @@ export interface GeneratedImageResult {
 }
 
 export class ImageGenerationService {
-  /**
-   * Enhances a user's short or basic prompt into a vivid, descriptive prompt
-   * using Gemini Flash for higher-quality diffusion results.
-   */
   static async enhancePrompt(rawPrompt: string, geminiService?: GeminiService): Promise<string> {
     const cleaned = rawPrompt.trim();
     if (!geminiService || cleaned.length > 280) return cleaned;
@@ -40,14 +37,16 @@ export class ImageGenerationService {
     const enhancedPrompt = await this.enhancePrompt(originalPrompt, geminiService);
     const width = options.width || 1024;
     const height = options.height || 1024;
+    const preferredModel = process.env.HF_IMAGE_MODEL?.trim() || undefined;
+    const capability = await huggingFaceCapabilityService.resolveModel("text-to-image", preferredModel);
 
-    logger.info({ originalPrompt, enhancedPrompt, width, height }, "Generating image through unified Hugging Face provider gateway");
+    logger.info({ originalPrompt, enhancedPrompt, width, height, model: capability.model, discovered: capability.discovered, preferredAvailable: capability.preferredAvailable }, "Generating image through dynamically selected Hugging Face capability");
     const execution = await aiProviderGatewayService.generateImage("huggingface", {
-      model: process.env.HF_IMAGE_MODEL?.trim() || undefined,
+      model: capability.model,
       prompt: enhancedPrompt,
       width,
       height,
-      metadata: { originalPrompt },
+      metadata: { originalPrompt, capabilityDiscovery: capability.discovered, preferredModelAvailable: capability.preferredAvailable },
     });
     const result = execution.result;
     const provider = result.route === "community" ? "community" : "huggingface";
@@ -64,9 +63,6 @@ export class ImageGenerationService {
     };
   }
 
-  /**
-   * Helper to strip command trigger words and extract the real visual subject
-   */
   static extractImagePrompt(rawText: string): string {
     return rawText
       .replace(/^\/(image|draw|img|generate_image|paint)\s*/i, "")
