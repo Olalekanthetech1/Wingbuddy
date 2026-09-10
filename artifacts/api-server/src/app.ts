@@ -17,6 +17,7 @@ import { renderDashboardThemeLayer } from "./dashboard-theme";
 import { renderDashboardAIRoutingControls } from "./dashboard-ai-routing-controls";
 import { renderDashboardProviderKeyControls } from "./dashboard-provider-key-controls";
 import { renderDashboardProactiveAssistant } from "./dashboard-proactive-assistant";
+import { renderDashboardMediaStorage } from "./dashboard-media-storage";
 import { apiKeyPoolService } from "./services/api-key-pool.service";
 import { aiProviderRegistryService } from "./services/ai-provider-registry.service";
 import { unifiedModelRegistryService } from "./services/unified-model-registry.service";
@@ -129,7 +130,7 @@ app.use("/api", router);
 
 const serveDashboard = (_req: Request, res: Response): void => {
   const html = renderDashboardHtml();
-  const enhanced = html.replace("</body>", `${renderDashboardModelControls()}${renderDashboardControlPlane()}${renderDashboardBotSimulator()}${renderDashboardBehaviorControls()}${renderDashboardResponsiveLayer()}${renderDashboardAIRoutingControls()}${renderDashboardProviderKeyControls()}${renderDashboardProactiveAssistant()}${renderDashboardThemeLayer()}</body>`);
+  const enhanced = html.replace("</body>", `${renderDashboardModelControls()}${renderDashboardControlPlane()}${renderDashboardBotSimulator()}${renderDashboardBehaviorControls()}${renderDashboardResponsiveLayer()}${renderDashboardAIRoutingControls()}${renderDashboardProviderKeyControls()}${renderDashboardProactiveAssistant()}${renderDashboardMediaStorage()}${renderDashboardThemeLayer()}</body>`);
   res.type("html").send(enhanced);
 };
 app.get("/", serveDashboard);
