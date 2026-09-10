@@ -101,39 +101,22 @@ class HuggingFaceAdapter implements AIProviderAdapter {
 
   async generateVideo(request: AIVideoGenerationRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIVideoGenerationResponse> {
     const token = apiKey?.trim() || process.env.HF_TOKEN?.trim();
+    if (!token) throw new Error("HF_TOKEN is not configured for video generation");
     const model = request.model?.trim() || safeModel("HF_VIDEO_MODEL", "Wan-AI/Wan2.2-TI2V-5B");
-    if (token) {
-      const client = new InferenceClient(token);
-      try {
-        const video = await withTimeout(client.textToVideo({ model, provider: "auto", inputs: request.prompt } as any, { signal: new AbortController().signal } as any), 180_000, "Hugging Face video");
-        const buffer = Buffer.from(await video.arrayBuffer());
-        const mimeType = detectMime(buffer);
-        if (buffer.length > 2000 && mimeType.startsWith("video/")) {
-          logger.info({ model, route: "inference_provider" }, "Hugging Face video generation succeeded");
-          return { provider: this.providerId, route: "inference_provider", model, buffer, mimeType, fallbackUsed: false };
-        }
-        throw new Error("Hugging Face returned an invalid video payload");
-      } catch (error) {
-        logger.warn({ model, error: String(error) }, "Hugging Face authenticated video route failed; switching to community fallback");
-      }
-    } else {
-      logger.info({ model }, "HF_TOKEN unavailable; using community video fallback");
-    }
-
-    const seed = Math.floor(Math.random() * 1_000_000_000);
-    const encoded = encodeURIComponent(request.prompt.slice(0, 800));
-    const url = `https://image.pollinations.ai/prompt/${encoded}?model=video&nologo=true&seed=${seed}`;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 90_000);
+    const client = new InferenceClient(token);
     try {
-      const response = await fetch(url, { signal: controller.signal, headers: { Accept: "video/mp4,video/webm,video/*,*/*", "User-Agent": "Wingbuddy/3.0" } });
-      if (!response.ok) throw new Error(`Community video endpoint returned HTTP ${response.status}`);
-      const buffer = Buffer.from(await response.arrayBuffer());
+      const video = await withTimeout(client.textToVideo({ model, provider: "auto", inputs: request.prompt } as any, { signal: new AbortController().signal } as any), 180_000, "Hugging Face video");
+      const buffer = Buffer.from(await video.arrayBuffer());
       const mimeType = detectMime(buffer);
-      if (buffer.length < 2000 || !mimeType.startsWith("video/")) throw new Error("Community video endpoint returned invalid media");
-      logger.info({ model, route: "community" }, "Hugging Face provider selected community video fallback");
-      return { provider: this.providerId, route: "community", model, buffer, mimeType, sourceUrl: url, fallbackUsed: true };
-    } finally { clearTimeout(timeout); }
+      if (buffer.length > 2000 && mimeType.startsWith("video/")) {
+        logger.info({ model, route: "inference_provider" }, "Hugging Face video generation succeeded");
+        return { provider: this.providerId, route: "inference_provider", model, buffer, mimeType, fallbackUsed: false };
+      }
+      throw new Error("Hugging Face returned an invalid video payload");
+    } catch (error) {
+      logger.error({ model, error: String(error) }, "Hugging Face video generation attempt failed");
+      throw error instanceof Error ? error : new Error(String(error));
+    }
   }
 
   async test(model: string, provider: AIProviderRecord, apiKey?: string) { const started = Date.now(); try { await this.chat({ model, messages: [{ role: "user", content: "ping" }], maxOutputTokens: 4 }, provider, apiKey); return { ok: true, latencyMs: Date.now() - started }; } catch (error) { return { ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) }; } }
