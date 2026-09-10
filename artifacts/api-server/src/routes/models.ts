@@ -4,6 +4,7 @@ import { aiModelCatalogService } from "../services/ai-model-catalog.service";
 import { unifiedModelRegistryService, type UnifiedModelRole } from "../services/unified-model-registry.service";
 
 const router: IRouter = Router();
+const ROUTING_ROLES: UnifiedModelRole[] = ["fast", "reasoning", "extraction", "embedding"];
 
 function normalizeRoles(value: unknown): UnifiedModelRole[] {
   if (!Array.isArray(value)) return [];
@@ -17,8 +18,14 @@ function normalizeProvider(value: unknown): AIProviderId {
 
 function resolveProvider(value: unknown): AIProviderId {
   const provider = String(value || "").trim().toLowerCase();
-  if (provider === "gemini" || provider === "groq" || provider === "mistral") return provider;
+  if (provider === "gemini" || provider === "groq" || provider === "mistral" || provider === "huggingface") return provider;
   throw new Error(`Unsupported provider: ${provider || "unknown"}`);
+}
+
+function validateRolesAgainstCatalog(roles: UnifiedModelRole[], capabilities: string[]): void {
+  const reported = new Set(capabilities.map((value) => value.trim().toLowerCase()).filter(Boolean));
+  const unsupported = roles.filter((role) => ROUTING_ROLES.includes(role) && !reported.has(role));
+  if (unsupported.length) throw new Error(`Selected model does not report support for routing role(s): ${unsupported.join(", ")}`);
 }
 
 router.get("/models", async (_req: Request, res: Response) => {
@@ -55,7 +62,9 @@ router.post("/models", async (req: Request, res: Response) => {
     const catalog = await aiModelCatalogService.list(provider);
     const selected = catalog.find((item) => item.modelId === modelId.trim());
     if (!selected) { res.status(400).json({ error: `Model ${provider}/${modelId.trim()} is not present in the provider's current model catalog` }); return; }
-    const model = await unifiedModelRegistryService.add({ provider, modelId: selected.modelId, name: typeof name === "string" && name.trim() ? name : selected.name, roles: normalizeRoles(roles), priority: typeof priority === "number" ? priority : undefined, capabilities: selected.capabilities.length ? selected.capabilities : (Array.isArray(capabilities) ? capabilities.filter((v): v is string => typeof v === "string") : undefined) });
+    const normalizedRoles = normalizeRoles(roles);
+    validateRolesAgainstCatalog(normalizedRoles, selected.capabilities);
+    const model = await unifiedModelRegistryService.add({ provider, modelId: selected.modelId, name: typeof name === "string" && name.trim() ? name : selected.name, roles: normalizedRoles, priority: typeof priority === "number" ? priority : undefined, capabilities: selected.capabilities.length ? selected.capabilities : (Array.isArray(capabilities) ? capabilities.filter((v): v is string => typeof v === "string") : undefined) });
     res.status(201).json({ message: "Model registered and saved to PostgreSQL", model, catalog: selected });
   } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
 });
@@ -66,9 +75,13 @@ router.patch("/models/:id", async (req: Request, res: Response) => {
     const current = (await unifiedModelRegistryService.list()).find((model) => model.id === id);
     if (!current) { res.status(404).json({ error: "Model not found" }); return; }
     const provider = patch.provider ? resolveProvider(patch.provider) : current.provider; const requestedModelId = typeof patch.modelId === "string" ? patch.modelId.trim() : current.modelId;
-    if (requestedModelId !== current.modelId || provider !== current.provider) { const catalog = await aiModelCatalogService.list(provider); if (!catalog.some((model) => model.modelId === requestedModelId)) { res.status(400).json({ error: `Model ${provider}/${requestedModelId} is not present in the provider's current model catalog` }); return; } }
-    const model = await unifiedModelRegistryService.update(id, { ...(patch.provider ? { provider } : {}), ...(typeof patch.modelId === "string" ? { modelId: requestedModelId } : {}), ...(typeof patch.name === "string" ? { name: patch.name } : {}), ...(typeof patch.enabled === "boolean" ? { enabled: patch.enabled } : {}), ...(typeof patch.priority === "number" ? { priority: patch.priority } : {}), ...(Array.isArray(patch.roles) ? { roles: normalizeRoles(patch.roles) } : {}), ...(Array.isArray(patch.capabilities) ? { capabilities: patch.capabilities.filter((v: unknown): v is string => typeof v === "string") } : {}) });
-    res.json({ message: "Model updated and saved to PostgreSQL", model });
+    const catalog = await aiModelCatalogService.list(provider);
+    const selected = catalog.find((model) => model.modelId === requestedModelId);
+    if (!selected) { res.status(400).json({ error: `Model ${provider}/${requestedModelId} is not present in the provider's current model catalog` }); return; }
+    const normalizedPatchRoles = Array.isArray(patch.roles) ? normalizeRoles(patch.roles) : undefined;
+    if (normalizedPatchRoles) validateRolesAgainstCatalog(normalizedPatchRoles, selected.capabilities);
+    const model = await unifiedModelRegistryService.update(id, { ...(patch.provider ? { provider } : {}), ...(typeof patch.modelId === "string" ? { modelId: requestedModelId } : {}), ...(typeof patch.name === "string" ? { name: patch.name } : {}), ...(typeof patch.enabled === "boolean" ? { enabled: patch.enabled } : {}), ...(typeof patch.priority === "number" ? { priority: patch.priority } : {}), ...(normalizedPatchRoles ? { roles: normalizedPatchRoles } : {}), ...({ capabilities: selected.capabilities }) });
+    res.json({ message: "Model updated and saved to PostgreSQL", model, catalog: selected });
   } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
 });
 
