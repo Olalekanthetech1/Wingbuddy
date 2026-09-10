@@ -8,7 +8,29 @@ function normalizeUsage(usage: any): AIUsage | undefined { if (!usage || typeof 
 function asOpenAIMessage(message: AIMessage): Record<string, unknown> { return { role: message.role, content: message.content, ...(message.name ? { name: message.name } : {}), ...(message.toolCallId ? { tool_call_id: message.toolCallId } : {}) }; }
 async function requireOk(response: Response, provider: AIProviderId): Promise<void> { if (response.ok) return; const body = await response.text().catch(() => ""); const suffix = body ? `: ${body.slice(0, 800)}` : ""; throw new Error(`${provider} request failed (${response.status})${suffix}`); }
 async function* parseSSE(response: Response, mapEvent: (payload: any) => AIStreamChunk | null): AsyncGenerator<AIStreamChunk> { if (!response.body) throw new Error("Provider returned an empty stream"); const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = ""; try { while (true) { const { done, value } = await reader.read(); if (done) break; buffer += decoder.decode(value, { stream: true }); const events = buffer.split(/\r?\n\r?\n/); buffer = events.pop() || ""; for (const event of events) { const data = event.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).join(""); if (!data || data === "[DONE]") continue; try { const chunk = mapEvent(JSON.parse(data)); if (chunk) yield chunk; } catch { /* Ignore malformed provider SSE frames. */ } } } } finally { reader.releaseLock(); } }
-function normalizeCatalogCapabilities(source: any): string[] { if (Array.isArray(source?.capabilities)) return source.capabilities.filter((value: unknown): value is string => typeof value === "string"); if (source?.capabilities && typeof source.capabilities === "object") return Object.entries(source.capabilities).filter(([, enabled]) => enabled === true).map(([name]) => name); if (Array.isArray(source?.supported_actions)) return source.supported_actions.filter((value: unknown): value is string => typeof value === "string"); return []; }
+function normalizeCatalogCapabilities(source: any): string[] {
+  const capabilities = new Set<string>();
+  const add = (value: unknown) => { if (typeof value === "string" && value.trim()) capabilities.add(value.trim()); };
+  const addMany = (value: unknown) => { if (Array.isArray(value)) value.forEach(add); };
+  addMany(source?.capabilities);
+  if (source?.capabilities && typeof source.capabilities === "object" && !Array.isArray(source.capabilities)) Object.entries(source.capabilities).filter(([, enabled]) => enabled === true).forEach(([name]) => add(name));
+  addMany(source?.supported_actions);
+  addMany(source?.supportedActions);
+
+  const actions = [...capabilities].map((value) => value.toLowerCase().replace(/[\s-]/g, "_"));
+  for (const action of actions) {
+    if (/embed(content)?|embedding/.test(action)) capabilities.add("embedding");
+    if (/generate_images?|image_generation|text_to_image|imagen/.test(action)) capabilities.add("image_generation");
+    if (/generate_videos?|video_generation|text_to_video|veo/.test(action)) capabilities.add("video_generation");
+    if (/generate_content|generatecontent|chat|completion|text_generation/.test(action)) capabilities.add("generate");
+    if (/tool_call|function_call/.test(action)) capabilities.add("tool_calling");
+    if (/web_search|search|grounding/.test(action)) capabilities.add("web_search");
+    if (/reasoning|thinking/.test(action)) capabilities.add("reasoning");
+    if (/vision|image_input|multimodal/.test(action)) capabilities.add("vision");
+  }
+  if (source?.thinking === true) capabilities.add("reasoning");
+  return [...capabilities];
+}
 function catalogEntry(provider: AIProviderId, modelId: string, name: string | undefined, status: string | undefined, capabilities: string[], contextWindow?: number): AIModelCatalogEntry { return { provider, modelId, name: name?.trim() || modelId, status: status === "active" ? "active" : status === "inactive" ? "inactive" : "unknown", capabilities: [...new Set(capabilities)], ...(Number.isFinite(contextWindow) && contextWindow! > 0 ? { contextWindow: contextWindow! } : {}), source: "provider_api" }; }
 
 class GeminiAdapter implements AIProviderAdapter {
