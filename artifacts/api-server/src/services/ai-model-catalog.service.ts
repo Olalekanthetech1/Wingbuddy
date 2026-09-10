@@ -1,6 +1,5 @@
 import { apiKeyPoolService } from "./api-key-pool.service";
 import { aiProviderKeyPoolService } from "./ai-provider-key-pool.service";
-import { aiProviderAdapters } from "./ai-provider.adapters";
 import { aiProviderRegistryService } from "./ai-provider-registry.service";
 import type { AIModelCatalogEntry, AIProviderId } from "./ai-provider.types";
 
@@ -24,7 +23,7 @@ export class AIModelCatalogService {
 
   async listWithKey(provider: AIProviderId, apiKey: string): Promise<AIModelCatalogEntry[]> {
     const record = await aiProviderRegistryService.get(provider);
-    const adapter = aiProviderAdapters[record.adapter];
+    const adapter = aiProviderRegistryService.getAdapter(record.id);
     if (!adapter || typeof adapter.listModels !== "function") throw new Error(`Model discovery is not available for provider ${provider}`);
     const key = apiKey.trim();
     if (key.length < 10) throw new Error("A valid provider API key is required for model discovery");

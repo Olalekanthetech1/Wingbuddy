@@ -7,18 +7,22 @@ import { apiKeyPoolService } from "../services/api-key-pool.service";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
-const PROVIDERS = new Set<AIProviderId>(["gemini", "groq", "mistral"]);
-function providerOf(value: unknown): AIProviderId { const normalized = String(value || "").trim().toLowerCase() as AIProviderId; if (!PROVIDERS.has(normalized)) throw new Error("Unsupported provider"); return normalized; }
+const LEGACY_GEMINI = new Set<AIProviderId>(["gemini"]);
+function providerOf(value: unknown): AIProviderId {
+  const normalized = String(value || "").trim().toLowerCase() as AIProviderId;
+  if (!/^[a-z0-9_-]+$/.test(normalized)) throw new Error("Unsupported provider");
+  return normalized;
+}
 
 async function hydrate(providerId: AIProviderId) {
   const provider = await aiProviderRegistryService.get(providerId);
-  if (providerId === "gemini") await apiKeyPoolService.hydrateFromDatabase();
+  if (LEGACY_GEMINI.has(providerId)) await apiKeyPoolService.hydrateFromDatabase();
   else await aiProviderKeyPoolService.hydrateProvider(providerId, provider.apiKeyEnv);
   return provider;
 }
 
 router.get("/provider-keys", async (req: Request, res: Response) => {
-  try { const provider = providerOf(req.query.provider || "gemini"); await hydrate(provider); res.json(provider === "gemini" ? apiKeyPoolService.getSummary() : aiProviderKeyPoolService.getSummary(provider)); }
+  try { const provider = providerOf(req.query.provider || "gemini"); await hydrate(provider); res.json(LEGACY_GEMINI.has(provider) ? apiKeyPoolService.getSummary() : aiProviderKeyPoolService.getSummary(provider)); }
   catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
 });
 
@@ -32,8 +36,6 @@ router.post("/provider-keys", async (req: Request, res: Response) => {
     if (!model) { res.status(400).json({ error: "Missing required field 'model' for key validation" }); return; }
     const provider = await aiProviderRegistryService.get(providerId);
 
-    // A first valid key is the evidence needed to activate an otherwise unconfigured provider.
-    // Do not reject onboarding merely because the registry currently has enabled=false.
     const catalog = await aiModelCatalogService.listWithKey(providerId, key);
     if (!catalog.some((entry) => entry.modelId === model)) {
       res.status(400).json({ error: `Model ${providerId}/${model} was not returned by the provider for this API key`, availableModels: catalog.map((entry) => ({ modelId: entry.modelId, name: entry.name })) });
@@ -44,18 +46,14 @@ router.post("/provider-keys", async (req: Request, res: Response) => {
     const validation = await adapter.test(model, provider, key);
     if (!validation.ok) { res.status(400).json({ error: validation.error || "Provider API key validation failed", validation }); return; }
 
-    const saved = providerId === "gemini" ? await apiKeyPoolService.addKey(key, name) : await aiProviderKeyPoolService.addKey(providerId, key, name);
+    const saved = LEGACY_GEMINI.has(providerId) ? await apiKeyPoolService.addKey(key, name) : await aiProviderKeyPoolService.addKey(providerId, key, name);
 
-    // Successful validation activates the provider so it becomes usable and visible to
-    // the Dashboard model registry. The user can explicitly disable it afterward.
-    if (!provider.enabled) {
-      await aiProviderRegistryService.update(providerId, { enabled: true });
-    }
+    if (!provider.enabled) await aiProviderRegistryService.update(providerId, { enabled: true });
 
-    if (providerId === "gemini") { await apiKeyPoolService.reloadFromDatabase(); aiModelCatalogService.invalidate(providerId); }
+    if (LEGACY_GEMINI.has(providerId)) { await apiKeyPoolService.reloadFromDatabase(); aiModelCatalogService.invalidate(providerId); }
     else { await aiProviderKeyPoolService.hydrateProvider(providerId, provider.apiKeyEnv, true); aiModelCatalogService.invalidate(providerId); }
     const updatedProvider = await aiProviderRegistryService.get(providerId);
-    res.status(201).json({ message: "Provider API key validated and securely saved", key: saved, provider: updatedProvider, poolSummary: providerId === "gemini" ? apiKeyPoolService.getSummary() : aiProviderKeyPoolService.getSummary(providerId) });
+    res.status(201).json({ message: "Provider API key validated and securely saved", key: saved, provider: updatedProvider, poolSummary: LEGACY_GEMINI.has(providerId) ? apiKeyPoolService.getSummary() : aiProviderKeyPoolService.getSummary(providerId) });
   } catch (error) { logger.warn({ error: error instanceof Error ? error.message : String(error) }, "Provider API key add failed"); res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
 });
 
@@ -91,9 +89,14 @@ router.post("/provider-keys/mode", async (req: Request, res: Response) => {
 router.get("/provider-keys/summary/all", async (_req: Request, res: Response) => {
   try {
     const result: Record<string, unknown> = {};
-    for (const providerId of ["gemini", "groq", "mistral"] as AIProviderId[]) {
-      await hydrate(providerId);
-      result[providerId] = providerId === "gemini" ? apiKeyPoolService.getSummary() : aiProviderKeyPoolService.getSummary(providerId);
+    const providers = (await aiProviderRegistryService.list()).map((provider) => provider.id);
+    for (const providerId of providers) {
+      try {
+        await hydrate(providerId);
+        result[providerId] = LEGACY_GEMINI.has(providerId) ? apiKeyPoolService.getSummary() : aiProviderKeyPoolService.getSummary(providerId);
+      } catch (error) {
+        result[providerId] = { provider: providerId, totalKeys: 0, healthyKeys: 0, inCooldownKeys: 0, disabledKeys: 0, invalidKeys: 0, keys: [], error: error instanceof Error ? error.message : String(error) };
+      }
     }
     res.json({ providers: result });
   } catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); }

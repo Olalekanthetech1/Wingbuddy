@@ -1,4 +1,4 @@
-export type AIProviderId = "gemini" | "groq" | "mistral" | "huggingface";
+export type AIProviderId = "gemini" | "groq" | "mistral" | "huggingface" | "nvidia";
 
 export type AIProviderCapability =
   | "chat"
