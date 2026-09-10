@@ -1,7 +1,7 @@
 import { MODES, type Capability, type ModeKey } from "../config/mode";
 import { ModeService } from "./mode.service";
 import { logger } from "../lib/logger";
-import { semanticInteractionCache, type SemanticInteractionDecision } from "./semantic-interaction-cache.service";
+import { semanticInteractionCache, type SemanticInteractionDecision, type PromptType, type RequestExecutionProfile } from "./semantic-interaction-cache.service";
 
 export interface ExecutionPlan {
   persistentMode: ModeKey;
@@ -18,6 +18,9 @@ export interface ExecutionPlan {
     | "writing"
     | "brainstorming"
     | "general";
+  promptTypes: PromptType[];
+  primaryPromptType: PromptType;
+  executionProfile: RequestExecutionProfile;
   requiredCapabilities: Capability[];
   enableSearch: boolean;
   thinkingLevel?: "LOW" | "MEDIUM" | "HIGH";
@@ -97,6 +100,9 @@ export class ExecutionPlannerService {
       effectiveMode,
       turnModeOverride: semanticOverride,
       detectedIntent,
+      promptTypes: semantic.promptTypes,
+      primaryPromptType: semantic.primaryPromptType,
+      executionProfile: semantic.executionProfile,
       requiredCapabilities: Array.from(capabilities),
       enableSearch,
       thinkingLevel: semantic.thinkingLevel,
@@ -111,6 +117,9 @@ export class ExecutionPlannerService {
       persistentMode,
       effectiveMode: plan.effectiveMode,
       detectedIntent: plan.detectedIntent,
+      promptTypes: plan.promptTypes,
+      primaryPromptType: plan.primaryPromptType,
+      executionProfile: plan.executionProfile,
       requiredCapabilities: plan.requiredCapabilities,
       enableSearch: plan.enableSearch,
       thinkingLevel: plan.thinkingLevel,
@@ -123,9 +132,11 @@ export class ExecutionPlannerService {
 
   private failSafeDecision(mode: ModeKey): SemanticInteractionDecision {
     const resolvedMode = mode === "auto" ? "general" : mode;
-    const profile = MODES[resolvedMode] || MODES.general;
     return {
       intent: "general",
+      promptTypes: ["DIRECT_COMMAND"],
+      primaryPromptType: "DIRECT_COMMAND",
+      executionProfile: "unknown",
       effectiveMode: resolvedMode,
       requiredCapabilities: [],
       enableSearch: false,
@@ -134,6 +145,8 @@ export class ExecutionPlannerService {
       isGreeting: false,
       complexity: "simple",
       confidence: 0,
+      taskIntent: "NO_TASK",
+      conversationOperation: "new_request",
     };
   }
 }
