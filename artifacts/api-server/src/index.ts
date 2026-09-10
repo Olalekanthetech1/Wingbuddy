@@ -12,6 +12,7 @@ import { aiProviderRegistryService } from "./services/ai-provider-registry.servi
 import { unifiedModelRegistryService } from "./services/unified-model-registry.service";
 import { adaptiveAIRouterService } from "./services/adaptive-ai-router.service";
 import { aiObservabilityService } from "./services/ai-observability.service";
+import { proactiveAssistantService } from "./services/proactive-assistant.service";
 
 const port = 3000;
 let startupStateReady = false;
@@ -28,6 +29,7 @@ const server = app.listen(port, "0.0.0.0", async () => {
     await apiKeyPoolService.hydrateFromDatabase();
     await runtimeBehaviorConfigService.initialize();
     await aiObservabilityService.initialize();
+    await proactiveAssistantService.initialize();
     const providers = await aiProviderRegistryService.list();
     const registeredModels = await modelRegistryService.list();
     const unifiedModels = await unifiedModelRegistryService.initialize();
