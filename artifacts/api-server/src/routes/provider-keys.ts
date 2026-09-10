@@ -4,10 +4,11 @@ import { aiModelCatalogService } from "../services/ai-model-catalog.service";
 import { aiProviderRegistryService } from "../services/ai-provider-registry.service";
 import { aiProviderKeyPoolService, type ProviderKeyRotationMode } from "../services/ai-provider-key-pool.service";
 import { apiKeyPoolService } from "../services/api-key-pool.service";
+import { huggingFaceMediaService } from "../services/huggingface-media.service";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
-const PROVIDERS = new Set<AIProviderId>(["gemini", "groq", "mistral"]);
+const PROVIDERS = new Set<AIProviderId>(["gemini", "groq", "mistral", "huggingface"]);
 function providerOf(value: unknown): AIProviderId { const normalized = String(value || "").trim().toLowerCase() as AIProviderId; if (!PROVIDERS.has(normalized)) throw new Error("Unsupported provider"); return normalized; }
 
 async function hydrate(providerId: AIProviderId) {
@@ -32,25 +33,26 @@ router.post("/provider-keys", async (req: Request, res: Response) => {
     if (!model) { res.status(400).json({ error: "Missing required field 'model' for key validation" }); return; }
     const provider = await aiProviderRegistryService.get(providerId);
 
-    // A first valid key is the evidence needed to activate an otherwise unconfigured provider.
-    // Do not reject onboarding merely because the registry currently has enabled=false.
     const catalog = await aiModelCatalogService.listWithKey(providerId, key);
     if (!catalog.some((entry) => entry.modelId === model)) {
       res.status(400).json({ error: `Model ${providerId}/${model} was not returned by the provider for this API key`, availableModels: catalog.map((entry) => ({ modelId: entry.modelId, name: entry.name })) });
       return;
     }
 
-    const adapter = aiProviderRegistryService.getAdapter(provider.adapter);
-    const validation = await adapter.test(model, provider, key);
+    let validation: { ok: boolean; latencyMs: number; error?: string };
+    if (providerId === "huggingface") {
+      const selected = catalog.find((entry) => entry.modelId === model)!;
+      const mediaValidation = await huggingFaceMediaService.testModelWithKey({ modelId: selected.modelId, capabilities: selected.capabilities }, key);
+      validation = { ok: mediaValidation.ok, latencyMs: mediaValidation.latencyMs, error: mediaValidation.error };
+    } else {
+      const adapter = aiProviderRegistryService.getAdapter(provider.adapter);
+      validation = await adapter.test(model, provider, key);
+    }
     if (!validation.ok) { res.status(400).json({ error: validation.error || "Provider API key validation failed", validation }); return; }
 
     const saved = providerId === "gemini" ? await apiKeyPoolService.addKey(key, name) : await aiProviderKeyPoolService.addKey(providerId, key, name);
 
-    // Successful validation activates the provider so it becomes usable and visible to
-    // the Dashboard model registry. The user can explicitly disable it afterward.
-    if (!provider.enabled) {
-      await aiProviderRegistryService.update(providerId, { enabled: true });
-    }
+    if (!provider.enabled) await aiProviderRegistryService.update(providerId, { enabled: true });
 
     if (providerId === "gemini") { await apiKeyPoolService.reloadFromDatabase(); aiModelCatalogService.invalidate(providerId); }
     else { await aiProviderKeyPoolService.hydrateProvider(providerId, provider.apiKeyEnv, true); aiModelCatalogService.invalidate(providerId); }
@@ -91,7 +93,7 @@ router.post("/provider-keys/mode", async (req: Request, res: Response) => {
 router.get("/provider-keys/summary/all", async (_req: Request, res: Response) => {
   try {
     const result: Record<string, unknown> = {};
-    for (const providerId of ["gemini", "groq", "mistral"] as AIProviderId[]) {
+    for (const providerId of ["gemini", "groq", "mistral", "huggingface"] as AIProviderId[]) {
       await hydrate(providerId);
       result[providerId] = providerId === "gemini" ? apiKeyPoolService.getSummary() : aiProviderKeyPoolService.getSummary(providerId);
     }
