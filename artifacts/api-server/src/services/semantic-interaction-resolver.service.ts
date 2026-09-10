@@ -113,6 +113,8 @@ function jsonOnlyPrompt(
     "- CONSTRAINT_DRIVEN: explicit output, length, format, style, scope, timing, or other constraints materially shape the requested result.",
     "A request may have multiple promptTypes; choose the most informative primaryPromptType rather than forcing a single label.",
     "ZERO_SHOT is a secondary structural label: use it when the user asks for a task without demonstrations, especially when there is no contextual example guidance. Do not label ordinary greetings as ZERO_SHOT.",
+    "Artifact follow-up semantics: when recent conversation contains a [MEDIA_ARTIFACT] record and the current request asks to retrieve, share, provide, show, inspect, or identify information about that already-created artifact, classify the operation as answer_about_artifact rather than generating a new artifact. A request for a previously generated asset's public URL is retrieval, not image_generation or video_generation.",
+    "When conversationOperation is answer_about_artifact, use a conversational execution profile and do not select image_generation or video_generation as the intent merely because the referenced artifact is media.",
     "Execution semantics:",
     "- conversational: answer in the current conversation without durable orchestration.",
     "- one_shot: complete one bounded operation now, including immediate image/video/search/reasoning work, without persistent task state unless explicitly requested.",
@@ -134,7 +136,7 @@ function jsonOnlyPrompt(
 
 function sanitizeDecision(raw: unknown, fallbackMode: ModeKey): SemanticInteractionDecision {
   const data = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-  const intent = INTENTS.includes(data.intent as (typeof INTENTS)[number])
+  const rawIntent = INTENTS.includes(data.intent as (typeof INTENTS)[number])
     ? data.intent as SemanticInteractionDecision["intent"]
     : "general";
   const promptTypes = Array.isArray(data.promptTypes)
@@ -144,6 +146,11 @@ function sanitizeDecision(raw: unknown, fallbackMode: ModeKey): SemanticInteract
   const primaryPromptType = typeof data.primaryPromptType === "string" && PROMPT_TYPES.includes(data.primaryPromptType as PromptType)
     ? data.primaryPromptType as PromptType
     : normalizedPromptTypes[0];
+  const rawConversationOperation = typeof data.conversationOperation === "string" && data.conversationOperation.trim()
+    ? data.conversationOperation.trim()
+    : "new_request";
+  const artifactFollowUp = rawConversationOperation === "answer_about_artifact";
+  const intent = artifactFollowUp ? "general" : rawIntent;
   const executionProfile = typeof data.executionProfile === "string" && EXECUTION_PROFILES.includes(data.executionProfile as RequestExecutionProfile)
     ? data.executionProfile as RequestExecutionProfile
     : (intent === "greeting" ? "conversational" : "unknown");
@@ -174,7 +181,7 @@ function sanitizeDecision(raw: unknown, fallbackMode: ModeKey): SemanticInteract
     : "NO_TASK";
   const taskTitle = typeof data.taskTitle === "string" && data.taskTitle.trim() ? data.taskTitle.trim().slice(0, 500) : undefined;
   const taskGoal = typeof data.taskGoal === "string" && data.taskGoal.trim() ? data.taskGoal.trim().slice(0, 2000) : undefined;
-  const taskIntent = candidateTaskIntent !== "NO_TASK" && taskTitle ? candidateTaskIntent : "NO_TASK";
+  const taskIntent = artifactFollowUp ? "NO_TASK" : (candidateTaskIntent !== "NO_TASK" && taskTitle ? candidateTaskIntent : "NO_TASK");
   const taskIdHint = Number.isInteger(Number(data.taskIdHint)) ? Number(data.taskIdHint) : undefined;
   const taskSteps = Array.isArray(data.taskSteps)
     ? data.taskSteps.filter((step): step is string => typeof step === "string" && step.trim().length > 0).map((step) => step.trim()).slice(0, 20)
@@ -194,11 +201,13 @@ function sanitizeDecision(raw: unknown, fallbackMode: ModeKey): SemanticInteract
       : Array.from(new Set([...normalizedPromptTypes, "ZERO_SHOT" as PromptType]));
 
   const resolvedExecutionProfile: RequestExecutionProfile =
-    isGreeting || isModeSwitch || executionProfile === "conversational"
+    artifactFollowUp
       ? "conversational"
-      : taskIntent !== "NO_TASK"
-        ? "durable"
-        : executionProfile;
+      : isGreeting || isModeSwitch || executionProfile === "conversational"
+        ? "conversational"
+        : taskIntent !== "NO_TASK"
+          ? "durable"
+          : executionProfile;
 
   return {
     intent,
@@ -207,7 +216,7 @@ function sanitizeDecision(raw: unknown, fallbackMode: ModeKey): SemanticInteract
     executionProfile: resolvedExecutionProfile,
     effectiveMode,
     requiredCapabilities: Array.from(new Set(requiredCapabilities)),
-    enableSearch,
+    enableSearch: artifactFollowUp ? false : enableSearch,
     thinkingLevel,
     isModeSwitch,
     requestedMode,
@@ -220,10 +229,8 @@ function sanitizeDecision(raw: unknown, fallbackMode: ModeKey): SemanticInteract
     taskGoal: taskIntent === "NO_TASK" ? undefined : taskGoal,
     taskIdHint: taskIntent === "NO_TASK" ? undefined : taskIdHint,
     taskSteps: taskIntent === "NO_TASK" ? undefined : taskSteps,
-    durabilityEvidence,
-    conversationOperation: typeof data.conversationOperation === "string" && data.conversationOperation.trim()
-      ? data.conversationOperation.trim()
-      : "new_request",
+    durabilityEvidence: artifactFollowUp ? [] : durabilityEvidence,
+    conversationOperation: rawConversationOperation,
     conversationTargetHistoryIndices,
     unresolvedReference: typeof data.unresolvedReference === "string" && data.unresolvedReference.trim()
       ? data.unresolvedReference.trim().slice(0, 1000)
@@ -272,7 +279,7 @@ export class SemanticInteractionResolverService {
       const parsed = JSON.parse(cleaned);
       const decision = sanitizeDecision(parsed, params.persistentMode);
       semanticInteractionCache.set(params.text, params.persistentMode, history, decision);
-      logger.info({ intent: decision.intent, promptTypes: decision.promptTypes, primaryPromptType: decision.primaryPromptType, executionProfile: decision.executionProfile, complexity: decision.complexity, confidence: decision.confidence, durabilityEvidence: decision.durabilityEvidence }, "PROMPT_INTENT_PROFILE_RESOLVED");
+      logger.info({ intent: decision.intent, promptTypes: decision.promptTypes, primaryPromptType: decision.primaryPromptType, executionProfile: decision.executionProfile, complexity: decision.complexity, confidence: decision.confidence, durabilityEvidence: decision.durabilityEvidence, conversationOperation: decision.conversationOperation }, "PROMPT_INTENT_PROFILE_RESOLVED");
       return decision;
     } catch (error) {
       logger.warn(
