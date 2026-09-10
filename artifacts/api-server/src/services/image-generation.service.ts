@@ -3,6 +3,7 @@ import type { GeminiService } from "../gemini/gemini.service";
 import { aiProviderGatewayService } from "./ai-provider-gateway.service";
 import { cloudinaryMediaStorageService } from "./cloudinary-media-storage.service";
 import { huggingFaceCapabilityService } from "./huggingface-capability.service";
+import { mediaArtifactContextService } from "./media-artifact-context.service";
 
 export interface GeneratedImageResult {
   buffer: Buffer;
@@ -71,6 +72,16 @@ export class ImageGenerationService {
         logger.warn({ error: String(error), model: result.model }, "Cloudinary image storage failed; retaining generation source");
       }
     }
+
+    mediaArtifactContextService.remember({
+      type: "image",
+      prompt: originalPrompt,
+      publicUrl: deliveryUrl,
+      provider,
+      storageProvider,
+      publicId: cloudinaryPublicId,
+      model: result.model,
+    });
 
     return {
       buffer: result.buffer,
