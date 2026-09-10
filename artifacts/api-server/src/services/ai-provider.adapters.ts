@@ -39,19 +39,8 @@ class HuggingFaceAdapter implements AIProviderAdapter {
 
   private client(apiKey?: string): InferenceClient { return new InferenceClient(requireApiKey({ ...({ id: "huggingface", name: "Hugging Face", adapter: "huggingface", enabled: true, baseUrl: "https://huggingface.co", apiKeyEnv: "HF_TOKEN", capabilities: [], createdAt: "", updatedAt: "" } as AIProviderRecord), apiKeyEnv: "HF_TOKEN" }, apiKey)); }
 
-  async chat(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIChatResponse> {
-    const token = requireApiKey(provider, apiKey);
-    const client = new InferenceClient(token);
-    const response: any = await withTimeout(client.chatCompletion({ model: request.model, provider: "auto", messages: request.messages.map(asOpenAIMessage), ...(request.temperature !== undefined ? { temperature: request.temperature } : {}), ...(request.topP !== undefined ? { top_p: request.topP } : {}), ...(request.maxOutputTokens !== undefined ? { max_tokens: request.maxOutputTokens } : {}) } as any), 60_000, "Hugging Face chat");
-    return { provider: this.providerId, model: request.model, text: response.choices?.[0]?.message?.content || "", finishReason: response.choices?.[0]?.finish_reason, usage: normalizeUsage(response.usage), raw: response };
-  }
-
-  async *stream(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): AsyncGenerator<AIStreamChunk> {
-    const token = requireApiKey(provider, apiKey);
-    const client = new InferenceClient(token);
-    const stream: any = client.chatCompletionStream({ model: request.model, provider: "auto", messages: request.messages.map(asOpenAIMessage), ...(request.temperature !== undefined ? { temperature: request.temperature } : {}), ...(request.topP !== undefined ? { top_p: request.topP } : {}), ...(request.maxOutputTokens !== undefined ? { max_tokens: request.maxOutputTokens } : {}) } as any);
-    for await (const chunk of stream) { const choice = chunk?.choices?.[0]; const delta = typeof choice?.delta?.content === "string" ? choice.delta.content : ""; const finishReason = choice?.finish_reason; if (!delta && !finishReason) continue; yield { provider: this.providerId, model: request.model, delta, done: Boolean(finishReason), finishReason, usage: normalizeUsage(chunk?.usage) }; }
-  }
+  async chat(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIChatResponse> { const token = requireApiKey(provider, apiKey); const client = new InferenceClient(token); const response: any = await withTimeout(client.chatCompletion({ model: request.model, provider: "auto", messages: request.messages.map(asOpenAIMessage), ...(request.temperature !== undefined ? { temperature: request.temperature } : {}), ...(request.topP !== undefined ? { top_p: request.topP } : {}), ...(request.maxOutputTokens !== undefined ? { max_tokens: request.maxOutputTokens } : {}) } as any), 60_000, "Hugging Face chat"); return { provider: this.providerId, model: request.model, text: response.choices?.[0]?.message?.content || "", finishReason: response.choices?.[0]?.finish_reason, usage: normalizeUsage(response.usage), raw: response }; }
+  async *stream(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): AsyncGenerator<AIStreamChunk> { const token = requireApiKey(provider, apiKey); const client = new InferenceClient(token); const stream: any = client.chatCompletionStream({ model: request.model, provider: "auto", messages: request.messages.map(asOpenAIMessage), ...(request.temperature !== undefined ? { temperature: request.temperature } : {}), ...(request.topP !== undefined ? { top_p: request.topP } : {}), ...(request.maxOutputTokens !== undefined ? { max_tokens: request.maxOutputTokens } : {}) } as any); for await (const chunk of stream) { const choice = chunk?.choices?.[0]; const delta = typeof choice?.delta?.content === "string" ? choice.delta.content : ""; const finishReason = choice?.finish_reason; if (!delta && !finishReason) continue; yield { provider: this.providerId, model: request.model, delta, done: Boolean(finishReason), finishReason, usage: normalizeUsage(chunk?.usage) }; } }
 
   async generateImage(request: AIImageGenerationRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIImageGenerationResponse> {
     const token = apiKey?.trim() || process.env.HF_TOKEN?.trim();
@@ -65,81 +54,42 @@ class HuggingFaceAdapter implements AIProviderAdapter {
         const controller = new AbortController();
         const image = await withTimeout(client.textToImage({ model, provider: "auto", inputs: request.prompt, parameters: { width, height } } as any, { outputType: "blob", signal: controller.signal } as any), 90_000, "Hugging Face image");
         const buffer = Buffer.from(await image.arrayBuffer());
-        if (buffer.length > 2000 && detectMime(buffer).startsWith("image/")) {
-          logger.info({ model, width, height, route: "inference_provider" }, "Hugging Face image generation succeeded");
-          return { provider: this.providerId, route: "inference_provider", model, buffer, mimeType: detectMime(buffer), fallbackUsed: false };
-        }
+        if (buffer.length > 2000 && detectMime(buffer).startsWith("image/")) { logger.info({ model, width, height, route: "inference_provider" }, "Hugging Face image generation succeeded"); return { provider: this.providerId, route: "inference_provider", model, buffer, mimeType: detectMime(buffer), fallbackUsed: false }; }
         throw new Error("Hugging Face returned an invalid image payload");
-      } catch (error) {
-        logger.warn({ model, error: String(error) }, "Hugging Face authenticated image route failed; switching to community fallback");
-      }
-    } else {
-      logger.info({ model }, "HF_TOKEN unavailable; using community image fallback");
-    }
-
+      } catch (error) { logger.warn({ model, error: String(error) }, "Hugging Face authenticated image route failed; switching to community fallback"); }
+    } else logger.info({ model }, "HF_TOKEN unavailable; using community image fallback");
     return this.generateImageViaCommunity(request, model);
   }
 
   private async generateImageViaCommunity(request: AIImageGenerationRequest, model: string): Promise<AIImageGenerationResponse> {
-    const seed = Math.floor(Math.random() * 1_000_000_000);
     const width = Number.isFinite(request.width) && request.width! > 0 ? Math.floor(request.width!) : 1024;
     const height = Number.isFinite(request.height) && request.height! > 0 ? Math.floor(request.height!) : 1024;
     const encoded = encodeURIComponent(request.prompt.slice(0, 1000));
-    const url = `https://image.pollinations.ai/prompt/${encoded}?width=${width}&height=${height}&model=flux&nologo=true&seed=${seed}`;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60_000);
-    try {
-      const response = await fetch(url, { signal: controller.signal, headers: { Accept: "image/jpeg,image/png,image/*", "User-Agent": "Wingbuddy/3.0" } });
-      if (!response.ok) throw new Error(`Community image endpoint returned HTTP ${response.status}`);
-      const buffer = Buffer.from(await response.arrayBuffer());
-      const mimeType = detectMime(buffer);
-      if (buffer.length < 2000 || !mimeType.startsWith("image/")) throw new Error("Community image endpoint returned invalid media");
-      logger.info({ model, route: "community", width, height }, "Hugging Face provider selected community image fallback");
-      return { provider: this.providerId, route: "community", model, buffer, mimeType, sourceUrl: url, fallbackUsed: true };
-    } finally { clearTimeout(timeout); }
+    const url = `https://image.pollinations.ai/prompt/${encoded}?width=${width}&height=${height}&model=flux&nologo=true&seed=${Math.floor(Math.random() * 2_000_000_000)}`;
+    const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 60_000);
+    try { const response = await fetch(url, { signal: controller.signal, headers: { Accept: "image/jpeg,image/png,image/*", "User-Agent": "Wingbuddy/3.0" } }); await requireOk(response, this.providerId); const buffer = Buffer.from(await response.arrayBuffer()); const mimeType = detectMime(buffer); if (buffer.length < 2000 || !mimeType.startsWith("image/")) throw new Error("Community image endpoint returned invalid media"); logger.info({ model, route: "community", width, height }, "Hugging Face provider selected community image fallback"); return { provider: this.providerId, route: "community", model, buffer, mimeType, sourceUrl: url, fallbackUsed: true }; } finally { clearTimeout(timeout); }
   }
 
   async generateVideo(request: AIVideoGenerationRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIVideoGenerationResponse> {
     const token = apiKey?.trim() || process.env.HF_TOKEN?.trim();
     if (!token) throw new Error("HF_TOKEN is not configured for video generation");
-    const model = request.model?.trim() || safeModel("HF_VIDEO_MODEL", "Wan-AI/Wan2.2-TI2V-5B");
+    const model = request.model?.trim() || process.env.HF_VIDEO_MODEL?.trim();
+    if (!model) throw new Error("No Hugging Face video model was resolved by the unified capability layer");
     const client = new InferenceClient(token);
     try {
       const video = await withTimeout(client.textToVideo({ model, provider: "auto", inputs: request.prompt } as any, { signal: new AbortController().signal } as any), 180_000, "Hugging Face video");
       const buffer = Buffer.from(await video.arrayBuffer());
       const mimeType = detectMime(buffer);
-      if (buffer.length > 2000 && mimeType.startsWith("video/")) {
-        logger.info({ model, route: "inference_provider" }, "Hugging Face video generation succeeded");
-        return { provider: this.providerId, route: "inference_provider", model, buffer, mimeType, fallbackUsed: false };
-      }
+      if (buffer.length > 2000 && mimeType.startsWith("video/")) { logger.info({ model, route: "inference_provider" }, "Hugging Face video generation succeeded"); return { provider: this.providerId, route: "inference_provider", model, buffer, mimeType, fallbackUsed: false }; }
       throw new Error("Hugging Face returned an invalid video payload");
-    } catch (error) {
-      logger.error({ model, error: String(error) }, "Hugging Face video generation attempt failed");
-      throw error instanceof Error ? error : new Error(String(error));
-    }
+    } catch (error) { logger.error({ model, error: String(error) }, "Hugging Face video generation attempt failed"); throw error instanceof Error ? error : new Error(String(error)); }
   }
 
   async test(model: string, provider: AIProviderRecord, apiKey?: string) { const started = Date.now(); try { await this.chat({ model, messages: [{ role: "user", content: "ping" }], maxOutputTokens: 4 }, provider, apiKey); return { ok: true, latencyMs: Date.now() - started }; } catch (error) { return { ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) }; } }
 
   async listModels(provider: AIProviderRecord, apiKey?: string): Promise<AIModelCatalogEntry[]> {
-    const token = apiKey?.trim() || process.env.HF_TOKEN?.trim();
-    const models = [
-      process.env.HF_TEXT_MODEL?.trim(),
-      process.env.HF_IMAGE_MODEL?.trim(),
-      process.env.HF_VIDEO_MODEL?.trim(),
-    ].filter((value): value is string => Boolean(value));
-    const unique = [...new Set(models)];
-    if (!token || !unique.length) return unique.map((modelId) => catalogEntry(this.providerId, modelId, modelId, "unknown", []));
-    try {
-      const response = await fetch("https://huggingface.co/api/models?inference_provider=all&limit=100", { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } });
-      if (!response.ok) throw new Error(`HF model discovery failed (${response.status})`);
-      const payload: any = await response.json();
-      const rows = Array.isArray(payload) ? payload : [];
-      return rows.filter((row: any) => typeof row?.id === "string").map((row: any) => catalogEntry(this.providerId, row.id, row.id, "active", normalizeCatalogCapabilities(row), Number(row?.config?.max_position_embeddings ?? NaN)));
-    } catch (error) {
-      logger.warn({ error: String(error) }, "Hugging Face model discovery failed; returning configured models");
-      return unique.map((modelId) => catalogEntry(this.providerId, modelId, modelId, "unknown", []));
-    }
+    const token = apiKey?.trim() || process.env.HF_TOKEN?.trim(); const models = [process.env.HF_TEXT_MODEL?.trim(), process.env.HF_IMAGE_MODEL?.trim(), process.env.HF_VIDEO_MODEL?.trim()].filter((value): value is string => Boolean(value)); const unique = [...new Set(models)]; if (!token || !unique.length) return unique.map((modelId) => catalogEntry(this.providerId, modelId, modelId, "unknown", []));
+    try { const response = await fetch("https://huggingface.co/api/models?inference_provider=all&limit=100", { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } }); await requireOk(response, this.providerId); const payload: any = await response.json(); const rows = Array.isArray(payload) ? payload : []; return rows.filter((row: any) => typeof row?.id === "string").map((row: any) => catalogEntry(this.providerId, row.id, row.id, "active", normalizeCatalogCapabilities(row), Number(row?.config?.max_position_embeddings ?? NaN))); } catch (error) { logger.warn({ error: String(error) }, "Hugging Face model discovery failed; returning configured models"); return unique.map((modelId) => catalogEntry(this.providerId, modelId, modelId, "unknown", [])); }
   }
 }
 
