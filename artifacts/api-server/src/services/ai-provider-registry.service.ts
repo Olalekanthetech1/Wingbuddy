@@ -2,6 +2,7 @@ import { db, systemSettingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logger } from "../lib/logger";
 import { aiProviderAdapters } from "./ai-provider.adapters";
+import { nvidiaProviderAdapter } from "./nvidia-provider.adapter";
 import { aiProviderKeyPoolService } from "./ai-provider-key-pool.service";
 import { apiKeyPoolService } from "./api-key-pool.service";
 import type { AIProviderCapability, AIProviderId, AIProviderRecord } from "./ai-provider.types";
@@ -12,6 +13,7 @@ const BUILT_IN_PROVIDERS: Record<AIProviderId, Omit<AIProviderRecord, "createdAt
   groq: { id: "groq", name: "Groq", adapter: "groq", baseUrl: "https://api.groq.com/openai/v1", apiKeyEnv: "GROQ_API_KEY", capabilities: ["chat", "streaming"] },
   mistral: { id: "mistral", name: "Mistral AI", adapter: "mistral", baseUrl: "https://api.mistral.ai", apiKeyEnv: "MISTRAL_API_KEY", capabilities: ["chat", "streaming"] },
   huggingface: { id: "huggingface", name: "Hugging Face", adapter: "huggingface", baseUrl: "https://huggingface.co", apiKeyEnv: "HF_TOKEN", capabilities: ["chat", "streaming", "image_generation", "video_generation"] },
+  nvidia: { id: "nvidia", name: "NVIDIA NIM", adapter: "nvidia", baseUrl: "https://integrate.api.nvidia.com/v1", apiKeyEnv: "NVIDIA_API_KEY", capabilities: ["chat", "streaming", "vision", "image_generation", "video_generation"] },
 };
 
 function normalize(value: unknown): AIProviderRecord[] {
@@ -56,6 +58,10 @@ export class AIProviderRegistryService {
   private cache: AIProviderRecord[] | null = null;
   private cacheAt = 0;
   private readonly cacheTtlMs = 5000;
+
+  private adapterFor(provider: AIProviderRecord): AIProviderRecord["adapter"] extends AIProviderId ? any : never {
+    return provider.id === "nvidia" ? nvidiaProviderAdapter : aiProviderAdapters[provider.adapter];
+  }
 
   private async read(): Promise<AIProviderRecord[]> {
     if (this.cache && Date.now() - this.cacheAt < this.cacheTtlMs) return this.cache;
@@ -108,7 +114,7 @@ export class AIProviderRegistryService {
         ...provider,
         capabilities: [...provider.capabilities],
         configured: provider.id === "huggingface" ? keyCount > 0 || Boolean(process.env.HF_TOKEN?.trim()) : keyCount > 0 || Boolean(process.env[provider.apiKeyEnv]?.trim()),
-        adapterAvailable: Boolean(aiProviderAdapters[provider.adapter]),
+        adapterAvailable: Boolean(this.adapterFor(provider)),
         keyCount,
       };
     }));
@@ -140,7 +146,7 @@ export class AIProviderRegistryService {
   async test(id: AIProviderId, model: string) {
     const provider = await this.get(id);
     if (!provider.enabled) throw new Error(`Provider ${id} is disabled`);
-    const adapter = aiProviderAdapters[provider.adapter];
+    const adapter = this.adapterFor(provider);
     if (!adapter) throw new Error(`No adapter is registered for provider ${id}`);
     try {
       if (provider.id === "gemini") {
@@ -166,7 +172,7 @@ export class AIProviderRegistryService {
   }
 
   getAdapter(id: AIProviderId) {
-    const adapter = aiProviderAdapters[id];
+    const adapter = id === "nvidia" ? nvidiaProviderAdapter : aiProviderAdapters[id];
     if (!adapter) throw new Error(`No adapter is registered for provider ${id}`);
     return adapter;
   }
