@@ -2,6 +2,7 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { safeErrorMetadata } from "../utils/safe-error";
 import { logger } from "../lib/logger";
 import { cloudinaryMediaAdminService } from "../services/cloudinary-media-admin.service";
+import { db, systemSettingsTable } from "@workspace/db";
 
 const router: IRouter = Router();
 
@@ -100,9 +101,12 @@ router.post("/dashboard/media-storage/save", async (req: Request, res: Response)
     if (cloudinaryUrl && apiKey) updates.CLOUDINARY_API_KEY = apiKey;
     if (cloudinaryUrl && apiSecret) updates.CLOUDINARY_API_SECRET = apiSecret;
 
-    for (const [key, value] of Object.entries(updates)) process.env[key] = value;
+    for (const [key, value] of Object.entries(updates)) {
+      process.env[key] = value;
+      await db.insert(systemSettingsTable).values({ key, value, updatedAt: new Date() }).onConflictDoUpdate({ target: systemSettingsTable.key, set: { value, updatedAt: new Date() } });
+    }
 
-    res.json({ ok: true, message: "Cloudinary credentials validated and loaded into the runtime", cloudName: test.cloudName || cloudName });
+    res.json({ ok: true, message: "Cloudinary credentials validated and persisted to the database", cloudName: test.cloudName || cloudName });
   } catch (error) {
     logger.error({ error: safeErrorMetadata(error) }, "Cloudinary credential save failed");
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : String(error) });
