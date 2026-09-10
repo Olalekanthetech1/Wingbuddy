@@ -10,8 +10,8 @@ export interface GeneratedVideoResult {
   url: string;
   originalPrompt: string;
   enhancedPrompt: string;
-  provider: "huggingface" | "community";
-  route?: "inference_provider" | "community";
+  provider: "huggingface";
+  route?: "inference_provider";
   model?: string;
   fallbackUsed?: boolean;
   isVideo: boolean;
@@ -33,34 +33,6 @@ function isPublicHttpsUrl(value: unknown): value is string {
   try { return new URL(value).protocol === "https:"; } catch { return false; }
 }
 
-function normalizeBaseUrl(value: string): string { return value.replace(/\/+$/, ""); }
-
-function communityApiKey(): string | undefined {
-  return process.env.POLLINATIONS_API_KEY?.trim() || process.env.COMMUNITY_VIDEO_API_KEY?.trim() || undefined;
-}
-
-interface CommunityVideoModel {
-  id: string;
-  outputModalities?: string[];
-  paidOnly?: boolean;
-}
-
-function parseCommunityVideoModels(payload: unknown): CommunityVideoModel[] {
-  const rows = Array.isArray(payload) ? payload : (payload && typeof payload === "object" && Array.isArray((payload as any).data) ? (payload as any).data : []);
-  return rows
-    .map((row: any) => {
-      const id = typeof row?.id === "string" ? row.id.trim() : "";
-      const outputModalities = Array.isArray(row?.outputModalities)
-        ? row.outputModalities.filter((value: unknown): value is string => typeof value === "string")
-        : Array.isArray(row?.output_modalities)
-          ? row.output_modalities.filter((value: unknown): value is string => typeof value === "string")
-          : [];
-      if (!id) return null;
-      return { id, outputModalities, paidOnly: row?.paid_only === true || row?.paidOnly === true } satisfies CommunityVideoModel;
-    })
-    .filter((row): row is CommunityVideoModel => Boolean(row));
-}
-
 export class VideoGenerationService {
   static async enhanceVideoPrompt(rawPrompt: string, geminiService?: GeminiService): Promise<string> {
     const cleaned = rawPrompt.trim();
@@ -79,90 +51,28 @@ export class VideoGenerationService {
     }
   }
 
-  private static async resolveCommunityVideoModel(apiKey: string): Promise<string> {
-    const explicitlyConfigured = process.env.COMMUNITY_VIDEO_MODEL?.trim();
-    const baseUrl = normalizeBaseUrl(process.env.POLLINATIONS_BASE_URL?.trim() || "https://gen.pollinations.ai");
-    const response = await fetch(`${baseUrl}/image/models`, {
-      headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
-    });
-    if (!response.ok) throw new Error(`Community video model discovery failed (${response.status})`);
-    const models = parseCommunityVideoModels(await response.json());
-    const videoModels = models.filter((model) => model.outputModalities.some((value) => value.toLowerCase() === "video") && !model.paidOnly);
-    if (explicitlyConfigured) {
-      const match = models.find((model) => model.id === explicitlyConfigured && model.outputModalities.some((value) => value.toLowerCase() === "video"));
-      if (!match) throw new Error(`Configured community video model '${explicitlyConfigured}' is not currently available for video generation`);
-      return match.id;
-    }
-    const selected = videoModels[0];
-    if (!selected) throw new Error("No currently available non-paid community video model was advertised by the provider");
-    return selected.id;
-  }
-
-  private static async generateCommunityVideo(prompt: string): Promise<{ buffer: Buffer; model: string; sourceUrl: string; mimeType: string }> {
-    const apiKey = communityApiKey();
-    if (!apiKey) throw new Error("Community video fallback is not configured; set POLLINATIONS_API_KEY or COMMUNITY_VIDEO_API_KEY");
-
-    const baseUrl = normalizeBaseUrl(process.env.POLLINATIONS_BASE_URL?.trim() || "https://gen.pollinations.ai");
-    const model = await this.resolveCommunityVideoModel(apiKey);
-    const durationRaw = Number(process.env.COMMUNITY_VIDEO_DURATION_SECONDS || 4);
-    const duration = Number.isFinite(durationRaw) && durationRaw >= 1 ? Math.min(120, Math.floor(durationRaw)) : 4;
-    const aspectRatio = /^\d+:\d+$/.test(process.env.COMMUNITY_VIDEO_ASPECT_RATIO?.trim() || "")
-      ? process.env.COMMUNITY_VIDEO_ASPECT_RATIO!.trim()
-      : "16:9";
-    const url = new URL(`${baseUrl}/video/${encodeURIComponent(prompt.slice(0, 1800))}`);
-    url.searchParams.set("model", model);
-    url.searchParams.set("duration", String(duration));
-    url.searchParams.set("aspectRatio", aspectRatio);
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 180_000);
-    try {
-      const response = await fetch(url, {
-        signal: controller.signal,
-        headers: { Accept: "video/mp4,video/webm,video/*", Authorization: `Bearer ${apiKey}`, "User-Agent": "Wingbuddy/3.0" },
-      });
-      if (!response.ok) {
-        const body = await response.text().catch(() => "");
-        throw new Error(`Community video endpoint returned HTTP ${response.status}${body ? `: ${body.slice(0, 500)}` : ""}`);
-      }
-      const buffer = Buffer.from(await response.arrayBuffer());
-      const media = detectMediaType(buffer);
-      if (!media.isVideo || buffer.length <= 2000) throw new Error("Community video endpoint returned an invalid video payload");
-      logger.info({ model, route: "community", duration, aspectRatio }, "Community video generation succeeded");
-      return { buffer, model, sourceUrl: url.toString(), mimeType: media.mimeType };
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
   static async generate(rawPrompt: string, geminiService?: GeminiService): Promise<GeneratedVideoResult> {
     const originalPrompt = rawPrompt.trim();
     const enhancedPrompt = await this.enhanceVideoPrompt(originalPrompt, geminiService);
     const preferredModel = process.env.HF_VIDEO_MODEL?.trim() || undefined;
-    let capabilityError: unknown;
-    let capability: Awaited<ReturnType<typeof huggingFaceCapabilityService.resolveModel>> | undefined;
+    const capability = await huggingFaceCapabilityService.resolveModel("text-to-video", preferredModel);
 
-    try {
-      capability = await huggingFaceCapabilityService.resolveModel("text-to-video", preferredModel);
-    } catch (error) {
-      capabilityError = error;
-      logger.warn({ error: String(error) }, "Hugging Face video capability discovery unavailable; proceeding to community fallback");
-    }
-
-    const discoveredModels = capability?.candidates.map((candidate) => candidate.id).filter(Boolean) || [];
+    const discoveredModels = capability.candidates.map((candidate) => candidate.id).filter(Boolean);
     const orderedModels = [
-      ...(capability?.model ? [capability.model] : []),
+      capability.model,
       ...discoveredModels,
     ].filter((model, index, all) => Boolean(model) && all.indexOf(model) === index).slice(0, 6);
 
-    let lastError: unknown = capabilityError;
+    if (!orderedModels.length) throw new Error("No live Hugging Face text-to-video model is available");
+
+    let lastError: unknown;
     for (const model of orderedModels) {
       try {
-        logger.info({ originalPrompt, enhancedPrompt, model, discovered: capability?.discovered, preferredAvailable: capability?.preferredAvailable }, "Generating video through adaptive Hugging Face model selection");
+        logger.info({ originalPrompt, enhancedPrompt, model, discovered: capability.discovered, preferredAvailable: capability.preferredAvailable }, "Generating video through adaptive Hugging Face model selection");
         const execution = await aiProviderGatewayService.generateVideo("huggingface", {
           model,
           prompt: enhancedPrompt,
-          metadata: { originalPrompt, capabilityDiscovery: capability?.discovered ?? false, preferredModelAvailable: capability?.preferredAvailable ?? false },
+          metadata: { originalPrompt, capabilityDiscovery: capability.discovered, preferredModelAvailable: capability.preferredAvailable },
         });
         const result = execution.result;
         const media = detectMediaType(result.buffer);
@@ -204,52 +114,11 @@ export class VideoGenerationService {
         };
       } catch (error) {
         lastError = error;
-        logger.warn({ model, error: String(error) }, "Adaptive Hugging Face video model attempt failed; trying next candidate");
+        logger.warn({ model, error: String(error) }, "Adaptive Hugging Face video model attempt failed; trying next discovered candidate");
       }
     }
 
-    try {
-      const community = await this.generateCommunityVideo(enhancedPrompt);
-      if (!cloudinaryMediaStorageService.isConfigured()) {
-        throw new Error("Cloudinary is required to persist generated videos as public artifacts");
-      }
-      const uploaded = await cloudinaryMediaStorageService.uploadGeneratedMedia(community.buffer, {
-        resourceType: "video",
-        mimeType: community.mimeType,
-      });
-      if (!isPublicHttpsUrl(uploaded.secureUrl)) throw new Error("Cloudinary returned an invalid public community video URL");
-
-      mediaArtifactContextService.remember({
-        type: "video",
-        prompt: originalPrompt,
-        publicUrl: uploaded.secureUrl,
-        provider: "community",
-        storageProvider: "cloudinary",
-        publicId: uploaded.publicId,
-        model: community.model,
-      });
-
-      logger.info({ model: community.model, route: "community", storageProvider: "cloudinary", cloudinaryPublicId: uploaded.publicId, sourceUrl: community.sourceUrl }, "Community video fallback and persistence succeeded");
-      return {
-        buffer: community.buffer,
-        url: uploaded.secureUrl,
-        originalPrompt,
-        enhancedPrompt,
-        provider: "community",
-        route: "community",
-        model: community.model,
-        fallbackUsed: true,
-        isVideo: true,
-        mimeType: community.mimeType,
-        storageProvider: "cloudinary",
-        cloudinaryPublicId: uploaded.publicId,
-      };
-    } catch (communityError) {
-      lastError = communityError;
-      logger.error({ error: String(communityError), previousHuggingFaceError: String(capabilityError || "none") }, "Community video fallback failed; returning an honest generation failure");
-    }
-
-    throw new Error(`Video generation failed. Hugging Face attempts: ${orderedModels.length}; community fallback: unavailable or failed. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+    throw new Error(`Hugging Face video generation failed after ${orderedModels.length} adaptive model attempts. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
   }
 
   static extractVideoPrompt(rawText: string): string {
