@@ -12,7 +12,7 @@ function normalizeRoles(value: unknown): UnifiedModelRole[] {
 }
 
 function normalizeProvider(value: unknown): AIProviderId {
-  if (value === "groq" || value === "mistral") return value;
+  if (value === "gemini" || value === "groq" || value === "mistral" || value === "huggingface") return value;
   return "gemini";
 }
 
@@ -74,14 +74,19 @@ router.patch("/models/:id", async (req: Request, res: Response) => {
     const rawId = req.params.id; const id = Array.isArray(rawId) ? rawId[0] : rawId; const patch = req.body ?? {};
     const current = (await unifiedModelRegistryService.list()).find((model) => model.id === id);
     if (!current) { res.status(404).json({ error: "Model not found" }); return; }
-    const provider = patch.provider ? resolveProvider(patch.provider) : current.provider; const requestedModelId = typeof patch.modelId === "string" ? patch.modelId.trim() : current.modelId;
-    const catalog = await aiModelCatalogService.list(provider);
-    const selected = catalog.find((model) => model.modelId === requestedModelId);
-    if (!selected) { res.status(400).json({ error: `Model ${provider}/${requestedModelId} is not present in the provider's current model catalog` }); return; }
+    const provider = patch.provider ? resolveProvider(patch.provider) : current.provider;
+    const requestedModelId = typeof patch.modelId === "string" ? patch.modelId.trim() : current.modelId;
     const normalizedPatchRoles = Array.isArray(patch.roles) ? normalizeRoles(patch.roles) : undefined;
-    if (normalizedPatchRoles) validateRolesAgainstCatalog(normalizedPatchRoles, selected.capabilities);
-    const model = await unifiedModelRegistryService.update(id, { ...(patch.provider ? { provider } : {}), ...(typeof patch.modelId === "string" ? { modelId: requestedModelId } : {}), ...(typeof patch.name === "string" ? { name: patch.name } : {}), ...(typeof patch.enabled === "boolean" ? { enabled: patch.enabled } : {}), ...(typeof patch.priority === "number" ? { priority: patch.priority } : {}), ...(normalizedPatchRoles ? { roles: normalizedPatchRoles } : {}), ...({ capabilities: selected.capabilities }) });
-    res.json({ message: "Model updated and saved to PostgreSQL", model, catalog: selected });
+    const needsCatalogValidation = Boolean(patch.provider || typeof patch.modelId === "string" || normalizedPatchRoles);
+    let selected;
+    if (needsCatalogValidation) {
+      const catalog = await aiModelCatalogService.list(provider);
+      selected = catalog.find((model) => model.modelId === requestedModelId);
+      if (!selected) { res.status(400).json({ error: `Model ${provider}/${requestedModelId} is not present in the provider's current model catalog` }); return; }
+      if (normalizedPatchRoles) validateRolesAgainstCatalog(normalizedPatchRoles, selected.capabilities);
+    }
+    const model = await unifiedModelRegistryService.update(id, { ...(patch.provider ? { provider } : {}), ...(typeof patch.modelId === "string" ? { modelId: requestedModelId } : {}), ...(typeof patch.name === "string" ? { name: patch.name } : {}), ...(typeof patch.enabled === "boolean" ? { enabled: patch.enabled } : {}), ...(typeof patch.priority === "number" ? { priority: patch.priority } : {}), ...(normalizedPatchRoles ? { roles: normalizedPatchRoles } : {}), ...(selected ? { capabilities: selected.capabilities } : {}) });
+    res.json({ message: "Model updated and saved to PostgreSQL", model, ...(selected ? { catalog: selected } : {}) });
   } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
 });
 
