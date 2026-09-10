@@ -195,18 +195,26 @@ export class TaskService {
 
   /**
    * Natural-language task routing is owned by SemanticInteractionResolverService.
-   * A task is durable only when the semantic resolver indicates persistent work.
-   * One-shot image/video generation is treated as an immediate capability unless
-   * the classifier supplied concrete multi-step task data.
+   * A Task is only admitted when the request semantics require persistent state.
+   * Media generation is one-shot by default; constraints, ZERO_SHOT, MULTI_STEP
+   * structure and generated task steps are not sufficient evidence of durability.
    */
   detectTaskIntent(text: string, semantic?: SemanticInteractionDecision | null): TaskIntentResult {
     const decision = semantic || semanticInteractionCache.getLatestForText(text);
     if (!decision?.taskIntent || decision.taskIntent === "NO_TASK") return { intent: "NO_TASK" };
 
+    const durabilityEvidence = decision.durabilityEvidence ?? [];
     const oneShotMedia = decision.intent === "image_generation" || decision.intent === "video_generation";
-    const hasConcreteSteps = Array.isArray(decision.taskSteps) && decision.taskSteps.filter((step) => typeof step === "string" && step.trim()).length > 0;
-    if (decision.taskIntent === "NEW_TASK" && oneShotMedia && !hasConcreteSteps) {
-      logger.info({ intent: decision.intent, complexity: decision.complexity, confidence: decision.confidence, taskIntent: decision.taskIntent }, "TASK_CREATION_SUPPRESSED_FOR_ONE_SHOT_REQUEST");
+
+    if (oneShotMedia && decision.taskIntent === "NEW_TASK" && durabilityEvidence.length === 0) {
+      logger.info({
+        intent: decision.intent,
+        complexity: decision.complexity,
+        confidence: decision.confidence,
+        taskIntent: decision.taskIntent,
+        executionProfile: decision.executionProfile,
+        durabilityEvidence,
+      }, "TASK_CREATION_SUPPRESSED_FOR_ONE_SHOT_MEDIA");
       return { intent: "NO_TASK" };
     }
 
