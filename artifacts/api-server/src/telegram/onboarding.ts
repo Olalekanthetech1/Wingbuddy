@@ -101,14 +101,15 @@ function setupMigrationText(ctx: Context, personality: string, mode: string): st
   return `👋 <b>Welcome back, ${displayName(ctx)}!</b>\n\nWingbuddy has a new personalization setup. Your existing conversations, memories, personality, and mode are staying intact. Nothing will be reset.\n\n<b>Current setup</b>\n🎭 Personality: ${personality}\n🧠 Default mode: ${mode}\n\nYou can personalize the newer preferences now, or continue using Wingbuddy exactly as before.`;
 }
 
-async function renderStep(ctx: Context, step: OnboardingState["step"]): Promise<void> {
+async function renderStep(ctx: Context, deps: OnboardingDependencies, step: OnboardingState["step"]): Promise<void> {
   switch (step) {
     case "welcome":
       await ctx.reply(`👋 <b>Hey ${displayName(ctx)}!</b>\n\nI’m Wingbuddy. I can help you study, plan tasks, research, code, remember useful things, and handle everyday work.\n\nLet’s personalize your assistant first — it only takes a moment.`, { parse_mode: "HTML", reply_markup: welcomeKeyboard() });
       return;
     case "migration": {
-      const personality = await onboardingServiceMigrationPersonality(ctx);
-      const mode = await onboardingServiceMigrationMode(ctx);
+      const profile = await deps.conversations.getUserWithFullContext(ctx.from!.id);
+      const personality = typeof profile?.personality === "string" && isPersonalityKey(profile.personality) ? PERSONALITIES[profile.personality].label : "Current setting";
+      const mode = typeof profile?.mode === "string" && isModeKey(profile.mode) ? MODES[profile.mode].label : "Current setting";
       await ctx.reply(setupMigrationText(ctx, personality, mode), { parse_mode: "HTML", reply_markup: migrationKeyboard() });
       return;
     }
@@ -133,18 +134,6 @@ async function renderStep(ctx: Context, step: OnboardingState["step"]): Promise<
     case "ready":
       return;
   }
-}
-
-async function onboardingServiceMigrationPersonality(ctx: Context): Promise<string> {
-  const profile = ctx.from ? await (ctx as any).__wingbuddyMigrationConversations?.getUserWithFullContext?.(ctx.from.id) : null;
-  const value = profile?.personality;
-  return typeof value === "string" && isPersonalityKey(value) ? PERSONALITIES[value].label : "Current setting";
-}
-
-async function onboardingServiceMigrationMode(ctx: Context): Promise<string> {
-  const profile = ctx.from ? await (ctx as any).__wingbuddyMigrationConversations?.getUserWithFullContext?.(ctx.from.id) : null;
-  const value = profile?.mode;
-  return typeof value === "string" && isModeKey(value) ? MODES[value].label : "Current setting";
 }
 
 async function sendReadySummary(ctx: Context, deps: OnboardingDependencies, state: OnboardingState): Promise<void> {
@@ -174,7 +163,7 @@ export async function startOnboarding(ctx: Context, deps: OnboardingDependencies
     await ctx.reply(`👋 <b>Welcome back, ${displayName(ctx)}!</b>\n\nYour Wingbuddy setup is already configured. What are we working on today?`, { parse_mode: "HTML", reply_markup: mainOnboardingMenu() });
     return;
   }
-  await renderStep(ctx, state.step);
+  await renderStep(ctx, deps, state.step);
 }
 
 export function registerOnboardingHandlers(bot: Bot, deps: OnboardingDependencies): void {
@@ -201,7 +190,7 @@ export function registerOnboardingHandlers(bot: Bot, deps: OnboardingDependencie
   bot.callbackQuery("onboard:migrate:start", async (ctx) => {
     if (!ensure(ctx) || !ctx.from || !ctx.chat) return;
     await onboardingService.startLegacyMigration(ctx.from.id, ctx.chat.id);
-    const state = await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "proactivity" });
+    await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "proactivity", version: CURRENT_ONBOARDING_VERSION });
     await ctx.answerCallbackQuery({ text: "Personalization started" });
     await ctx.editMessageText("⚡ <b>Let’s personalize the new preferences</b>\n\nYour existing personality, default mode, conversations, tasks, reminders, and memories stay untouched.\n\nHow proactive should I be?", { parse_mode: "HTML", reply_markup: proactivityKeyboard() });
   });
@@ -285,7 +274,7 @@ export function registerOnboardingHandlers(bot: Bot, deps: OnboardingDependencie
       const state = await onboardingService.get(ctx.from.id);
       if (state) await sendReadySummary(ctx, deps, state);
     } else {
-      await renderStep(ctx, next[skipped]);
+      await renderStep(ctx, deps, next[skipped]);
     }
   });
 
@@ -306,7 +295,6 @@ export function registerOnboardingHandlers(bot: Bot, deps: OnboardingDependencie
       await ctx.reply("🌍 <b>What timezone should I use for your scheduled assistant features?</b>\n\nYou can change this later. Choose the closest option or keep the default.", { parse_mode: "HTML", reply_markup: timezoneKeyboard() });
       return;
     }
-    await renderStep(ctx, state.step);
-    return;
+    await renderStep(ctx, deps, state.step);
   });
 }
