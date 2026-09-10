@@ -9,6 +9,20 @@ export type SemanticTaskIntent =
   | "VIEW_TASKS"
   | "NO_TASK";
 
+export type PromptType =
+  | "DIRECT_COMMAND"
+  | "QUESTION"
+  | "CONTEXTUAL"
+  | "FEW_SHOT"
+  | "ZERO_SHOT"
+  | "REASONING"
+  | "ROLE_BASED"
+  | "CONVERSATIONAL"
+  | "MULTI_STEP"
+  | "CONSTRAINT_DRIVEN";
+
+export type RequestExecutionProfile = "conversational" | "one_shot" | "durable" | "clarification" | "unknown";
+
 export interface SemanticInteractionDecision {
   intent:
     | "greeting"
@@ -21,6 +35,9 @@ export interface SemanticInteractionDecision {
     | "writing"
     | "brainstorming"
     | "general";
+  promptTypes: PromptType[];
+  primaryPromptType: PromptType;
+  executionProfile: RequestExecutionProfile;
   effectiveMode?: "general" | "study" | "coder" | "deep_research" | "math" | "creative" | "auto";
   requiredCapabilities: string[];
   enableSearch: boolean;
@@ -115,12 +132,6 @@ class SemanticInteractionCacheService {
     return entry.decision;
   }
 
-  /**
-   * Compatibility lookup used by older adapters that do not yet carry the full turn key.
-   * Returns a result only when exactly one distinct semantic decision is valid for the text.
-   * This prevents a concurrent identical message from one user from leaking another user's
-   * mode/task decision through a process-local text-only cache.
-   */
   getLatestForText(text: string): SemanticInteractionDecision | undefined {
     const key = text.trim();
     const now = Date.now();
