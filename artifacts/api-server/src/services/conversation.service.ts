@@ -20,6 +20,15 @@ export interface TelegramUserProfile {
 }
 
 export class ConversationService {
+  async userExists(telegramUserId: number): Promise<boolean> {
+    const result = await db
+      .select({ id: usersTable.telegramUserId })
+      .from(usersTable)
+      .where(eq(usersTable.telegramUserId, telegramUserId))
+      .limit(1);
+    return result.length > 0;
+  }
+
   async upsertUser(user: TelegramUserProfile): Promise<void> {
     const now = new Date();
     await db
