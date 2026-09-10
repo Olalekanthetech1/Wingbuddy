@@ -10,14 +10,9 @@ function normalizeRoles(value: unknown): UnifiedModelRole[] {
   return value.filter((role): role is UnifiedModelRole => role === "primary" || role === "fast" || role === "reasoning" || role === "extraction" || role === "embedding");
 }
 
-function normalizeProvider(value: unknown): AIProviderId {
-  if (value === "groq" || value === "mistral") return value;
-  return "gemini";
-}
-
 function resolveProvider(value: unknown): AIProviderId {
   const provider = String(value || "").trim().toLowerCase();
-  if (provider === "gemini" || provider === "groq" || provider === "mistral") return provider;
+  if (provider === "gemini" || provider === "groq" || provider === "mistral" || provider === "huggingface") return provider;
   throw new Error(`Unsupported provider: ${provider || "unknown"}`);
 }
 
@@ -86,8 +81,9 @@ router.post("/models/test", async (req: Request, res: Response) => {
   try {
     const rawId = typeof req.body?.id === "string" ? req.body.id : "";
     if (rawId) { res.json(await unifiedModelRegistryService.test(rawId)); return; }
-    const modelId = typeof req.body?.modelId === "string" ? req.body.modelId.trim() : ""; const provider = normalizeProvider(req.body?.provider);
+    const modelId = typeof req.body?.modelId === "string" ? req.body.modelId.trim() : "";
     if (!modelId) { res.status(400).json({ error: "modelId is required" }); return; }
+    const provider = resolveProvider(req.body?.provider);
     const candidate = (await unifiedModelRegistryService.list()).find((model) => model.provider === provider && model.modelId === modelId);
     if (!candidate) { res.status(404).json({ error: `Model ${provider}/${modelId} is not registered` }); return; }
     res.json(await unifiedModelRegistryService.test(candidate.id));
