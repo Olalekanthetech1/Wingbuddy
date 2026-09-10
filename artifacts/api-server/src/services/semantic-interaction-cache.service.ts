@@ -53,6 +53,8 @@ export interface SemanticInteractionDecision {
   taskGoal?: string;
   taskIdHint?: number;
   taskSteps?: string[];
+  /** Semantic evidence that the user explicitly requires durable/persistent work. */
+  durabilityEvidence?: string[];
   conversationOperation?: string;
   conversationTargetHistoryIndices?: number[];
   unresolvedReference?: string;
