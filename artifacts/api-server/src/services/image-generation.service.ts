@@ -1,6 +1,7 @@
 import { logger } from "../lib/logger";
 import type { GeminiService } from "../gemini/gemini.service";
 import { aiProviderGatewayService } from "./ai-provider-gateway.service";
+import { cloudinaryMediaStorageService } from "./cloudinary-media-storage.service";
 import { huggingFaceCapabilityService } from "./huggingface-capability.service";
 
 export interface GeneratedImageResult {
@@ -12,6 +13,8 @@ export interface GeneratedImageResult {
   route?: "inference_provider" | "community";
   model?: string;
   fallbackUsed?: boolean;
+  storageProvider?: "cloudinary" | "source";
+  cloudinaryPublicId?: string;
 }
 
 export class ImageGenerationService {
@@ -51,15 +54,35 @@ export class ImageGenerationService {
     const result = execution.result;
     const provider = result.route === "community" ? "community" : "huggingface";
 
+    let deliveryUrl = result.sourceUrl || `huggingface://image/${encodeURIComponent(result.model)}`;
+    let storageProvider: GeneratedImageResult["storageProvider"] = "source";
+    let cloudinaryPublicId: string | undefined;
+
+    if (cloudinaryMediaStorageService.isConfigured()) {
+      try {
+        const uploaded = await cloudinaryMediaStorageService.uploadGeneratedMedia(result.buffer, {
+          resourceType: "image",
+          mimeType: "image/png",
+        });
+        deliveryUrl = uploaded.secureUrl;
+        storageProvider = "cloudinary";
+        cloudinaryPublicId = uploaded.publicId;
+      } catch (error) {
+        logger.warn({ error: String(error), model: result.model }, "Cloudinary image storage failed; retaining generation source");
+      }
+    }
+
     return {
       buffer: result.buffer,
-      url: result.sourceUrl || `huggingface://image/${encodeURIComponent(result.model)}`,
+      url: deliveryUrl,
       originalPrompt,
       enhancedPrompt,
       provider,
       route: result.route,
       model: result.model,
       fallbackUsed: result.fallbackUsed,
+      storageProvider,
+      cloudinaryPublicId,
     };
   }
 
