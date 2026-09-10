@@ -146,10 +146,21 @@ export class GlobalContextService {
       "Use the user's name naturally when it improves warmth, clarity, or personalization. Never invent or repeatedly insert a name.",
     ].join("\n");
     const temporalInstruction = TemporalContextService.buildPromptInstruction(temporalContext);
+    const greetingInstruction = semanticInteraction?.isGreeting
+      ? [
+          "[GREETING BEHAVIOR]",
+          "Treat this turn as live conversation, not a command to execute.",
+          "Respond warmly and naturally in one or two sentences, then create a natural opening for the user to continue the conversation.",
+          "Use available context or the user's name only when it genuinely improves the interaction.",
+          "Do not reply with only a bare greeting, a name, or a generic acknowledgement.",
+          "Do not invent actions, tasks, memories, or capabilities the user did not request.",
+        ].join("\n")
+      : undefined;
     const promptInstruction = [
       promptInstructionBase,
       identityInstruction,
       temporalInstruction,
+      greetingInstruction,
       "[MEMORY SILENCE POLICY] Persistent memory is background context, not response content. Never mention, enumerate, expose, or narrate stored memories, memory keys, personalization, or the fact that something was remembered unless the user explicitly asks what you remember, asks to inspect/manage memories, or otherwise makes memory itself the subject of the request.",
     ].filter(Boolean).join("\n\n");
 
