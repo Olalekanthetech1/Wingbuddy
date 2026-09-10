@@ -1,4 +1,4 @@
-import type { ModeKey } from "../config/mode";
+import { MODES, type ModeKey } from "../config/mode";
 
 export interface AdaptiveStartExperienceInput {
   displayName: string;
@@ -38,9 +38,9 @@ function getDayPart(hour: number): DayPart {
 
 function getGreeting(dayPart: DayPart, isReturningUser: boolean, displayName: string): string {
   const name = escapeHtml(displayName);
-  if (dayPart === "morning") return `Good morning, ${name}! ☀️`;
+  if (dayPart === "morning") return `${isReturningUser ? "Good morning" : "Good morning"}, ${name}! ☀️`;
   if (dayPart === "afternoon") return `${isReturningUser ? "Welcome back" : "Good afternoon"}, ${name}! 🌤️`;
-  if (dayPart === "evening") return `Good evening, ${name}! 🌆`;
+  if (dayPart === "evening") return `${isReturningUser ? "Welcome back" : "Good evening"}, ${name}! 🌆`;
   return `${isReturningUser ? "Still up" : "Hey"}, ${name}? 🌙`;
 }
 
@@ -56,34 +56,26 @@ function formatLocalTime(date: Date, timezone: string): string {
   }
 }
 
-function formatLocalDate(date: Date, timezone: string): string {
+function getLocalHour(date: Date, timezone: string): number {
   try {
-    return new Intl.DateTimeFormat("en-US", {
+    const hourParts = new Intl.DateTimeFormat("en-US", {
       timeZone: timezone,
-      weekday: "long",
-      month: "short",
-      day: "numeric",
-    }).format(date);
+      hour: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(date);
+    const hour = Number(hourParts.find((part) => part.type === "hour")?.value ?? 12);
+    return Number.isFinite(hour) ? hour : 12;
   } catch {
-    return date.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+    return date.getHours();
   }
 }
 
 export class AdaptiveStartExperienceService {
   build(input: AdaptiveStartExperienceInput): string {
     const now = input.now ?? new Date();
-    let localHour = 12;
-    try {
-      const hourParts = new Intl.DateTimeFormat("en-US", { timeZone: input.timezone, hour: "2-digit", hourCycle: "h23" })
-        .formatToParts(now);
-      localHour = Number(hourParts.find((part) => part.type === "hour")?.value ?? 12);
-      if (!Number.isFinite(localHour)) localHour = 12;
-    } catch {
-      localHour = now.getHours();
-    }
-
-    const dayPart = getDayPart(localHour);
+    const dayPart = getDayPart(getLocalHour(now, input.timezone));
     const presentation = MODE_PRESENTATION[input.mode] ?? MODE_PRESENTATION.general;
+    const modeLabel = MODES[input.mode]?.label ?? MODES.general.label;
     const stateLines: string[] = [];
 
     if (input.activeTaskCount > 0) {
@@ -91,12 +83,10 @@ export class AdaptiveStartExperienceService {
     }
 
     if (input.activeReminderCount > 0) {
-      if (input.nextReminderDueAt) {
-        const due = formatLocalTime(input.nextReminderDueAt, input.timezone);
-        stateLines.push(`⏰ Next reminder: <b>${escapeHtml(due)}</b>`);
-      } else {
-        stateLines.push(`⏰ <b>${input.activeReminderCount}</b> reminder${input.activeReminderCount === 1 ? "" : "s"} scheduled.`);
-      }
+      const due = input.nextReminderDueAt ? formatLocalTime(input.nextReminderDueAt, input.timezone) : null;
+      stateLines.push(due
+        ? `⏰ Next reminder: <b>${escapeHtml(due)}</b>`
+        : `⏰ <b>${input.activeReminderCount}</b> reminder${input.activeReminderCount === 1 ? "" : "s"} scheduled.`);
     }
 
     if (input.recentSessionAvailable && stateLines.length < 2) {
@@ -104,11 +94,9 @@ export class AdaptiveStartExperienceService {
     }
 
     const contextBlock = stateLines.length
-      ? `\n${stateLines.join("\n")}`
-      : "\n✨ Nothing urgent is waiting. Bring me whatever you have in mind.";
+      ? stateLines.join("\n")
+      : "✨ Nothing urgent is waiting. Bring me whatever you have in mind.";
 
-    const dayLabel = formatLocalDate(now, input.timezone);
-    const setupLine = `${presentation.emoji} <b>${escapeHtml(input.mode.replace(/^./, (char) => char.toUpperCase()))} focus:</b> ${escapeHtml(presentation.focus)}`;
     const footer = dayPart === "lateNight"
       ? "Keep it focused — I’m here. 🌙"
       : input.isReturningUser
@@ -117,9 +105,8 @@ export class AdaptiveStartExperienceService {
 
     return [
       `🪽 <b>${getGreeting(dayPart, input.isReturningUser, input.displayName)}</b>`,
-      `${escapeHtml(dayLabel)} • ${escapeHtml(formatLocalTime(now, input.timezone))}`,
       "",
-      setupLine,
+      `${presentation.emoji} <b>${escapeHtml(modeLabel)} focus:</b> ${escapeHtml(presentation.focus)}`,
       contextBlock,
       "",
       footer,
