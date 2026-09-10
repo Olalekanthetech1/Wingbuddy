@@ -10,6 +10,7 @@ import providersRouter from "./providers";
 import aiRoutingRouter from "./ai-routing";
 import simulatorRouter from "./simulator";
 import behaviorConfigRouter from "./behavior-config";
+import proactiveAssistantRouter from "./proactive-assistant";
 
 const router: IRouter = Router();
 
@@ -24,5 +25,6 @@ router.use(providersRouter);
 router.use(aiRoutingRouter);
 router.use(simulatorRouter);
 router.use(behaviorConfigRouter);
+router.use(proactiveAssistantRouter);
 
 export default router;
