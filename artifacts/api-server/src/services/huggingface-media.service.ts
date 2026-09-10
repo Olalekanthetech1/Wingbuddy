@@ -23,10 +23,10 @@ export interface HuggingFaceMediaTestResult {
   error?: string;
 }
 
-function requireToken(): string {
-  const token = process.env.HF_TOKEN?.trim();
-  if (!token) throw new Error("HF_TOKEN is not configured on the server");
-  return token;
+function requireToken(token?: string): string {
+  const value = token?.trim() || process.env.HF_TOKEN?.trim();
+  if (!value) throw new Error("HF_TOKEN is not configured on the server");
+  return value;
 }
 
 function detectImageMime(buffer: Buffer): string | undefined {
@@ -48,9 +48,9 @@ function errorMessage(error: unknown): string {
 }
 
 export class HuggingFaceMediaService {
-  async listModels(): Promise<AIModelCatalogEntry[]> {
-    const token = requireToken();
-    const headers = { Authorization: `Bearer ${token}`, Accept: "application/json" };
+  async listModels(token?: string): Promise<AIModelCatalogEntry[]> {
+    const accessToken = requireToken(token);
+    const headers = { Authorization: `Bearer ${accessToken}`, Accept: "application/json" };
     const tasks: Array<{ tag: HuggingFaceMediaTask; capability: "image_generation" | "video_generation" }> = [
       { tag: "text-to-image", capability: "image_generation" },
       { tag: "text-to-video", capability: "video_generation" },
@@ -177,7 +177,7 @@ export class HuggingFaceMediaService {
     try {
       const result = task === "text-to-image"
         ? await this.generateImage("production smoke test: a simple red apple on a clean white background", { model: model.modelId, width: 512, height: 512 })
-        : await this.generateVideo("production smoke test: a red ball rolling slowly across a clean white floor");
+        : await this.generateVideo("production smoke test: a red ball rolling slowly across a clean white floor", { model: model.modelId });
       return { ok: true, provider: "huggingface", model: model.modelId, task, latencyMs: Date.now() - started, mimeType: result.mimeType, sizeBytes: result.buffer.length };
     } catch (error) {
       logger.warn({ model: model.modelId, task, error: errorMessage(error) }, "Hugging Face media model smoke test failed");
