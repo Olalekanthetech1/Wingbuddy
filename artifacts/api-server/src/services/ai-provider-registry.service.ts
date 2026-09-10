@@ -4,6 +4,7 @@ import { logger } from "../lib/logger";
 import { aiProviderAdapters } from "./ai-provider.adapters";
 import { aiProviderKeyPoolService } from "./ai-provider-key-pool.service";
 import { apiKeyPoolService } from "./api-key-pool.service";
+import { huggingFaceMediaService } from "./huggingface-media.service";
 import type { AIProviderCapability, AIProviderId, AIProviderRecord } from "./ai-provider.types";
 
 const REGISTRY_KEY = "AI_PROVIDER_REGISTRY";
@@ -11,6 +12,7 @@ const BUILT_IN_PROVIDERS: Record<AIProviderId, Omit<AIProviderRecord, "createdAt
   gemini: { id: "gemini", name: "Google Gemini", adapter: "gemini", baseUrl: "https://generativelanguage.googleapis.com", apiKeyEnv: "GEMINI_API_KEY", capabilities: ["chat", "streaming", "vision", "reasoning", "long_context", "web_search"] },
   groq: { id: "groq", name: "Groq", adapter: "groq", baseUrl: "https://api.groq.com/openai/v1", apiKeyEnv: "GROQ_API_KEY", capabilities: ["chat", "streaming"] },
   mistral: { id: "mistral", name: "Mistral AI", adapter: "mistral", baseUrl: "https://api.mistral.ai", apiKeyEnv: "MISTRAL_API_KEY", capabilities: ["chat", "streaming"] },
+  huggingface: { id: "huggingface", name: "Hugging Face", adapter: "huggingface-media", baseUrl: "https://huggingface.co", apiKeyEnv: "HF_TOKEN", capabilities: ["image_generation", "video_generation"] },
 };
 
 function normalize(value: unknown): AIProviderRecord[] {
@@ -107,7 +109,7 @@ export class AIProviderRegistryService {
         ...provider,
         capabilities: [...provider.capabilities],
         configured: keyCount > 0 || Boolean(process.env[provider.apiKeyEnv]?.trim()),
-        adapterAvailable: Boolean(aiProviderAdapters[provider.adapter]),
+        adapterAvailable: provider.id === "huggingface" || Boolean(aiProviderAdapters[provider.adapter as keyof typeof aiProviderAdapters]),
         keyCount,
       };
     }));
@@ -139,7 +141,13 @@ export class AIProviderRegistryService {
   async test(id: AIProviderId, model: string) {
     const provider = await this.get(id);
     if (!provider.enabled) throw new Error(`Provider ${id} is disabled`);
-    const adapter = aiProviderAdapters[provider.adapter];
+    if (provider.id === "huggingface") {
+      const catalog = await huggingFaceMediaService.listModels();
+      const found = catalog.find((item) => item.modelId === model.trim());
+      if (!found) throw new Error(`Hugging Face model ${model.trim()} is not present in the live media catalog`);
+      return { ok: true, latencyMs: 0, capability: found.capabilities };
+    }
+    const adapter = aiProviderAdapters[provider.adapter as keyof typeof aiProviderAdapters];
     if (!adapter) throw new Error(`No adapter is registered for provider ${id}`);
     try {
       if (provider.id === "gemini") {
@@ -165,9 +173,9 @@ export class AIProviderRegistryService {
   }
 
   getAdapter(id: AIProviderId) {
-    const adapter = aiProviderAdapters[id];
-    if (!adapter) throw new Error(`No adapter is registered for provider ${id}`);
-    return adapter;
+    const provider = id === "huggingface" ? undefined : aiProviderAdapters[id];
+    if (!provider) throw new Error(`Provider ${id} does not expose a text adapter`);
+    return provider;
   }
 }
 
