@@ -107,7 +107,7 @@ async function showStep(ctx: Context, step: OnboardingState["step"], preferEdit 
   if (fresh) await sendAndTrack(ctx, ctx.chat.id, content.text, content.replyMarkup);
 }
 
-async function buildAdaptiveMainMenuText(ctx: Context, deps: OnboardingDependencies): Promise<string> {
+async function buildAdaptiveMainMenuText(ctx: Context, deps: OnboardingDependencies, isReturningUserOverride?: boolean): Promise<string> {
   if (!ctx.from || !ctx.chat) return "🪽 Wingbuddy is ready.";
 
   const [state, profile, activeTasks, activeReminders, recentSummary] = await Promise.all([
@@ -124,7 +124,7 @@ async function buildAdaptiveMainMenuText(ctx: Context, deps: OnboardingDependenc
 
   return adaptiveStartExperienceService.build({
     displayName: displayName(ctx),
-    isReturningUser: Boolean(state?.status === "completed"),
+    isReturningUser: isReturningUserOverride ?? Boolean(state?.status === "completed"),
     mode: rawMode,
     activeTaskCount: activeTasks.length,
     activeReminderCount: activeReminders.length,
@@ -155,7 +155,7 @@ export async function startOnboarding(ctx: Context, deps: OnboardingDependencies
   if (state?.status === "completed" && state.version < CURRENT_ONBOARDING_VERSION) state = await onboardingService.startLegacyMigration(ctx.from.id, ctx.chat.id);
   else if (!state) state = existedBeforeUpsert ? await onboardingService.startLegacyMigration(ctx.from.id, ctx.chat.id) : await onboardingService.start(ctx.from.id, ctx.chat.id);
   if (state.status === "completed" && state.version >= CURRENT_ONBOARDING_VERSION) {
-    const text = await buildAdaptiveMainMenuText(ctx, deps);
+    const text = await buildAdaptiveMainMenuText(ctx, deps, true);
     await ctx.reply(text, { parse_mode: "HTML", reply_markup: mainMenuKeyboard() });
     return;
   }
@@ -180,7 +180,7 @@ export function registerOnboardingHandlers(bot: Bot, deps: OnboardingDependencie
   bot.callbackQuery("menu:main", async (ctx) => {
     if (!ensure(ctx) || !ctx.from || !ctx.chat) return;
     await ctx.answerCallbackQuery();
-    const text = await buildAdaptiveMainMenuText(ctx, deps);
+    const text = await buildAdaptiveMainMenuText(ctx, deps, true);
     await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: mainMenuKeyboard() }).catch(async () => {
       await ctx.reply(text, { parse_mode: "HTML", reply_markup: mainMenuKeyboard() });
     });
@@ -202,7 +202,7 @@ export function registerOnboardingHandlers(bot: Bot, deps: OnboardingDependencie
     if (!ensure(ctx) || !ctx.from || !ctx.chat) return;
     const current = await onboardingService.get(ctx.from.id);
     await onboardingService.completeLegacyMigration(ctx.from.id, ctx.chat.id);
-    const text = await buildAdaptiveMainMenuText(ctx, deps);
+    const text = await buildAdaptiveMainMenuText(ctx, deps, true);
     await ctx.answerCallbackQuery({ text: "No changes made" });
     if (current?.activeMessageId && await editCurrentMessage(ctx, text, mainMenuKeyboard())) { await onboardingService.setActiveMessage(ctx.from.id, ctx.chat.id, null); return; }
     if (current) await deleteActiveMessage(ctx, current);
@@ -245,7 +245,7 @@ export function registerOnboardingHandlers(bot: Bot, deps: OnboardingDependencie
     if (!ensure(ctx) || !ctx.from || !ctx.chat) return;
     const current = await onboardingService.get(ctx.from.id);
     await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "ready", status: "completed", version: CURRENT_ONBOARDING_VERSION, activeMessageId: null });
-    const text = await buildAdaptiveMainMenuText(ctx, deps);
+    const text = await buildAdaptiveMainMenuText(ctx, deps, false);
     await ctx.answerCallbackQuery();
     if (current?.activeMessageId && await editCurrentMessage(ctx, text, mainMenuKeyboard())) return;
     if (current) await deleteActiveMessage(ctx, current);
