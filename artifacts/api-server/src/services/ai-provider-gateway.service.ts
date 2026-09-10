@@ -79,7 +79,9 @@ export class AIProviderGatewayService {
       const started = Date.now();
       try {
         const result = await adapter.generateImage(request, provider, key ? keyValue(key) : undefined);
-        if (key) recordSuccess(provider, keyId(key), Date.now() - started);
+        // A community fallback succeeding does not mean the authenticated HF key succeeded.
+        // Keep the key's health metrics honest so adaptive routing can learn from real HF failures.
+        if (key && result.route === "inference_provider") recordSuccess(provider, keyId(key), Date.now() - started);
         return { provider: providerId, model: result.model, result };
       } catch (error) {
         lastError = error;
@@ -102,7 +104,8 @@ export class AIProviderGatewayService {
       const started = Date.now();
       try {
         const result = await adapter.generateVideo(request, provider, key ? keyValue(key) : undefined);
-        if (key) recordSuccess(provider, keyId(key), Date.now() - started);
+        // Only count authenticated HF inference as a key success; community fallback is keyless.
+        if (key && result.route === "inference_provider") recordSuccess(provider, keyId(key), Date.now() - started);
         return { provider: providerId, model: result.model, result };
       } catch (error) {
         lastError = error;
