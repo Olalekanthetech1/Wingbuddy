@@ -14,6 +14,8 @@ function detectVideoMime(buffer: Buffer): string | undefined { if(buffer.length>
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 
 export class HuggingFaceMediaService {
+  async validateToken(token:string): Promise<{ok:boolean;latencyMs:number;error?:string}> { const accessToken=requireToken(token); const started=Date.now(); try { const response=await fetch("https://huggingface.co/api/whoami-v2",{headers:{Authorization:`Bearer ${accessToken}`,Accept:"application/json"}}); if(!response.ok){const body=await response.text().catch(()=>""); return {ok:false,latencyMs:Date.now()-started,error:`Hugging Face token validation failed (${response.status})${body?`: ${body.slice(0,300)}`:""}`};} await response.json().catch(()=>undefined); return {ok:true,latencyMs:Date.now()-started}; } catch(error){ return {ok:false,latencyMs:Date.now()-started,error:errorMessage(error)}; } }
+
   async listModels(token?: string): Promise<AIModelCatalogEntry[]> {
     const accessToken=requireToken(token); const headers={Authorization:`Bearer ${accessToken}`,Accept:"application/json"};
     const tasks:Array<{tag:HuggingFaceMediaTask;capability:"image_generation"|"video_generation"}>=[{tag:"text-to-image",capability:"image_generation"},{tag:"text-to-video",capability:"video_generation"}];
