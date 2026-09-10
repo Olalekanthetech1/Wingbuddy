@@ -1,6 +1,7 @@
 import { logger } from "../lib/logger";
 import type { GeminiService } from "../gemini/gemini.service";
 import { aiProviderGatewayService } from "./ai-provider-gateway.service";
+import { huggingFaceCapabilityService } from "./huggingface-capability.service";
 
 export interface GeneratedVideoResult {
   buffer: Buffer;
@@ -44,12 +45,14 @@ export class VideoGenerationService {
   static async generate(rawPrompt: string, geminiService?: GeminiService): Promise<GeneratedVideoResult> {
     const originalPrompt = rawPrompt.trim();
     const enhancedPrompt = await this.enhanceVideoPrompt(originalPrompt, geminiService);
-    logger.info({ originalPrompt, enhancedPrompt }, "Generating video through unified Hugging Face provider gateway");
+    const preferredModel = process.env.HF_VIDEO_MODEL?.trim() || undefined;
+    const capability = await huggingFaceCapabilityService.resolveModel("text-to-video", preferredModel);
 
+    logger.info({ originalPrompt, enhancedPrompt, model: capability.model, discovered: capability.discovered, preferredAvailable: capability.preferredAvailable }, "Generating video through dynamically selected Hugging Face capability");
     const execution = await aiProviderGatewayService.generateVideo("huggingface", {
-      model: process.env.HF_VIDEO_MODEL?.trim() || undefined,
+      model: capability.model,
       prompt: enhancedPrompt,
-      metadata: { originalPrompt },
+      metadata: { originalPrompt, capabilityDiscovery: capability.discovered, preferredModelAvailable: capability.preferredAvailable },
     });
     const result = execution.result;
     const media = detectMediaType(result.buffer);
