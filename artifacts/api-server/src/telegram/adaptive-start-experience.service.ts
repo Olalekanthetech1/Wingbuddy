@@ -14,14 +14,14 @@ export interface AdaptiveStartExperienceInput {
 
 type DayPart = "morning" | "afternoon" | "evening" | "lateNight";
 
-const MODE_PRESENTATION: Record<ModeKey, { emoji: string; focus: string }> = {
-  general: { emoji: "💬", focus: "Chat, think, plan, or explore" },
-  study: { emoji: "📚", focus: "Learn, revise, solve, or practice" },
-  coder: { emoji: "💻", focus: "Build, debug, review, or ship" },
-  deep_research: { emoji: "🔎", focus: "Research, compare, verify, or analyze" },
-  math: { emoji: "🧩", focus: "Break down a difficult problem" },
-  creative: { emoji: "✨", focus: "Write, brainstorm, create, or polish" },
-  auto: { emoji: "⚡", focus: "Adapt to whatever you need next" },
+const MODE_PRESENTATION: Record<ModeKey, { focus: string }> = {
+  general: { focus: "Chat, think, plan, or explore" },
+  study: { focus: "Learn, revise, solve, or practice" },
+  coder: { focus: "Build, debug, review, or ship" },
+  deep_research: { focus: "Research, compare, verify, or analyze" },
+  math: { focus: "Break down a difficult problem" },
+  creative: { focus: "Write, brainstorm, create, or polish" },
+  auto: { focus: "Adapt to whatever you need next" },
 };
 
 function escapeHtml(value: string): string {
@@ -105,7 +105,7 @@ export class AdaptiveStartExperienceService {
     return [
       `🪽 <b>${getGreeting(dayPart, input.isReturningUser, input.displayName)}</b>`,
       "",
-      `${presentation.emoji} <b>${escapeHtml(modeLabel)}</b> — ${escapeHtml(presentation.focus)}`,
+      `🎯 <b>${escapeHtml(modeLabel)}</b> — ${escapeHtml(presentation.focus)}`,
       contextBlock,
       "",
       footer,
