@@ -1,4 +1,4 @@
-export type AIProviderId = "gemini" | "groq" | "mistral";
+export type AIProviderId = "gemini" | "groq" | "mistral" | "huggingface";
 
 export type AIProviderCapability =
   | "chat"
@@ -7,7 +7,9 @@ export type AIProviderCapability =
   | "vision"
   | "reasoning"
   | "long_context"
-  | "web_search";
+  | "web_search"
+  | "image_generation"
+  | "video_generation";
 
 export interface AIProviderRecord {
   id: AIProviderId;
@@ -80,10 +82,48 @@ export interface AIStreamChunk {
   usage?: AIUsage;
 }
 
+export interface AIImageGenerationRequest {
+  model?: string;
+  prompt: string;
+  width?: number;
+  height?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AIImageGenerationResponse {
+  provider: AIProviderId;
+  route: "inference_provider" | "community";
+  model: string;
+  buffer: Buffer;
+  mimeType: string;
+  sourceUrl?: string;
+  fallbackUsed: boolean;
+  raw?: unknown;
+}
+
+export interface AIVideoGenerationRequest {
+  model?: string;
+  prompt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AIVideoGenerationResponse {
+  provider: AIProviderId;
+  route: "inference_provider" | "community";
+  model: string;
+  buffer: Buffer;
+  mimeType: string;
+  sourceUrl?: string;
+  fallbackUsed: boolean;
+  raw?: unknown;
+}
+
 export interface AIProviderAdapter {
   readonly providerId: AIProviderId;
   chat(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIChatResponse>;
   stream(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): AsyncGenerator<AIStreamChunk>;
   test(model: string, provider: AIProviderRecord, apiKey?: string): Promise<{ ok: boolean; latencyMs: number; error?: string }>;
   listModels(provider: AIProviderRecord, apiKey?: string): Promise<AIModelCatalogEntry[]>;
+  generateImage?(request: AIImageGenerationRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIImageGenerationResponse>;
+  generateVideo?(request: AIVideoGenerationRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIVideoGenerationResponse>;
 }
