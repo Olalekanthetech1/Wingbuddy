@@ -1,159 +1,110 @@
 export function renderDashboardThemeLayer(): string {
   return String.raw`
 <style id="wb-dashboard-theme-layer">
-  /* Final dashboard theme layer. This exists because several control-plane panels are injected
-     independently and contain inline presentation styles. Theme selection remains data-driven
-     through the existing html[data-wb-theme] state from dashboard-responsive.ts. */
-  #ai-routing-control-plane,
-  #provider-key-control-plane {
-    color:var(--wb-text) !important;
-    background:var(--wb-panel) !important;
-    border-color:var(--wb-line) !important;
+  /* Single semantic token bridge. All Dashboard components consume these tokens instead of
+     owning light/dark presentation values. System mode follows the browser/OS preference. */
+  :root{
+    --bg:var(--wb-bg);
+    --panel:var(--wb-panel);
+    --panel-2:var(--wb-panel-2);
+    --panel-3:var(--wb-panel-3);
+    --line:var(--wb-line);
+    --text:var(--wb-text);
+    --muted:var(--wb-muted);
+    --blue:var(--wb-blue);
+    --green:var(--wb-green);
+    --amber:var(--wb-amber);
+    --red:var(--wb-red);
+    --shadow:var(--wb-shadow);
+    --nav-active:var(--wb-nav-active);
+    --table-line:var(--wb-table-line);
+    --primary:var(--wb-primary);
+    --success:var(--wb-success);
+    --warning:var(--wb-warning);
+    --danger:var(--wb-danger);
+    --danger-bg:var(--wb-danger-bg);
+    --danger-border:var(--wb-danger-border);
+    --on-primary:var(--wb-on-primary);
   }
 
-  #ai-routing-control-plane h2,
-  #ai-routing-control-plane h3,
-  #provider-key-control-plane h2,
-  #provider-key-control-plane h3,
-  #ai-routing-control-plane strong,
-  #provider-key-control-plane strong,
-  #ai-routing-control-plane b,
-  #provider-key-control-plane b {
-    color:var(--wb-text) !important;
+  html{
+    color:var(--wb-text);
+    background:var(--wb-bg);
   }
 
-  #ai-routing-control-plane p,
-  #ai-routing-control-plane label,
-  #ai-routing-control-plane th,
-  #ai-routing-control-plane td,
-  #provider-key-control-plane p,
-  #provider-key-control-plane label,
-  #provider-key-control-plane th,
-  #provider-key-control-plane td,
-  #provider-key-control-plane span,
-  #ai-routing-control-plane span {
-    color:var(--wb-muted) !important;
+  /* Semantic states stay readable in either palette. These are tokens, not component-level colors. */
+  html[data-wb-theme="dark"],
+  :root{
+    --wb-blue:var(--wb-blue-base,#5aa7ff);
+    --wb-green:var(--wb-green-base,#37d39a);
+    --wb-amber:var(--wb-amber-base,#f5b74f);
+    --wb-red:var(--wb-red-base,#ff6675);
+    --wb-primary:var(--wb-primary-base,#2563eb);
+    --wb-success:var(--wb-success-base,#37d39a);
+    --wb-warning:var(--wb-warning-base,#f5b74f);
+    --wb-danger:var(--wb-danger-base,#fecaca);
+    --wb-danger-bg:var(--wb-danger-bg-base,rgba(255,102,117,.10));
+    --wb-danger-border:var(--wb-danger-border-base,rgba(255,102,117,.30));
+    --wb-on-primary:#fff;
   }
 
-  #ai-routing-control-plane > div,
-  #provider-key-control-plane > div {
-    border-color:var(--wb-line) !important;
-  }
-
-  #ai-routing-control-plane table,
-  #provider-key-control-plane table {
-    color:var(--wb-text) !important;
-  }
-
-  #ai-routing-control-plane input,
-  #ai-routing-control-plane select,
-  #ai-routing-control-plane button,
-  #provider-key-control-plane input,
-  #provider-key-control-plane select,
-  #provider-key-control-plane button {
-    background:var(--wb-panel-3) !important;
-    color:var(--wb-text) !important;
-    border-color:var(--wb-line) !important;
-  }
-
-  #ai-routing-control-plane input::placeholder,
-  #provider-key-control-plane input::placeholder {
-    color:var(--wb-muted) !important;
-  }
-
-  #ai-routing-control-plane button:hover,
-  #provider-key-control-plane button:hover {
-    background:var(--wb-nav-active) !important;
-    border-color:var(--wb-line-strong) !important;
-  }
-
-  #ai-routing-control-plane [id="air-save-policy"],
-  #ai-routing-control-plane [id="air-add-model"],
-  #provider-key-control-plane [id="pk-mode-save"] {
-    background:var(--wb-primary,#2563eb) !important;
-    color:#fff !important;
-    border-color:var(--wb-primary,#2563eb) !important;
-  }
-
-  #ai-routing-control-plane [id="air-reset-health"] {
-    background:var(--wb-danger-bg,rgba(255,102,117,.10)) !important;
-    color:var(--wb-danger, #ff9aa4) !important;
-    border-color:var(--wb-danger-border,rgba(255,102,117,.30)) !important;
-  }
-
-  #ai-routing-control-plane .air-toggle,
-  #ai-routing-control-plane .air-model-toggle,
-  #ai-routing-control-plane .air-reset-model,
-  #provider-key-control-plane [data-pk-toggle],
-  #provider-key-control-plane [data-pk-discover] {
-    background:var(--wb-panel-3) !important;
-    color:var(--wb-text) !important;
-    border-color:var(--wb-line) !important;
-  }
-
-  #ai-routing-control-plane [style*="background:#0b1220"],
-  #ai-routing-control-plane [style*="background:#0f172a"],
-  #ai-routing-control-plane [style*="background:#111827"],
-  #ai-routing-control-plane [style*="background:#0e2036"],
-  #ai-routing-control-plane [style*="background:#0a1626"],
-  #provider-key-control-plane [style*="background:#0b1220"],
-  #provider-key-control-plane [style*="background:#0f172a"],
-  #provider-key-control-plane [style*="background:#111827"],
-  #provider-key-control-plane [style*="background:#0e2036"],
-  #provider-key-control-plane [style*="background:#0a1626"] {
-    background:var(--wb-panel-2) !important;
-  }
-
-  #ai-routing-control-plane [style*="border-color:#1e293b"],
-  #ai-routing-control-plane [style*="border:1px solid #1e293b"],
-  #ai-routing-control-plane [style*="border:1px solid #334155"],
-  #provider-key-control-plane [style*="border:1px solid #1e293b"],
-  #provider-key-control-plane [style*="border:1px solid #334155"] {
-    border-color:var(--wb-line) !important;
-  }
-
-  #ai-routing-control-plane [style*="color:#e5e7eb"],
-  #provider-key-control-plane [style*="color:#e5e7eb"] {
-    color:var(--wb-text) !important;
-  }
-
-  #ai-routing-control-plane [style*="color:#94a3b8"],
-  #provider-key-control-plane [style*="color:#94a3b8"] {
-    color:var(--wb-muted) !important;
-  }
-
-  html[data-wb-theme="light"] {
+  html[data-wb-theme="light"]{
+    --wb-blue:#2563eb;
+    --wb-green:#13795b;
+    --wb-amber:#8a5a00;
+    --wb-red:#b42332;
     --wb-primary:#2563eb;
+    --wb-success:#13795b;
+    --wb-warning:#8a5a00;
     --wb-danger:#b42332;
     --wb-danger-bg:rgba(180,35,50,.08);
     --wb-danger-border:rgba(180,35,50,.24);
+    --wb-on-primary:#fff;
   }
 
-  html[data-wb-theme="dark"] {
+  html[data-wb-theme="dark"]{
+    --wb-blue:#5aa7ff;
+    --wb-green:#37d39a;
+    --wb-amber:#f5b74f;
+    --wb-red:#ff6675;
     --wb-primary:#2563eb;
+    --wb-success:#37d39a;
+    --wb-warning:#f5b74f;
     --wb-danger:#fecaca;
     --wb-danger-bg:#2a0d12;
     --wb-danger-border:#7f1d1d;
+    --wb-on-primary:#fff;
   }
 
-  @media (prefers-color-scheme:light) {
-    html:not([data-wb-theme="dark"]) {
+  @media (prefers-color-scheme:light){
+    html:not([data-wb-theme="dark"]){
+      --wb-blue:#2563eb;
+      --wb-green:#13795b;
+      --wb-amber:#8a5a00;
+      --wb-red:#b42332;
       --wb-primary:#2563eb;
+      --wb-success:#13795b;
+      --wb-warning:#8a5a00;
       --wb-danger:#b42332;
       --wb-danger-bg:rgba(180,35,50,.08);
       --wb-danger-border:rgba(180,35,50,.24);
+      --wb-on-primary:#fff;
     }
   }
+
+  .btn.primary{background:var(--primary)!important;color:var(--on-primary)!important;border-color:var(--primary)!important}
+  .btn.danger{background:var(--danger-bg)!important;color:var(--danger)!important;border-color:var(--danger-border)!important}
+  .sim-panel,.sim-card,.sim-kv,.sim-run,.sim-tab,.sim-result,.sim-input,.sim-select,.sim-textarea,
+  .wb-model-card,.wb-role,.wb-cp-stat,.wb-key-card{transition:background-color .18s ease,color .18s ease,border-color .18s ease}
 </style>
 <script>
 (function(){
   function updateThemeMeta(){
     var light=window.matchMedia&&window.matchMedia('(prefers-color-scheme:light)').matches;
-    var root=document.documentElement;
-    var forced=root.getAttribute('data-wb-theme');
+    var forced=document.documentElement.getAttribute('data-wb-theme');
     var resolved=forced==='light'||(!forced&&light)?'light':'dark';
     var meta=document.querySelector('meta[name="theme-color"]');
-    if(meta)meta.setAttribute('content',resolved==='light'?'#f4f7fb':'#07111f');
+    if(meta)meta.setAttribute('content',getComputedStyle(document.documentElement).getPropertyValue('--wb-bg').trim());
   }
   function init(){updateThemeMeta();}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});else init();
