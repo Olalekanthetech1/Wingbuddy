@@ -2,6 +2,7 @@ import { apiKeyPoolService } from "./api-key-pool.service";
 import { aiProviderKeyPoolService } from "./ai-provider-key-pool.service";
 import { aiProviderAdapters } from "./ai-provider.adapters";
 import { aiProviderRegistryService } from "./ai-provider-registry.service";
+import { huggingFaceMediaService } from "./huggingface-media.service";
 import type { AIModelCatalogEntry, AIProviderId } from "./ai-provider.types";
 
 export class AIModelCatalogService {
@@ -23,11 +24,18 @@ export class AIModelCatalogService {
   }
 
   async listWithKey(provider: AIProviderId, apiKey: string): Promise<AIModelCatalogEntry[]> {
-    const record = await aiProviderRegistryService.get(provider);
-    const adapter = aiProviderAdapters[record.adapter];
-    if (!adapter || typeof adapter.listModels !== "function") throw new Error(`Model discovery is not available for provider ${provider}`);
+    await aiProviderRegistryService.get(provider);
     const key = apiKey.trim();
     if (key.length < 10) throw new Error("A valid provider API key is required for model discovery");
+    if (provider === "huggingface") {
+      const previous = process.env.HF_TOKEN;
+      process.env.HF_TOKEN = key;
+      try { return this.normalize(await huggingFaceMediaService.listModels()); }
+      finally { process.env.HF_TOKEN = previous; }
+    }
+    const record = await aiProviderRegistryService.get(provider);
+    const adapter = aiProviderAdapters[record.adapter as keyof typeof aiProviderAdapters];
+    if (!adapter || typeof adapter.listModels !== "function") throw new Error(`Model discovery is not available for provider ${provider}`);
     return this.normalize(await adapter.listModels(record, key));
   }
 
