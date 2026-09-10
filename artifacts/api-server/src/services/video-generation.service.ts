@@ -2,7 +2,6 @@ import { logger } from "../lib/logger";
 import type { GeminiService } from "../gemini/gemini.service";
 import { aiProviderGatewayService } from "./ai-provider-gateway.service";
 import { cloudinaryMediaStorageService } from "./cloudinary-media-storage.service";
-import { huggingFaceCapabilityService } from "./huggingface-capability.service";
 import { mediaArtifactContextService } from "./media-artifact-context.service";
 import { unifiedModelRegistryService } from "./unified-model-registry.service";
 import type { AIProviderId } from "./ai-provider.types";
@@ -17,23 +16,24 @@ export class VideoGenerationService {
   static async generate(rawPrompt: string, geminiService?: GeminiService): Promise<GeneratedVideoResult> {
     const originalPrompt = rawPrompt.trim(); const enhancedPrompt = await this.enhanceVideoPrompt(originalPrompt, geminiService);
     const registered = await unifiedModelRegistryService.listByCapability("video_generation");
-    const candidates: Array<{ provider: AIProviderId; model: string; priority: number }> = registered.map((m) => ({ provider: m.provider, model: m.modelId, priority: m.priority }));
-    try { const hf = await huggingFaceCapabilityService.resolveModel("text-to-video", process.env.HF_VIDEO_MODEL?.trim() || undefined); const discovered = [hf.model, ...hf.candidates.map((m) => m.id)].filter(Boolean).slice(0, 6); for (const model of discovered) candidates.push({ provider: "huggingface", model, priority: candidates.length + 100 }); } catch (error) { logger.warn({ error: String(error) }, "Live Hugging Face video discovery unavailable; continuing with registered media models"); }
-    const ordered = [...new Map(candidates.sort((a, b) => a.priority - b.priority).map((c) => [`${c.provider}:${c.model}`, c])).values()];
-    if (!ordered.length) throw new Error("No enabled video-generation model is currently registered or discoverable");
+    const ordered = [...registered]
+      .sort((a, b) => a.priority - b.priority || a.provider.localeCompare(b.provider) || a.modelId.localeCompare(b.modelId))
+      .map((m) => ({ provider: m.provider, model: m.modelId, priority: m.priority }));
+    if (!ordered.length) throw new Error("No enabled video-generation model is registered in the Dashboard model registry");
+
     let lastError: unknown;
     for (const candidate of ordered) {
       try {
-        logger.info({ provider: candidate.provider, model: candidate.model }, "Generating video through adaptive media model selection");
+        logger.info({ provider: candidate.provider, model: candidate.model }, "Generating video through Dashboard-registered adaptive media model");
         const execution = await aiProviderGatewayService.generateVideo(candidate.provider, { model: candidate.model, prompt: enhancedPrompt, metadata: { originalPrompt } });
         const result = execution.result; const media = detectMediaType(result.buffer); if (!media.isVideo) throw new Error(`${candidate.provider}/${candidate.model} returned a non-video payload`);
         if (!cloudinaryMediaStorageService.isConfigured()) throw new Error("Cloudinary is required to persist generated videos as public artifacts");
         const uploaded = await cloudinaryMediaStorageService.uploadGeneratedMedia(result.buffer, { resourceType: "video", mimeType: media.mimeType }); if (!isPublicHttpsUrl(uploaded.secureUrl)) throw new Error("Cloudinary returned an invalid public video URL");
         mediaArtifactContextService.remember({ type: "video", prompt: originalPrompt, publicUrl: uploaded.secureUrl, provider: result.provider, storageProvider: "cloudinary", publicId: uploaded.publicId, model: result.model });
         return { buffer: result.buffer, url: uploaded.secureUrl, originalPrompt, enhancedPrompt, provider: result.provider, route: result.route, model: result.model, fallbackUsed: result.fallbackUsed, isVideo: true, mimeType: media.mimeType, storageProvider: "cloudinary", cloudinaryPublicId: uploaded.publicId };
-      } catch (error) { lastError = error; logger.warn({ provider: candidate.provider, model: candidate.model, error: String(error) }, "Adaptive video model attempt failed; trying next candidate"); }
+      } catch (error) { lastError = error; logger.warn({ provider: candidate.provider, model: candidate.model, error: String(error) }, "Adaptive video model attempt failed; trying next registered candidate"); }
     }
-    throw new Error(`Video generation failed after ${ordered.length} adaptive model attempts. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+    throw new Error(`Video generation failed after ${ordered.length} registered adaptive model attempts. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
   }
 
   static extractVideoPrompt(rawText: string): string { return rawText.replace(/^\/(video|vid|clip|generate_video|movie)\s*/i, "").replace(/^(please\s+)?(can you\s+)?(generate|create|render|make|produce)\s+(me\s+)?(an?\s+)?(video|clip|animation|short film|movie)\s+(of|about|showing|depicting)?\s*/i, "").trim(); }
