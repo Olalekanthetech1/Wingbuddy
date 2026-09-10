@@ -1,5 +1,5 @@
-import { desc, eq } from "drizzle-orm";
-import { db, systemSettingsTable, usersTable, conversationsTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
+import { db, systemSettingsTable } from "@workspace/db";
 import { getPool } from "@workspace/db";
 import { adaptiveAIRouterService } from "./adaptive-ai-router.service";
 import type { AIChatRequest } from "./ai-provider.types";
@@ -111,13 +111,13 @@ function localParts(date: Date, timezone: string): { date: string; hour: number;
   };
 }
 
-function inQuietHours(hour: number, config: ProactiveAssistantConfig): boolean {
-  const current = hour * 60;
-  const start = minuteOfDay(config.quietHoursStart);
-  const end = minuteOfDay(config.quietHoursEnd);
+function minuteWithinRange(current: number, start: number, end: number): boolean {
   if (start === end) return false;
-  if (start < end) return current >= start && current < end;
-  return current >= start || current < end;
+  return start < end ? current >= start && current < end : current >= start || current < end;
+}
+
+function inQuietHours(currentMinuteOfDay: number, config: ProactiveAssistantConfig): boolean {
+  return minuteWithinRange(currentMinuteOfDay, minuteOfDay(config.quietHoursStart), minuteOfDay(config.quietHoursEnd));
 }
 
 export class ProactiveAssistantService {
@@ -190,9 +190,19 @@ export class ProactiveAssistantService {
         `SELECT COUNT(*)::int AS count FROM ${DELIVERY_TABLE} WHERE local_date = $1::date`,
         [today],
       );
-      return { config, schedulerActive: Boolean(this.timer && this.bot), timezoneNow: { date: today, hour: local.hour, minute: local.minute }, sentToday: Number(result.rows[0]?.count || 0) };
+      return {
+        config,
+        schedulerActive: Boolean(this.timer && this.bot),
+        timezoneNow: { date: today, hour: local.hour, minute: local.minute },
+        sentToday: Number(result.rows[0]?.count || 0),
+      };
     } catch {
-      return { config, schedulerActive: Boolean(this.timer && this.bot), timezoneNow: { date: today, hour: local.hour, minute: local.minute }, sentToday: 0 };
+      return {
+        config,
+        schedulerActive: Boolean(this.timer && this.bot),
+        timezoneNow: { date: today, hour: local.hour, minute: local.minute },
+        sentToday: 0,
+      };
     }
   }
 
@@ -216,14 +226,14 @@ export class ProactiveAssistantService {
       const config = await this.getConfig();
       if (!config.enabled) return;
       const local = localParts(new Date(), config.timezone);
-      const minuteKey = `${local.date}:${local.hour}:${local.minute}`;
+      const currentMinute = local.hour * 60 + local.minute;
+      const minuteKey = `${local.date}:${currentMinute}`;
       if (minuteKey === this.lastTickKey) return;
       this.lastTickKey = minuteKey;
-      if (inQuietHours(local.hour * 1 + Math.floor(local.minute / 60), config)) return;
-      const current = local.hour * 60 + local.minute;
-      const period: ProactivePeriod | null = config.morningEnabled && current === minuteOfDay(config.morningTime)
+      if (inQuietHours(currentMinute, config)) return;
+      const period: ProactivePeriod | null = config.morningEnabled && currentMinute === minuteOfDay(config.morningTime)
         ? "morning"
-        : config.eveningEnabled && current === minuteOfDay(config.eveningTime)
+        : config.eveningEnabled && currentMinute === minuteOfDay(config.eveningTime)
           ? "evening"
           : null;
       if (!period) return;
@@ -260,7 +270,13 @@ export class ProactiveAssistantService {
       WHERE c.is_active = TRUE
       ORDER BY u.telegram_user_id, c.updated_at DESC
     `);
-    return rows.rows.map((row) => ({ ...row, telegramUserId: Number(row.telegramUserId), chatId: Number(row.chatId), activeTasks: Number(row.activeTasks || 0), activeReminders: Number(row.activeReminders || 0) }));
+    return rows.rows.map((row) => ({
+      ...row,
+      telegramUserId: Number(row.telegramUserId),
+      chatId: Number(row.chatId),
+      activeTasks: Number(row.activeTasks || 0),
+      activeReminders: Number(row.activeReminders || 0),
+    }));
   }
 
   private async resolveTarget(telegramUserId: number): Promise<ProactiveTarget | null> {
@@ -275,7 +291,13 @@ export class ProactiveAssistantService {
     `, [telegramUserId]);
     const row = rows.rows[0];
     if (!row) return null;
-    return { ...row, telegramUserId: Number(row.telegramUserId), chatId: Number(row.chatId), activeTasks: Number(row.activeTasks || 0), activeReminders: Number(row.activeReminders || 0) };
+    return {
+      ...row,
+      telegramUserId: Number(row.telegramUserId),
+      chatId: Number(row.chatId),
+      activeTasks: Number(row.activeTasks || 0),
+      activeReminders: Number(row.activeReminders || 0),
+    };
   }
 
   private async claimDelivery(telegramUserId: number, chatId: number, localDate: string, period: ProactivePeriod, dailyLimit: number): Promise<boolean> {
