@@ -6,6 +6,8 @@ import {
   semanticInteractionCache,
   type SemanticInteractionDecision,
   type SemanticTaskIntent,
+  type PromptType,
+  type RequestExecutionProfile,
 } from "./semantic-interaction-cache.service";
 
 const INTENTS = [
@@ -20,6 +22,27 @@ const INTENTS = [
   "brainstorming",
   "general",
 ] as const;
+
+const PROMPT_TYPES: PromptType[] = [
+  "DIRECT_COMMAND",
+  "QUESTION",
+  "CONTEXTUAL",
+  "FEW_SHOT",
+  "ZERO_SHOT",
+  "REASONING",
+  "ROLE_BASED",
+  "CONVERSATIONAL",
+  "MULTI_STEP",
+  "CONSTRAINT_DRIVEN",
+];
+
+const EXECUTION_PROFILES: RequestExecutionProfile[] = [
+  "conversational",
+  "one_shot",
+  "durable",
+  "clarification",
+  "unknown",
+];
 
 const COMPLEXITIES = ["simple", "moderate", "complex", "multi_step"] as const;
 const TASK_INTENTS: SemanticTaskIntent[] = [
@@ -57,21 +80,41 @@ function jsonOnlyPrompt(
 
   return [
     "Interpret the user's current request for an adaptive AI-assistant runtime.",
-    "Infer meaning from the complete turn and recent conversation. Do not use keyword presence, regex rules, fixed phrase matching, or substring heuristics.",
+    "Infer meaning from the complete turn and recent conversation. Do not use keyword presence, regex rules, fixed phrase matching, substring heuristics, or message-length shortcuts.",
     "Return ONLY one valid JSON object and no markdown.",
     "Available intent contract:", INTENTS.join(", "),
+    "Available prompt type contract:", PROMPT_TYPES.join(", "),
+    "Available execution profile contract:", EXECUTION_PROFILES.join(", "),
     "Available canonical modes:", MODE_KEYS.join(", "),
     "Available capability contract (derived from the active mode registry):", capabilityContract,
     "Available task intent contract:", TASK_INTENTS.join(", "),
     "Conversation operation contract:", "new_request,answer_about_artifact,extract_lesson,deepen,simplify,shorten,expand,continue,generate_variant,compare,clarify_reference,transform,other",
-    "Mode profiles:", modeProfiles,
+    "Prompt taxonomy semantics:",
+    "- DIRECT_COMMAND: the user asks the assistant to perform an operation or follow explicit instructions.",
+    "- QUESTION: the main intent is to obtain information, explanation, or clarification.",
+    "- CONTEXTUAL: meaningful background/data is supplied as part of the request and should influence the answer.",
+    "- FEW_SHOT: examples/demonstrations are supplied to establish the desired mapping, style, or behavior for a new case.",
+    "- ZERO_SHOT: the task is requested without demonstrations or examples intended as guidance.",
+    "- REASONING: the request materially benefits from analysis, derivation, comparison, planning, or explicit reasoning policy.",
+    "- ROLE_BASED: a persona, professional role, character, or viewpoint is assigned to shape the response.",
+    "- CONVERSATIONAL: the turn is primarily dialogue, social interaction, follow-up discussion, or open-ended exchange rather than a durable action.",
+    "- MULTI_STEP: the requested outcome contains multiple dependent transformations/actions that should be preserved as a sequence.",
+    "- CONSTRAINT_DRIVEN: explicit output, length, format, style, scope, timing, or other constraints materially shape the requested result.",
+    "A request may have multiple promptTypes; choose the most informative primaryPromptType rather than forcing a single label.",
+    "ZERO_SHOT is a secondary structural label: use it when the user asks for a task without demonstrations, especially when there is no contextual example guidance. Do not label ordinary greetings as ZERO_SHOT.",
+    "Execution semantics:",
+    "- conversational: answer in the current conversation without durable orchestration.",
+    "- one_shot: complete one bounded operation now, including immediate image/video/search/reasoning work, without persistent task state unless explicitly requested.",
+    "- durable: persistent, trackable work, scheduled work, multi-stage external side effects, or workflows that must survive turns require a durable task/graph.",
+    "- clarification: material information is missing or ambiguity makes safe execution unreliable.",
+    "- unknown: classification confidence is too low to safely choose another profile.",
+    "Task intent semantics: NEW_TASK and other task-management intents are reserved for persistent, trackable work that the assistant should maintain as a task/workflow across turns. Ordinary conversation, brainstorming, tutoring, roleplay, games, demonstrations, or a multi-step answer remain NO_TASK unless the user asks for persistent task tracking.",
+    "When an active task exists, CONTINUE_TASK is valid only when the current request is actually about that tracked task. Do not inherit unrelated active work.",
     `Persistent mode: ${persistentMode}`,
     `Recent conversation:\n${recent || "(none)"}`,
     `Current request:\n${request}`,
-    "JSON schema: { intent, effectiveMode, requiredCapabilities, enableSearch, thinkingLevel, isModeSwitch, requestedMode, cleanedPrompt, isGreeting, complexity, confidence, taskIntent, taskTitle, taskGoal, taskIdHint, taskSteps, conversationOperation, conversationTargetHistoryIndices, unresolvedReference }",
-    "Task intent semantics: NEW_TASK and the other task-management intents are reserved for persistent, trackable work that the assistant should maintain as a task/workflow across turns. The user must be asking to create, manage, resume, pause, complete, cancel, or inspect that persistent work. Ordinary conversation, games, quizzes, riddles, roleplay, brainstorming, tutoring, demonstrations, planning a single answer, or requests to do something together in the current chat are NOT persistent tasks merely because they contain rules, steps, goals, scoring, or multiple turns. Treat those as NO_TASK unless the user explicitly asks to make the activity a persistent tracked task. A multi-step conversational activity can remain fully stateful through conversation history without becoming a durable task.",
-    "When an active task exists, use CONTINUE_TASK only when the current request is actually about that tracked task. Do not inject an unrelated active task into a new conversational activity. Never create a duplicate NEW_TASK because the user says 'let's play', 'let's do this here', or provides game/activity rules.",
-    "Rules: explicit slash commands are handled separately by Telegram. Natural-language mode changes must be semantic. If the user is continuing or transforming a prior answer/story/example/etc., resolve the conversation operation and reference by context. If the user is creating, pausing, continuing, completing, cancelling, or viewing a persistent task, resolve taskIntent semantically. A request for current/external evidence must set enableSearch=true. A simple social greeting should be greeting with no search and low/no thinking. Never authorize tools or destructive actions from this classification step.",
+    "JSON schema: { intent, promptTypes, primaryPromptType, executionProfile, effectiveMode, requiredCapabilities, enableSearch, thinkingLevel, isModeSwitch, requestedMode, cleanedPrompt, isGreeting, complexity, confidence, taskIntent, taskTitle, taskGoal, taskIdHint, taskSteps, conversationOperation, conversationTargetHistoryIndices, unresolvedReference }",
+    "Do not authorize tools, external actions, approvals, destructive actions, or persistent storage from this classifier. It only resolves the semantic request profile; execution policy is enforced downstream.",
   ].join("\n\n");
 }
 
@@ -80,6 +123,16 @@ function sanitizeDecision(raw: unknown, fallbackMode: ModeKey): SemanticInteract
   const intent = INTENTS.includes(data.intent as (typeof INTENTS)[number])
     ? data.intent as SemanticInteractionDecision["intent"]
     : "general";
+  const promptTypes = Array.isArray(data.promptTypes)
+    ? Array.from(new Set(data.promptTypes.filter((value): value is PromptType => typeof value === "string" && PROMPT_TYPES.includes(value as PromptType))))
+    : [];
+  const normalizedPromptTypes: PromptType[] = promptTypes.length > 0 ? promptTypes : ["DIRECT_COMMAND"];
+  const primaryPromptType = typeof data.primaryPromptType === "string" && PROMPT_TYPES.includes(data.primaryPromptType as PromptType)
+    ? data.primaryPromptType as PromptType
+    : normalizedPromptTypes[0];
+  const executionProfile = typeof data.executionProfile === "string" && EXECUTION_PROFILES.includes(data.executionProfile as RequestExecutionProfile)
+    ? data.executionProfile as RequestExecutionProfile
+    : (intent === "greeting" ? "conversational" : "unknown");
   const effectiveMode = MODE_KEYS.includes(data.effectiveMode as ModeKey)
     ? data.effectiveMode as ModeKey
     : fallbackMode;
@@ -116,8 +169,25 @@ function sanitizeDecision(raw: unknown, fallbackMode: ModeKey): SemanticInteract
     ? data.conversationTargetHistoryIndices.filter((index): index is number => Number.isInteger(Number(index))).map(Number).slice(0, 6)
     : undefined;
 
+  const hasExamples = normalizedPromptTypes.includes("FEW_SHOT");
+  const resolvedPromptTypes = hasExamples
+    ? normalizedPromptTypes.filter((type) => type !== "ZERO_SHOT")
+    : normalizedPromptTypes.includes("DIRECT_COMMAND") || normalizedPromptTypes.includes("QUESTION") || normalizedPromptTypes.includes("ROLE_BASED") || normalizedPromptTypes.includes("CONTEXTUAL")
+      ? normalizedPromptTypes
+      : Array.from(new Set([...normalizedPromptTypes, "ZERO_SHOT" as PromptType]));
+
+  const resolvedExecutionProfile: RequestExecutionProfile =
+    isGreeting || isModeSwitch || executionProfile === "conversational"
+      ? "conversational"
+      : taskIntent !== "NO_TASK"
+        ? "durable"
+        : executionProfile;
+
   return {
     intent,
+    promptTypes: resolvedPromptTypes,
+    primaryPromptType,
+    executionProfile: resolvedExecutionProfile,
     effectiveMode,
     requiredCapabilities: Array.from(new Set(requiredCapabilities)),
     enableSearch,
@@ -157,6 +227,9 @@ export class SemanticInteractionResolverService {
     const profile = MODES[params.persistentMode] || MODES.general;
     const fallback: SemanticInteractionDecision = {
       intent: "general",
+      promptTypes: ["DIRECT_COMMAND"],
+      primaryPromptType: "DIRECT_COMMAND",
+      executionProfile: "unknown",
       effectiveMode: params.persistentMode,
       requiredCapabilities: Array.from(profile.capabilitiesList),
       enableSearch: profile.researchPolicy === "always",
@@ -180,6 +253,7 @@ export class SemanticInteractionResolverService {
       const parsed = JSON.parse(cleaned);
       const decision = sanitizeDecision(parsed, params.persistentMode);
       semanticInteractionCache.set(params.text, params.persistentMode, history, decision);
+      logger.info({ intent: decision.intent, promptTypes: decision.promptTypes, primaryPromptType: decision.primaryPromptType, executionProfile: decision.executionProfile, complexity: decision.complexity, confidence: decision.confidence }, "PROMPT_INTENT_PROFILE_RESOLVED");
       return decision;
     } catch (error) {
       logger.warn(
