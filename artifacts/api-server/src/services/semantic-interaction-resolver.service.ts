@@ -44,6 +44,16 @@ const EXECUTION_PROFILES: RequestExecutionProfile[] = [
   "unknown",
 ];
 
+const DURABILITY_EVIDENCE = [
+  "EXPLICIT_TASK_TRACKING",
+  "EXPLICIT_PERSISTENCE",
+  "SCHEDULED_WORK",
+  "RECURRING_WORK",
+  "CONTINUE_EXISTING_TASK",
+  "BACKGROUND_EXECUTION",
+  "MULTI_TURN_WORKFLOW",
+] as const;
+
 const COMPLEXITIES = ["simple", "moderate", "complex", "multi_step"] as const;
 const TASK_INTENTS: SemanticTaskIntent[] = [
   "NEW_TASK",
@@ -88,6 +98,7 @@ function jsonOnlyPrompt(
     "Available canonical modes:", MODE_KEYS.join(", "),
     "Available capability contract (derived from the active mode registry):", capabilityContract,
     "Available task intent contract:", TASK_INTENTS.join(", "),
+    "Durability evidence contract (return only evidence actually supported by the user's request):", DURABILITY_EVIDENCE.join(", "),
     "Conversation operation contract:", "new_request,answer_about_artifact,extract_lesson,deepen,simplify,shorten,expand,continue,generate_variant,compare,clarify_reference,transform,other",
     "Prompt taxonomy semantics:",
     "- DIRECT_COMMAND: the user asks the assistant to perform an operation or follow explicit instructions.",
@@ -109,12 +120,15 @@ function jsonOnlyPrompt(
     "- clarification: material information is missing or ambiguity makes safe execution unreliable.",
     "- unknown: classification confidence is too low to safely choose another profile.",
     "Task intent semantics: NEW_TASK and other task-management intents are reserved for persistent, trackable work that the assistant should maintain as a task/workflow across turns. Ordinary conversation, brainstorming, tutoring, roleplay, games, demonstrations, or a multi-step answer remain NO_TASK unless the user asks for persistent task tracking.",
+    "Durability evidence semantics: durabilityEvidence MUST be empty unless the user explicitly requests persistence, scheduling, recurrence, background execution, continuation of an existing tracked task, multi-turn workflow state, or explicit task tracking. Prompt complexity, ZERO_SHOT, CONSTRAINT_DRIVEN, MULTI_STEP, file generation, media generation, dimensions, style, quality, or output count are NOT durability evidence by themselves.",
+    "For image_generation and video_generation specifically, an immediate generation request is one_shot by default. Use durable only when concrete durability evidence is present in the user's request or an actual continuation/scheduling context exists.",
     "When an active task exists, CONTINUE_TASK is valid only when the current request is actually about that tracked task. Do not inherit unrelated active work.",
     `Persistent mode: ${persistentMode}`,
     `Recent conversation:\n${recent || "(none)"}`,
     `Current request:\n${request}`,
-    "JSON schema: { intent, promptTypes, primaryPromptType, executionProfile, effectiveMode, requiredCapabilities, enableSearch, thinkingLevel, isModeSwitch, requestedMode, cleanedPrompt, isGreeting, complexity, confidence, taskIntent, taskTitle, taskGoal, taskIdHint, taskSteps, conversationOperation, conversationTargetHistoryIndices, unresolvedReference }",
+    "JSON schema: { intent, promptTypes, primaryPromptType, executionProfile, effectiveMode, requiredCapabilities, enableSearch, thinkingLevel, isModeSwitch, requestedMode, cleanedPrompt, isGreeting, complexity, confidence, taskIntent, taskTitle, taskGoal, taskIdHint, taskSteps, durabilityEvidence, conversationOperation, conversationTargetHistoryIndices, unresolvedReference }",
     "Do not authorize tools, external actions, approvals, destructive actions, or persistent storage from this classifier. It only resolves the semantic request profile; execution policy is enforced downstream.",
+    `Available mode profiles:\n${modeProfiles}`,
   ].join("\n\n");
 }
 
@@ -165,6 +179,9 @@ function sanitizeDecision(raw: unknown, fallbackMode: ModeKey): SemanticInteract
   const taskSteps = Array.isArray(data.taskSteps)
     ? data.taskSteps.filter((step): step is string => typeof step === "string" && step.trim().length > 0).map((step) => step.trim()).slice(0, 20)
     : undefined;
+  const durabilityEvidence = Array.isArray(data.durabilityEvidence)
+    ? Array.from(new Set(data.durabilityEvidence.filter((evidence): evidence is (typeof DURABILITY_EVIDENCE)[number] => typeof evidence === "string" && DURABILITY_EVIDENCE.includes(evidence as (typeof DURABILITY_EVIDENCE)[number]))))
+    : [];
   const conversationTargetHistoryIndices = Array.isArray(data.conversationTargetHistoryIndices)
     ? data.conversationTargetHistoryIndices.filter((index): index is number => Number.isInteger(Number(index))).map(Number).slice(0, 6)
     : undefined;
@@ -203,6 +220,7 @@ function sanitizeDecision(raw: unknown, fallbackMode: ModeKey): SemanticInteract
     taskGoal: taskIntent === "NO_TASK" ? undefined : taskGoal,
     taskIdHint: taskIntent === "NO_TASK" ? undefined : taskIdHint,
     taskSteps: taskIntent === "NO_TASK" ? undefined : taskSteps,
+    durabilityEvidence,
     conversationOperation: typeof data.conversationOperation === "string" && data.conversationOperation.trim()
       ? data.conversationOperation.trim()
       : "new_request",
@@ -240,6 +258,7 @@ export class SemanticInteractionResolverService {
       confidence: 0,
       taskIntent: "NO_TASK",
       conversationOperation: "new_request",
+      durabilityEvidence: [],
     };
 
     try {
@@ -253,7 +272,7 @@ export class SemanticInteractionResolverService {
       const parsed = JSON.parse(cleaned);
       const decision = sanitizeDecision(parsed, params.persistentMode);
       semanticInteractionCache.set(params.text, params.persistentMode, history, decision);
-      logger.info({ intent: decision.intent, promptTypes: decision.promptTypes, primaryPromptType: decision.primaryPromptType, executionProfile: decision.executionProfile, complexity: decision.complexity, confidence: decision.confidence }, "PROMPT_INTENT_PROFILE_RESOLVED");
+      logger.info({ intent: decision.intent, promptTypes: decision.promptTypes, primaryPromptType: decision.primaryPromptType, executionProfile: decision.executionProfile, complexity: decision.complexity, confidence: decision.confidence, durabilityEvidence: decision.durabilityEvidence }, "PROMPT_INTENT_PROFILE_RESOLVED");
       return decision;
     } catch (error) {
       logger.warn(
