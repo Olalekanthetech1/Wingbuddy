@@ -5,7 +5,7 @@ import { memoryService } from "../services/memory.service";
 import { CURRENT_ONBOARDING_VERSION, onboardingService, type OnboardingState, type ProactivityPreference } from "../services/onboarding.service";
 import type { ConversationService } from "../services/conversation.service";
 import type { ModeService } from "../services/mode.service";
-import { settingsKeyboard } from "./keyboards";
+import { mainMenuKeyboard, settingsKeyboard } from "./keyboards";
 
 export interface OnboardingDependencies {
   authorized: (userId: number) => boolean;
@@ -63,7 +63,7 @@ function memoryKeyboard(): InlineKeyboard {
     .text("⏭️ Later", "onboard:skip:memory");
 }
 
-function aboutKeyboard(): InlineKeyboard {
+function aboutChoiceKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
     .text("✍️ Tell Wingbuddy", "onboard:about:write").row()
     .text("⏭️ Skip", "onboard:about:skip");
@@ -88,52 +88,72 @@ function migrationKeyboard(): InlineKeyboard {
     .text("⏭️ Maybe Later", "onboard:migrate:later");
 }
 
-function mainOnboardingMenu(): InlineKeyboard {
-  return new InlineKeyboard()
-    .text("💬 Chat", "menu:chat").row()
-    .text("✅ Tasks", "menu:main")
-    .text("⏰ Reminders", "menu:reminders").row()
-    .text("🧠 Memories", "menu:memory")
-    .text("⚙️ Settings", "menu:settings");
-}
-
 function setupMigrationText(ctx: Context, personality: string, mode: string): string {
   return `👋 <b>Welcome back, ${displayName(ctx)}!</b>\n\nWingbuddy has a new personalization setup. Your existing conversations, memories, personality, and mode are staying intact. Nothing will be reset.\n\n<b>Current setup</b>\n🎭 Personality: ${personality}\n🧠 Default mode: ${mode}\n\nYou can personalize the newer preferences now, or continue using Wingbuddy exactly as before.`;
 }
 
-async function renderStep(ctx: Context, deps: OnboardingDependencies, step: OnboardingState["step"]): Promise<void> {
+function stepContent(ctx: Context, step: OnboardingState["step"]): { text: string; replyMarkup?: InlineKeyboard } | null {
   switch (step) {
     case "welcome":
-      await ctx.reply(`👋 <b>Hey ${displayName(ctx)}!</b>\n\nI’m Wingbuddy. I can help you study, plan tasks, research, code, remember useful things, and handle everyday work.\n\nLet’s personalize your assistant first — it only takes a moment.`, { parse_mode: "HTML", reply_markup: welcomeKeyboard() });
-      return;
-    case "migration": {
-      const profile = await deps.conversations.getUserWithFullContext(ctx.from!.id);
-      const personality = typeof profile?.personality === "string" && isPersonalityKey(profile.personality) ? PERSONALITIES[profile.personality].label : "Current setting";
-      const mode = typeof profile?.mode === "string" && isModeKey(profile.mode) ? MODES[profile.mode].label : "Current setting";
-      await ctx.reply(setupMigrationText(ctx, personality, mode), { parse_mode: "HTML", reply_markup: migrationKeyboard() });
-      return;
-    }
+      return { text: `👋 <b>Hey ${displayName(ctx)}!</b>\n\nI’m Wingbuddy. I can help you study, plan tasks, research, code, remember useful things, and handle everyday work.\n\nLet’s personalize your assistant first — it only takes a moment.`, replyMarkup: welcomeKeyboard() };
     case "personality":
-      await ctx.reply("🎭 <b>How should I interact with you?</b>\n\nChoose the personality that feels right. You can change it later from Settings.", { parse_mode: "HTML", reply_markup: personalityOnboardingKeyboard() });
-      return;
+      return { text: "🎭 <b>How should I interact with you?</b>\n\nChoose the personality that feels right. You can change it later from Settings.", replyMarkup: personalityOnboardingKeyboard() };
     case "mode":
-      await ctx.reply("🧠 <b>What will you use Wingbuddy for most?</b>\n\nThis becomes your default mode. Wingbuddy can still adapt when your request needs something different.", { parse_mode: "HTML", reply_markup: modeOnboardingKeyboard() });
-      return;
+      return { text: "🧠 <b>What will you use Wingbuddy for most?</b>\n\nThis becomes your default mode. Wingbuddy can still adapt when your request needs something different.", replyMarkup: modeOnboardingKeyboard() };
     case "proactivity":
-      await ctx.reply("⚡ <b>How proactive should I be?</b>\n\nShould I only respond when you ask, or occasionally check in when I can be useful?", { parse_mode: "HTML", reply_markup: proactivityKeyboard() });
-      return;
+      return { text: "⚡ <b>How proactive should I be?</b>\n\nShould I only respond when you ask, or occasionally check in when I can be useful?", replyMarkup: proactivityKeyboard() };
     case "memory":
-      await ctx.reply("🧠 <b>Would you like me to remember useful things about you?</b>\n\nFor example, preferences, goals, or information you explicitly want me to remember. You stay in control and can review or remove memories anytime.", { parse_mode: "HTML", reply_markup: memoryKeyboard() });
-      return;
+      return { text: "🧠 <b>Would you like me to remember useful things about you?</b>\n\nFor example, preferences, goals, or information you explicitly want me to remember. You stay in control and can review or remove memories anytime.", replyMarkup: memoryKeyboard() };
     case "about_you":
-      await ctx.reply("💭 <b>One last thing…</b>\n\nIs there anything you’d like me to know about you that could help me assist you better?\n\nYou can tell me about your goals, preferences, what you’re working on, how you like to communicate, or anything else that matters to you.\n\n<i>This is completely optional.</i>", { parse_mode: "HTML", reply_markup: aboutKeyboard() });
-      return;
+      return { text: "💭 <b>One last thing…</b>\n\nIs there anything you’d like me to know about you that could help me assist you better?\n\nYou can tell me about your goals, preferences, what you’re working on, how you like to communicate, or anything else that matters to you.\n\n<i>This is completely optional.</i>", replyMarkup: aboutChoiceKeyboard() };
     case "timezone":
-      await ctx.reply("🌍 <b>What timezone should I use for your scheduled assistant features?</b>\n\nYou can change this later. Choose the closest option or keep the default.", { parse_mode: "HTML", reply_markup: timezoneKeyboard() });
-      return;
-    case "ready":
-      return;
+      return { text: "🌍 <b>What timezone should I use for your scheduled assistant features?</b>\n\nYou can change this later. Choose the closest option or keep the default.", replyMarkup: timezoneKeyboard() };
+    default:
+      return null;
   }
+}
+
+async function editCurrentMessage(ctx: Context, text: string, replyMarkup?: InlineKeyboard): Promise<boolean> {
+  try {
+    await ctx.editMessageText(text, { parse_mode: "HTML", ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
+    return true;
+  } catch (error) {
+    const message = String(error).toLowerCase();
+    return message.includes("message is not modified");
+  }
+}
+
+async function deleteActiveMessage(ctx: Context, state: OnboardingState): Promise<void> {
+  if (!state.activeMessageId || !ctx.from) return;
+  await ctx.api.deleteMessage(state.chatId, state.activeMessageId).catch(() => {});
+  await onboardingService.setActiveMessage(ctx.from.id, state.chatId, null);
+}
+
+async function sendAndTrack(ctx: Context, chatId: number, text: string, replyMarkup?: InlineKeyboard): Promise<void> {
+  const sent = await ctx.api.sendMessage(chatId, text, { parse_mode: "HTML", ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
+  await onboardingService.setActiveMessage(ctx.from!.id, chatId, sent.message_id);
+}
+
+async function showStep(ctx: Context, step: OnboardingState["step"], preferEdit = true): Promise<void> {
+  if (!ctx.from || !ctx.chat) return;
+  const current = await onboardingService.get(ctx.from.id);
+  if (!current || current.status === "completed") return;
+  const content = stepContent(ctx, step);
+  if (!content) return;
+
+  if (preferEdit && current.activeMessageId) {
+    const callbackMessageId = ctx.callbackQuery?.message?.message_id;
+    if (!callbackMessageId || callbackMessageId === current.activeMessageId) {
+      if (await editCurrentMessage(ctx, content.text, content.replyMarkup)) {
+        await onboardingService.save(ctx.from.id, ctx.chat.id, { step, version: CURRENT_ONBOARDING_VERSION });
+        return;
+      }
+    }
+    await deleteActiveMessage(ctx, current);
+  }
+
+  await onboardingService.save(ctx.from.id, ctx.chat.id, { step, version: CURRENT_ONBOARDING_VERSION, activeMessageId: null });
+  await sendAndTrack(ctx, ctx.chat.id, content.text, content.replyMarkup);
 }
 
 async function sendReadySummary(ctx: Context, deps: OnboardingDependencies, state: OnboardingState): Promise<void> {
@@ -142,7 +162,11 @@ async function sendReadySummary(ctx: Context, deps: OnboardingDependencies, stat
   const modeKey = typeof profile?.mode === "string" && isModeKey(profile.mode) ? profile.mode : null;
   const personality = personalityKey ? PERSONALITIES[personalityKey].label : "Default";
   const mode = modeKey ? MODES[modeKey].label : "Default";
-  await ctx.reply(`✅ <b>Your Wingbuddy setup is ready!</b>\n\n🎭 Personality: ${personality}\n🧠 Default mode: ${mode}\n⚡ Proactivity: ${safeProactivityLabel(state.proactivityPreference)}\n🧠 Memory: ${state.memoryEnabled ? "Enabled" : "Off"}\n🌍 Timezone: ${state.timezone}\n\nYou can change your preferences later with <code>/setup</code>.`, { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("🚀 Continue to Wingbuddy", "onboard:finish") });
+  const text = `✅ <b>Your Wingbuddy setup is ready!</b>\n\n🎭 Personality: ${personality}\n🧠 Default mode: ${mode}\n⚡ Proactivity: ${safeProactivityLabel(state.proactivityPreference)}\n🧠 Memory: ${state.memoryEnabled ? "Enabled" : "Off"}\n🌍 Timezone: ${state.timezone}\n\nYou can change your preferences later with <code>/setup</code>.`;
+  const keyboard = new InlineKeyboard().text("🚀 Continue to Wingbuddy", "onboard:finish");
+  if (state.activeMessageId && await editCurrentMessage(ctx, text, keyboard)) return;
+  await deleteActiveMessage(ctx, state);
+  await sendAndTrack(ctx, ctx.chat!.id, text, keyboard);
 }
 
 export async function startOnboarding(ctx: Context, deps: OnboardingDependencies): Promise<void> {
@@ -154,16 +178,27 @@ export async function startOnboarding(ctx: Context, deps: OnboardingDependencies
   if (state?.status === "completed" && state.version < CURRENT_ONBOARDING_VERSION) {
     state = await onboardingService.startLegacyMigration(ctx.from.id, ctx.chat.id);
   } else if (!state) {
-    state = existedBeforeUpsert
-      ? await onboardingService.startLegacyMigration(ctx.from.id, ctx.chat.id)
-      : await onboardingService.start(ctx.from.id, ctx.chat.id);
+    state = existedBeforeUpsert ? await onboardingService.startLegacyMigration(ctx.from.id, ctx.chat.id) : await onboardingService.start(ctx.from.id, ctx.chat.id);
   }
 
   if (state.status === "completed" && state.version >= CURRENT_ONBOARDING_VERSION) {
-    await ctx.reply(`👋 <b>Welcome back, ${displayName(ctx)}!</b>\n\nYour Wingbuddy setup is already configured. What are we working on today?`, { parse_mode: "HTML", reply_markup: mainOnboardingMenu() });
+    await ctx.reply(`👋 <b>Welcome back, ${displayName(ctx)}!</b>\n\nYour Wingbuddy setup is already configured. What are we working on today?`, { parse_mode: "HTML", reply_markup: mainMenuKeyboard() });
     return;
   }
-  await renderStep(ctx, deps, state.step);
+
+  if (state.step === "migration") {
+    const profile = await deps.conversations.getUserWithFullContext(ctx.from.id);
+    const personality = typeof profile?.personality === "string" && isPersonalityKey(profile.personality) ? PERSONALITIES[profile.personality].label : "Current setting";
+    const mode = typeof profile?.mode === "string" && isModeKey(profile.mode) ? MODES[profile.mode].label : "Current setting";
+    const text = setupMigrationText(ctx, personality, mode);
+    if (state.activeMessageId && await editCurrentMessage(ctx, text, migrationKeyboard())) return;
+    await deleteActiveMessage(ctx, state);
+    await sendAndTrack(ctx, ctx.chat.id, text, migrationKeyboard());
+    return;
+  }
+
+  if (state.activeMessageId) return;
+  await showStep(ctx, state.step, false);
 }
 
 export function registerOnboardingHandlers(bot: Bot, deps: OnboardingDependencies): void {
@@ -184,7 +219,7 @@ export function registerOnboardingHandlers(bot: Bot, deps: OnboardingDependencie
     if (!ensure(ctx) || !ctx.from || !ctx.chat) return;
     await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "personality", status: "in_progress", version: CURRENT_ONBOARDING_VERSION });
     await ctx.answerCallbackQuery();
-    await ctx.editMessageText("🎭 <b>How should I interact with you?</b>\n\nChoose the personality that feels right. You can change it later from Settings.", { parse_mode: "HTML", reply_markup: personalityOnboardingKeyboard() });
+    await showStep(ctx, "personality", true);
   });
 
   bot.callbackQuery("onboard:migrate:start", async (ctx) => {
@@ -192,109 +227,116 @@ export function registerOnboardingHandlers(bot: Bot, deps: OnboardingDependencie
     await onboardingService.startLegacyMigration(ctx.from.id, ctx.chat.id);
     await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "proactivity", version: CURRENT_ONBOARDING_VERSION });
     await ctx.answerCallbackQuery({ text: "Personalization started" });
-    await ctx.editMessageText("⚡ <b>Let’s personalize the new preferences</b>\n\nYour existing personality, default mode, conversations, tasks, reminders, and memories stay untouched.\n\nHow proactive should I be?", { parse_mode: "HTML", reply_markup: proactivityKeyboard() });
+    await showStep(ctx, "proactivity", true);
   });
 
   bot.callbackQuery("onboard:migrate:later", async (ctx) => {
     if (!ensure(ctx) || !ctx.from || !ctx.chat) return;
-    await onboardingService.completeLegacyMigration(ctx.from.id, ctx.chat.id);
+    const state = await onboardingService.completeLegacyMigration(ctx.from.id, ctx.chat.id);
     await ctx.answerCallbackQuery({ text: "No changes made" });
-    await ctx.editMessageText(`🪽 <b>Welcome back, ${displayName(ctx)}!</b>\n\nNo existing settings or data were changed. You can personalize Wingbuddy later with <code>/setup</code>.`, { parse_mode: "HTML", reply_markup: mainOnboardingMenu() });
+    const text = `🪽 <b>Welcome back, ${displayName(ctx)}!</b>\n\nNo existing settings or data were changed. You can personalize Wingbuddy later with <code>/setup</code>.`;
+    if (state.activeMessageId && await editCurrentMessage(ctx, text, mainMenuKeyboard())) return;
+    await deleteActiveMessage(ctx, state);
+    await ctx.reply(text, { parse_mode: "HTML", reply_markup: mainMenuKeyboard() });
   });
 
   bot.callbackQuery(/^onboard:personality:(.+)$/, async (ctx) => {
     if (!ensure(ctx) || !ctx.from || !ctx.chat) return;
     const key = String(ctx.match[1]);
     if (!isPersonalityKey(key)) { await ctx.answerCallbackQuery({ text: "Unknown personality", show_alert: true }); return; }
-    await deps.upsertUser(ctx);
     await deps.conversations.setUserPersonality(ctx.from.id, key);
     await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "mode", version: CURRENT_ONBOARDING_VERSION });
     await ctx.answerCallbackQuery({ text: `${PERSONALITIES[key].label} selected` });
-    await ctx.editMessageText("🧠 <b>What will you use Wingbuddy for most?</b>\n\nThis becomes your default mode. Wingbuddy can still adapt when your request needs something different.", { parse_mode: "HTML", reply_markup: modeOnboardingKeyboard() });
+    await showStep(ctx, "mode", true);
   });
 
   bot.callbackQuery(/^onboard:mode:(.+)$/, async (ctx) => {
     if (!ensure(ctx) || !ctx.from || !ctx.chat) return;
     const key = String(ctx.match[1]);
     if (!isModeKey(key)) { await ctx.answerCallbackQuery({ text: "Unknown mode", show_alert: true }); return; }
-    await deps.upsertUser(ctx);
     await deps.modeService.switchMode(ctx.from.id, key, "callback");
     await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "proactivity", version: CURRENT_ONBOARDING_VERSION });
     await ctx.answerCallbackQuery({ text: `${MODES[key].label} selected` });
-    await ctx.editMessageText("⚡ <b>How proactive should I be?</b>\n\nShould I only respond when you ask, or occasionally check in when I can be useful?", { parse_mode: "HTML", reply_markup: proactivityKeyboard() });
+    await showStep(ctx, "proactivity", true);
   });
 
   bot.callbackQuery(/^onboard:proactivity:(never|occasional|proactive)$/, async (ctx) => {
     if (!ensure(ctx) || !ctx.from || !ctx.chat) return;
     await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "memory", version: CURRENT_ONBOARDING_VERSION, proactivityPreference: ctx.match[1] as ProactivityPreference });
     await ctx.answerCallbackQuery({ text: "Preference saved" });
-    await ctx.editMessageText("🧠 <b>Would you like me to remember useful things about you?</b>\n\nFor example, preferences, goals, or information you explicitly want me to remember. You stay in control and can review or remove memories anytime.", { parse_mode: "HTML", reply_markup: memoryKeyboard() });
+    await showStep(ctx, "memory", true);
   });
 
   bot.callbackQuery(/^onboard:memory:(enabled|disabled)$/, async (ctx) => {
     if (!ensure(ctx) || !ctx.from || !ctx.chat) return;
     await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "about_you", version: CURRENT_ONBOARDING_VERSION, memoryEnabled: ctx.match[1] === "enabled" });
     await ctx.answerCallbackQuery({ text: ctx.match[1] === "enabled" ? "Memory enabled" : "Memory kept off" });
-    await ctx.editMessageText("💭 <b>One last thing…</b>\n\nIs there anything you’d like me to know about you that could help me assist you better?\n\nYou can tell me about your goals, preferences, what you’re working on, how you like to communicate, or anything else that matters to you.\n\n<i>This is completely optional.</i>", { parse_mode: "HTML", reply_markup: aboutKeyboard() });
+    await showStep(ctx, "about_you", true);
   });
 
   bot.callbackQuery("onboard:about:write", async (ctx) => {
     if (!ensure(ctx) || !ctx.from || !ctx.chat) return;
     await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "about_you", version: CURRENT_ONBOARDING_VERSION });
     await ctx.answerCallbackQuery();
-    await ctx.editMessageText("✍️ <b>Tell me about you</b>\n\nSend one message in your own words. I’ll pass it through Wingbuddy’s normal memory processing rather than blindly saving everything.", { parse_mode: "HTML" });
+    await editCurrentMessage(ctx, "✍️ <b>Tell me about you</b>\n\nSend one message in your own words. I’ll pass it through Wingbuddy’s normal memory processing rather than blindly saving everything.");
   });
 
   bot.callbackQuery("onboard:about:skip", async (ctx) => {
     if (!ensure(ctx) || !ctx.from || !ctx.chat) return;
     await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "timezone", version: CURRENT_ONBOARDING_VERSION });
     await ctx.answerCallbackQuery({ text: "Skipped" });
-    await ctx.editMessageText("🌍 <b>What timezone should I use for your scheduled assistant features?</b>\n\nYou can change this later. Choose the closest option or keep the default.", { parse_mode: "HTML", reply_markup: timezoneKeyboard() });
+    await showStep(ctx, "timezone", true);
   });
 
   bot.callbackQuery(/^onboard:timezone:(.+)$/, async (ctx) => {
     if (!ensure(ctx) || !ctx.from || !ctx.chat) return;
     const timezone = String(ctx.match[1]);
-    let valid = false;
-    try { new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(); valid = true; } catch {}
-    if (!valid) { await ctx.answerCallbackQuery({ text: "Invalid timezone", show_alert: true }); return; }
-    await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "ready", timezone, status: "completed", version: CURRENT_ONBOARDING_VERSION });
-    const state = await onboardingService.get(ctx.from.id);
+    try { new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(); } catch { await ctx.answerCallbackQuery({ text: "Invalid timezone", show_alert: true }); return; }
+    const state = await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "ready", timezone, status: "completed", version: CURRENT_ONBOARDING_VERSION });
     await ctx.answerCallbackQuery({ text: "Setup complete" });
-    if (state) await sendReadySummary(ctx, deps, state);
+    await sendReadySummary(ctx, deps, state);
   });
 
   bot.callbackQuery(/^onboard:skip:(personality|mode|proactivity|memory|timezone)$/, async (ctx) => {
     if (!ensure(ctx) || !ctx.from || !ctx.chat) return;
     const skipped = ctx.match[1];
     const next: Record<string, OnboardingState["step"]> = { personality: "mode", mode: "proactivity", proactivity: "memory", memory: "about_you", timezone: "ready" };
-    await onboardingService.save(ctx.from.id, ctx.chat.id, { step: next[skipped], version: CURRENT_ONBOARDING_VERSION, ...(skipped === "timezone" ? { status: "completed" as const } : {}) });
-    await ctx.answerCallbackQuery({ text: "Skipped" });
+    const nextStep = next[skipped];
     if (skipped === "timezone") {
-      const state = await onboardingService.get(ctx.from.id);
-      if (state) await sendReadySummary(ctx, deps, state);
-    } else {
-      await renderStep(ctx, deps, next[skipped]);
+      const state = await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "ready", status: "completed", version: CURRENT_ONBOARDING_VERSION });
+      await ctx.answerCallbackQuery({ text: "Setup complete" });
+      await sendReadySummary(ctx, deps, state);
+      return;
     }
+    await onboardingService.save(ctx.from.id, ctx.chat.id, { step: nextStep, version: CURRENT_ONBOARDING_VERSION });
+    await ctx.answerCallbackQuery({ text: "Skipped" });
+    await showStep(ctx, nextStep, true);
   });
 
   bot.callbackQuery("onboard:finish", async (ctx) => {
     if (!ensure(ctx) || !ctx.from || !ctx.chat) return;
-    await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "ready", status: "completed", version: CURRENT_ONBOARDING_VERSION });
+    const state = await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "ready", status: "completed", version: CURRENT_ONBOARDING_VERSION, activeMessageId: null });
     await ctx.answerCallbackQuery();
-    await ctx.editMessageText(`🪽 <b>Welcome to Wingbuddy, ${displayName(ctx)}!</b>\n\nI’m ready when you are. Send me a message or choose an action below.`, { parse_mode: "HTML", reply_markup: mainOnboardingMenu() });
+    const text = `🪽 <b>Welcome to Wingbuddy, ${displayName(ctx)}!</b>\n\nI’m ready when you are. Send me a message or choose an action below.`;
+    if (!(state.activeMessageId && await editCurrentMessage(ctx, text, mainMenuKeyboard()))) {
+      await deleteActiveMessage(ctx, state);
+      await ctx.reply(text, { parse_mode: "HTML", reply_markup: mainMenuKeyboard() });
+    }
   });
 
   bot.on("message:text", async (ctx, next) => {
     if (!ensure(ctx) || !ctx.from || !ctx.chat) return next();
     const state = await onboardingService.get(ctx.from.id);
     if (!state || state.status === "completed") return next();
+
     if (state.step === "about_you") {
+      await deleteActiveMessage(ctx, state);
       await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "timezone", version: CURRENT_ONBOARDING_VERSION });
       if (state.memoryEnabled) void memoryService.processBackgroundExtraction(ctx.from.id, ctx.message.text);
-      await ctx.reply("🌍 <b>What timezone should I use for your scheduled assistant features?</b>\n\nYou can change this later. Choose the closest option or keep the default.", { parse_mode: "HTML", reply_markup: timezoneKeyboard() });
+      await showStep(ctx, "timezone", false);
       return;
     }
-    await renderStep(ctx, deps, state.step);
+
+    await showStep(ctx, state.step, true);
   });
 }
