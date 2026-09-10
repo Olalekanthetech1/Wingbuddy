@@ -1,4 +1,4 @@
-import { v2 as cloudinary, type UploadApiResponse, type UploadApiOptions } from "cloudinary";
+import { v2 as cloudinary, type UploadApiOptions, type UploadApiResponse } from "cloudinary";
 import { Readable } from "node:stream";
 import { logger } from "../lib/logger";
 
@@ -108,7 +108,7 @@ export class CloudinaryMediaStorageService {
         resolve(result);
       };
 
-      const stream = Readable.from(buffer);
+      const stream = Readable.from([buffer]);
       const uploadStream = useChunkedStream
         ? cloudinary.uploader.upload_chunked_stream(
             { ...uploadOptions, chunk_size: 20 * 1024 * 1024 },
