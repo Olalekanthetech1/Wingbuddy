@@ -2,7 +2,10 @@ import { InlineKeyboard, type Bot, type Context } from "grammy";
 import { MODE_KEYS, MODES, type ModeKey } from "../config/mode";
 import { PERSONALITY_KEYS, PERSONALITIES, type PersonalityKey } from "../config/personality";
 import { memoryService } from "../services/memory.service";
+import { taskService } from "../services/task.service";
+import { reminderService } from "../services/reminder.service";
 import { CURRENT_ONBOARDING_VERSION, onboardingService, type OnboardingState, type ProactivityPreference } from "../services/onboarding.service";
+import { adaptiveStartExperienceService } from "./adaptive-start-experience.service";
 import type { ConversationService } from "../services/conversation.service";
 import type { ModeService } from "../services/mode.service";
 import { mainMenuKeyboard, settingsKeyboard } from "./keyboards";
@@ -104,6 +107,33 @@ async function showStep(ctx: Context, step: OnboardingState["step"], preferEdit 
   if (fresh) await sendAndTrack(ctx, ctx.chat.id, content.text, content.replyMarkup);
 }
 
+async function buildAdaptiveMainMenuText(ctx: Context, deps: OnboardingDependencies): Promise<string> {
+  if (!ctx.from || !ctx.chat) return "🪽 Wingbuddy is ready.";
+
+  const [state, profile, activeTasks, activeReminders, recentSummary] = await Promise.all([
+    onboardingService.get(ctx.from.id),
+    deps.conversations.getUserWithFullContext(ctx.from.id),
+    taskService.getActiveTasksForUser(ctx.from.id),
+    reminderService.getActiveUserReminders(ctx.from.id),
+    deps.conversations.getRecentSessionSummary(ctx.from.id, ctx.chat.id),
+  ]);
+
+  const rawMode = typeof profile?.mode === "string" && isModeKey(profile.mode) ? profile.mode : "general";
+  const reminders = [...activeReminders].sort((a, b) => new Date(a.dueAt).getTime() - new Date(b.dueAt).getTime());
+  const nextReminder = reminders.find((reminder) => Number.isFinite(new Date(reminder.dueAt).getTime())) ?? null;
+
+  return adaptiveStartExperienceService.build({
+    displayName: displayName(ctx),
+    isReturningUser: Boolean(state?.status === "completed"),
+    mode: rawMode,
+    activeTaskCount: activeTasks.length,
+    activeReminderCount: activeReminders.length,
+    nextReminderDueAt: nextReminder ? new Date(nextReminder.dueAt) : null,
+    recentSessionAvailable: Boolean(recentSummary?.trim()),
+    timezone: state?.timezone || "Africa/Lagos",
+  });
+}
+
 async function sendReadySummary(ctx: Context, deps: OnboardingDependencies, state: OnboardingState): Promise<void> {
   const profile = await deps.conversations.getUserWithFullContext(ctx.from!.id);
   const personalityKey = typeof profile?.personality === "string" && isPersonalityKey(profile.personality) ? profile.personality : null;
@@ -125,7 +155,8 @@ export async function startOnboarding(ctx: Context, deps: OnboardingDependencies
   if (state?.status === "completed" && state.version < CURRENT_ONBOARDING_VERSION) state = await onboardingService.startLegacyMigration(ctx.from.id, ctx.chat.id);
   else if (!state) state = existedBeforeUpsert ? await onboardingService.startLegacyMigration(ctx.from.id, ctx.chat.id) : await onboardingService.start(ctx.from.id, ctx.chat.id);
   if (state.status === "completed" && state.version >= CURRENT_ONBOARDING_VERSION) {
-    await ctx.reply(`👋 <b>Welcome back, ${displayName(ctx)}!</b>\n\nYour Wingbuddy setup is already configured. What are we working on today?`, { parse_mode: "HTML", reply_markup: mainMenuKeyboard() });
+    const text = await buildAdaptiveMainMenuText(ctx, deps);
+    await ctx.reply(text, { parse_mode: "HTML", reply_markup: mainMenuKeyboard() });
     return;
   }
   if (state.step === "migration") {
@@ -145,6 +176,16 @@ export async function startOnboarding(ctx: Context, deps: OnboardingDependencies
 export function registerOnboardingHandlers(bot: Bot, deps: OnboardingDependencies): void {
   const ensure = (ctx: Context): boolean => Boolean(ctx.from && deps.authorized(ctx.from.id));
 
+  // Registered before the broader menu callback in bot.ts so the main menu is always contextual.
+  bot.callbackQuery("menu:main", async (ctx) => {
+    if (!ensure(ctx) || !ctx.from || !ctx.chat) return;
+    await ctx.answerCallbackQuery();
+    const text = await buildAdaptiveMainMenuText(ctx, deps);
+    await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: mainMenuKeyboard() }).catch(async () => {
+      await ctx.reply(text, { parse_mode: "HTML", reply_markup: mainMenuKeyboard() });
+    });
+  });
+
   bot.command("setup", async (ctx) => {
     if (!ensure(ctx) || !ctx.from) return;
     await deps.upsertUser(ctx);
@@ -160,8 +201,8 @@ export function registerOnboardingHandlers(bot: Bot, deps: OnboardingDependencie
   bot.callbackQuery("onboard:migrate:later", async (ctx) => {
     if (!ensure(ctx) || !ctx.from || !ctx.chat) return;
     const current = await onboardingService.get(ctx.from.id);
-    const text = `🪽 <b>Welcome back, ${displayName(ctx)}!</b>\n\nNo existing settings or data were changed. You can personalize Wingbuddy later with <code>/setup</code>.`;
     await onboardingService.completeLegacyMigration(ctx.from.id, ctx.chat.id);
+    const text = await buildAdaptiveMainMenuText(ctx, deps);
     await ctx.answerCallbackQuery({ text: "No changes made" });
     if (current?.activeMessageId && await editCurrentMessage(ctx, text, mainMenuKeyboard())) { await onboardingService.setActiveMessage(ctx.from.id, ctx.chat.id, null); return; }
     if (current) await deleteActiveMessage(ctx, current);
@@ -203,11 +244,11 @@ export function registerOnboardingHandlers(bot: Bot, deps: OnboardingDependencie
   bot.callbackQuery("onboard:finish", async (ctx) => {
     if (!ensure(ctx) || !ctx.from || !ctx.chat) return;
     const current = await onboardingService.get(ctx.from.id);
-    const text = `🪽 <b>Welcome to Wingbuddy, ${displayName(ctx)}!</b>\n\nI’m ready when you are. Send me a message or choose an action below.`;
-    await ctx.answerCallbackQuery();
-    if (current?.activeMessageId && await editCurrentMessage(ctx, text, mainMenuKeyboard())) { await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "ready", status: "completed", version: CURRENT_ONBOARDING_VERSION, activeMessageId: null }); return; }
-    if (current) await deleteActiveMessage(ctx, current);
     await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "ready", status: "completed", version: CURRENT_ONBOARDING_VERSION, activeMessageId: null });
+    const text = await buildAdaptiveMainMenuText(ctx, deps);
+    await ctx.answerCallbackQuery();
+    if (current?.activeMessageId && await editCurrentMessage(ctx, text, mainMenuKeyboard())) return;
+    if (current) await deleteActiveMessage(ctx, current);
     await ctx.reply(text, { parse_mode: "HTML", reply_markup: mainMenuKeyboard() });
   });
 
