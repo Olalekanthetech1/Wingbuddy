@@ -195,12 +195,22 @@ export class TaskService {
 
   /**
    * Natural-language task routing is owned by SemanticInteractionResolverService.
-   * This compatibility boundary reads the current turn's short-lived semantic decision;
-   * explicit Telegram commands can still pass a semantic decision directly.
+   * This compatibility boundary reads the current turn's short-lived semantic decision.
+   * A semantic NEW_TASK attached to a one-shot capability (for example image/video
+   * generation) does not become a durable task unless the resolver explicitly marks
+   * the turn as multi-step. This keeps one-shot actions out of the task database while
+   * preserving explicit multi-step task requests.
    */
   detectTaskIntent(text: string, semantic?: SemanticInteractionDecision | null): TaskIntentResult {
     const decision = semantic || semanticInteractionCache.getLatestForText(text);
     if (!decision?.taskIntent || decision.taskIntent === "NO_TASK") return { intent: "NO_TASK" };
+
+    const oneShotCapability = decision.intent === "image_generation" || decision.intent === "video_generation";
+    if (decision.taskIntent === "NEW_TASK" && oneShotCapability && decision.complexity !== "multi_step") {
+      logger.info({ intent: decision.intent, complexity: decision.complexity, confidence: decision.confidence }, "TASK_CREATION_SUPPRESSED_FOR_ONE_SHOT_REQUEST");
+      return { intent: "NO_TASK" };
+    }
+
     return {
       intent: decision.taskIntent,
       taskTitle: decision.taskTitle,
