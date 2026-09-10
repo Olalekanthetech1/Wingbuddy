@@ -89,15 +89,17 @@ export class GeminiKeyRecoveryService {
         const rawEnvKey = envKeys.get(fingerprint);
         if (!rawEnvKey) {
           unrecoverable += 1;
-          logger.warn({ id }, "Gemini API key ciphertext could not be decrypted and no matching configured environment key is available");
+          await db.execute(sql`UPDATE ${sql.raw(TABLE)} SET enabled = FALSE, status = 'invalid', last_error = ${"decryption_failed"}, updated_at = NOW(), deleted_at = NOW() WHERE id = ${id} AND secret_ciphertext = ${ciphertext} AND deleted_at IS NULL`);
+          logger.warn({ id }, "Gemini API key quarantined after decryption failed and no matching environment key was available");
           continue;
         }
-        await db.execute(sql`UPDATE ${sql.raw(TABLE)} SET secret_ciphertext = ${this.encrypt(rawEnvKey, secrets[0])}, updated_at = NOW(), status = 'healthy', enabled = TRUE, last_error = NULL WHERE id = ${id} AND secret_ciphertext = ${ciphertext}`);
+        await db.execute(sql`UPDATE ${sql.raw(TABLE)} SET secret_ciphertext = ${this.encrypt(rawEnvKey, secrets[0])}, updated_at = NOW(), status = 'healthy', enabled = TRUE, last_error = NULL, deleted_at = NULL WHERE id = ${id} AND secret_ciphertext = ${ciphertext}`);
         repaired += 1;
         logger.info({ id }, "Recovered Gemini API key from matching environment fingerprint and repaired encrypted record");
       }
     }
 
+    logger.info({ scanned: result.rows.length, repaired, unrecoverable }, "Gemini managed-key recovery completed");
     return { scanned: result.rows.length, repaired, unrecoverable };
   }
 }
