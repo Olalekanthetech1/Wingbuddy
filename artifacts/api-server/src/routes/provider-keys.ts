@@ -30,25 +30,22 @@ router.post("/provider-keys", async (req: Request, res: Response) => {
     const name = typeof req.body?.name === "string" ? req.body.name.trim() : undefined;
     const model = typeof req.body?.model === "string" ? req.body.model.trim() : "";
     if (!key) { res.status(400).json({ error: "Missing required field 'key'" }); return; }
-    if (!model) { res.status(400).json({ error: "Missing required field 'model' for key validation" }); return; }
     const provider = await aiProviderRegistryService.get(providerId);
 
-    const catalog = await aiModelCatalogService.listWithKey(providerId, key);
-    if (!catalog.some((entry) => entry.modelId === model)) {
-      res.status(400).json({ error: `Model ${providerId}/${model} was not returned by the provider for this API key`, availableModels: catalog.map((entry) => ({ modelId: entry.modelId, name: entry.name })) });
-      return;
-    }
-
-    let validation: { ok: boolean; latencyMs: number; error?: string };
     if (providerId === "huggingface") {
-      const selected = catalog.find((entry) => entry.modelId === model)!;
-      const mediaValidation = await huggingFaceMediaService.testModelWithKey({ modelId: selected.modelId, capabilities: selected.capabilities }, key);
-      validation = { ok: mediaValidation.ok, latencyMs: mediaValidation.latencyMs, error: mediaValidation.error };
+      const validation = await huggingFaceMediaService.validateToken(key);
+      if (!validation.ok) { res.status(400).json({ error: validation.error || "Hugging Face token validation failed", validation }); return; }
     } else {
+      if (!model) { res.status(400).json({ error: "Missing required field 'model' for key validation" }); return; }
+      const catalog = await aiModelCatalogService.listWithKey(providerId, key);
+      if (!catalog.some((entry) => entry.modelId === model)) {
+        res.status(400).json({ error: `Model ${providerId}/${model} was not returned by the provider for this API key`, availableModels: catalog.map((entry) => ({ modelId: entry.modelId, name: entry.name })) });
+        return;
+      }
       const adapter = aiProviderRegistryService.getAdapter(provider.adapter);
-      validation = await adapter.test(model, provider, key);
+      const validation = await adapter.test(model, provider, key);
+      if (!validation.ok) { res.status(400).json({ error: validation.error || "Provider API key validation failed", validation }); return; }
     }
-    if (!validation.ok) { res.status(400).json({ error: validation.error || "Provider API key validation failed", validation }); return; }
 
     const saved = providerId === "gemini" ? await apiKeyPoolService.addKey(key, name) : await aiProviderKeyPoolService.addKey(providerId, key, name);
 
