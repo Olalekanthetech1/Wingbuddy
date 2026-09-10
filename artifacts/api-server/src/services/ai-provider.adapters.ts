@@ -1,6 +1,8 @@
 import { GoogleGenAI } from "@google/genai";
-import type { AIChatRequest, AIChatResponse, AIMessage, AIModelCatalogEntry, AIProviderAdapter, AIProviderRecord, AIStreamChunk, AIUsage } from "./ai-provider.types";
+import { InferenceClient } from "@huggingface/inference";
+import type { AIChatRequest, AIChatResponse, AIMessage, AIModelCatalogEntry, AIProviderAdapter, AIProviderRecord, AIStreamChunk, AIUsage, AIImageGenerationRequest, AIImageGenerationResponse, AIVideoGenerationRequest, AIVideoGenerationResponse } from "./ai-provider.types";
 import type { AIProviderId } from "./ai-provider.types";
+import { logger } from "../lib/logger";
 
 function requireApiKey(provider: AIProviderRecord, apiKey?: string): string { const value = apiKey?.trim() || process.env[provider.apiKeyEnv]?.trim(); if (!value) throw new Error(`${provider.apiKeyEnv} is not configured`); return value; }
 function normalizeBaseUrl(value: string): string { return value.replace(/\/+$/, ""); }
@@ -10,6 +12,9 @@ async function requireOk(response: Response, provider: AIProviderId): Promise<vo
 async function* parseSSE(response: Response, mapEvent: (payload: any) => AIStreamChunk | null): AsyncGenerator<AIStreamChunk> { if (!response.body) throw new Error("Provider returned an empty stream"); const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = ""; try { while (true) { const { done, value } = await reader.read(); if (done) break; buffer += decoder.decode(value, { stream: true }); const events = buffer.split(/\r?\n\r?\n/); buffer = events.pop() || ""; for (const event of events) { const data = event.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).join(""); if (!data || data === "[DONE]") continue; try { const chunk = mapEvent(JSON.parse(data)); if (chunk) yield chunk; } catch { /* Ignore malformed provider SSE frames. */ } } } } finally { reader.releaseLock(); } }
 function normalizeCatalogCapabilities(source: any): string[] { if (Array.isArray(source?.capabilities)) return source.capabilities.filter((value: unknown): value is string => typeof value === "string"); if (source?.capabilities && typeof source.capabilities === "object") return Object.entries(source.capabilities).filter(([, enabled]) => enabled === true).map(([name]) => name); if (Array.isArray(source?.supported_actions)) return source.supported_actions.filter((value: unknown): value is string => typeof value === "string"); return []; }
 function catalogEntry(provider: AIProviderId, modelId: string, name: string | undefined, status: string | undefined, capabilities: string[], contextWindow?: number): AIModelCatalogEntry { return { provider, modelId, name: name?.trim() || modelId, status: status === "active" ? "active" : status === "inactive" ? "inactive" : "unknown", capabilities: [...new Set(capabilities)], ...(Number.isFinite(contextWindow) && contextWindow! > 0 ? { contextWindow: contextWindow! } : {}), source: "provider_api" }; }
+function safeModel(envName: string, fallback: string): string { return process.env[envName]?.trim() || fallback; }
+function detectMime(buffer: Buffer): string { if (buffer.length >= 12 && buffer.subarray(4, 8).toString("ascii") === "ftyp") return "video/mp4"; if (buffer.length >= 4 && buffer.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) return "video/webm"; if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png"; if (buffer.length >= 3 && buffer.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) return "image/jpeg"; return "application/octet-stream"; }
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> { return new Promise<T>((resolve, reject) => { const timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs); promise.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); }); }); }
 
 class GeminiAdapter implements AIProviderAdapter {
   readonly providerId = "gemini" as const;
@@ -28,6 +33,133 @@ abstract class OpenAICompatibleAdapter implements AIProviderAdapter {
   async test(model: string, provider: AIProviderRecord, apiKey?: string) { const started = Date.now(); try { await this.chat({ model, messages: [{ role: "user", content: "ping" }], maxOutputTokens: 4 }, provider, apiKey); return { ok: true, latencyMs: Date.now() - started }; } catch (error) { return { ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) }; } }
   async listModels(provider: AIProviderRecord, apiKey?: string): Promise<AIModelCatalogEntry[]> { const response = await fetch(`${normalizeBaseUrl(provider.baseUrl)}${this.modelPath}`, { headers: { Authorization: `Bearer ${requireApiKey(provider, apiKey)}`, Accept: "application/json" } }); await requireOk(response, this.providerId); const payload: any = await response.json(); const rows = Array.isArray(payload?.data) ? payload.data : []; return rows.map((raw: any) => { const modelId = typeof raw?.id === "string" ? raw.id.trim() : ""; if (!modelId) return null; return catalogEntry(this.providerId, modelId, raw?.name || raw?.id, raw?.active === false || raw?.archived === true ? "inactive" : "active", normalizeCatalogCapabilities(raw), Number(raw?.context_window ?? raw?.max_context_length ?? NaN)); }).filter((item: AIModelCatalogEntry | null): item is AIModelCatalogEntry => Boolean(item)); }
 }
+
+class HuggingFaceAdapter implements AIProviderAdapter {
+  readonly providerId = "huggingface" as const;
+
+  private client(apiKey?: string): InferenceClient { return new InferenceClient(requireApiKey({ ...({ id: "huggingface", name: "Hugging Face", adapter: "huggingface", enabled: true, baseUrl: "https://huggingface.co", apiKeyEnv: "HF_TOKEN", capabilities: [], createdAt: "", updatedAt: "" } as AIProviderRecord), apiKeyEnv: "HF_TOKEN" }, apiKey)); }
+
+  async chat(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIChatResponse> {
+    const token = requireApiKey(provider, apiKey);
+    const client = new InferenceClient(token);
+    const response: any = await withTimeout(client.chatCompletion({ model: request.model, provider: "auto", messages: request.messages.map(asOpenAIMessage), ...(request.temperature !== undefined ? { temperature: request.temperature } : {}), ...(request.topP !== undefined ? { top_p: request.topP } : {}), ...(request.maxOutputTokens !== undefined ? { max_tokens: request.maxOutputTokens } : {}) } as any), 60_000, "Hugging Face chat");
+    return { provider: this.providerId, model: request.model, text: response.choices?.[0]?.message?.content || "", finishReason: response.choices?.[0]?.finish_reason, usage: normalizeUsage(response.usage), raw: response };
+  }
+
+  async *stream(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): AsyncGenerator<AIStreamChunk> {
+    const token = requireApiKey(provider, apiKey);
+    const client = new InferenceClient(token);
+    const stream: any = client.chatCompletionStream({ model: request.model, provider: "auto", messages: request.messages.map(asOpenAIMessage), ...(request.temperature !== undefined ? { temperature: request.temperature } : {}), ...(request.topP !== undefined ? { top_p: request.topP } : {}), ...(request.maxOutputTokens !== undefined ? { max_tokens: request.maxOutputTokens } : {}) } as any);
+    for await (const chunk of stream) { const choice = chunk?.choices?.[0]; const delta = typeof choice?.delta?.content === "string" ? choice.delta.content : ""; const finishReason = choice?.finish_reason; if (!delta && !finishReason) continue; yield { provider: this.providerId, model: request.model, delta, done: Boolean(finishReason), finishReason, usage: normalizeUsage(chunk?.usage) }; }
+  }
+
+  async generateImage(request: AIImageGenerationRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIImageGenerationResponse> {
+    const token = apiKey?.trim() || process.env.HF_TOKEN?.trim();
+    const model = request.model?.trim() || safeModel("HF_IMAGE_MODEL", "Qwen/Qwen-Image");
+    const width = Number.isFinite(request.width) && request.width! > 0 ? Math.floor(request.width!) : 1024;
+    const height = Number.isFinite(request.height) && request.height! > 0 ? Math.floor(request.height!) : 1024;
+
+    if (token) {
+      const client = new InferenceClient(token);
+      try {
+        const controller = new AbortController();
+        const image = await withTimeout(client.textToImage({ model, provider: "auto", inputs: request.prompt, parameters: { width, height } } as any, { outputType: "blob", signal: controller.signal } as any), 90_000, "Hugging Face image");
+        const buffer = Buffer.from(await image.arrayBuffer());
+        if (buffer.length > 2000 && detectMime(buffer).startsWith("image/")) {
+          logger.info({ model, width, height, route: "inference_provider" }, "Hugging Face image generation succeeded");
+          return { provider: this.providerId, route: "inference_provider", model, buffer, mimeType: detectMime(buffer), fallbackUsed: false };
+        }
+        throw new Error("Hugging Face returned an invalid image payload");
+      } catch (error) {
+        logger.warn({ model, error: String(error) }, "Hugging Face authenticated image route failed; switching to community fallback");
+      }
+    } else {
+      logger.info({ model }, "HF_TOKEN unavailable; using community image fallback");
+    }
+
+    return this.generateImageViaCommunity(request, model);
+  }
+
+  private async generateImageViaCommunity(request: AIImageGenerationRequest, model: string): Promise<AIImageGenerationResponse> {
+    const seed = Math.floor(Math.random() * 1_000_000_000);
+    const width = Number.isFinite(request.width) && request.width! > 0 ? Math.floor(request.width!) : 1024;
+    const height = Number.isFinite(request.height) && request.height! > 0 ? Math.floor(request.height!) : 1024;
+    const encoded = encodeURIComponent(request.prompt.slice(0, 1000));
+    const url = `https://image.pollinations.ai/prompt/${encoded}?width=${width}&height=${height}&model=flux&nologo=true&seed=${seed}`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60_000);
+    try {
+      const response = await fetch(url, { signal: controller.signal, headers: { Accept: "image/jpeg,image/png,image/*", "User-Agent": "Wingbuddy/3.0" } });
+      if (!response.ok) throw new Error(`Community image endpoint returned HTTP ${response.status}`);
+      const buffer = Buffer.from(await response.arrayBuffer());
+      const mimeType = detectMime(buffer);
+      if (buffer.length < 2000 || !mimeType.startsWith("image/")) throw new Error("Community image endpoint returned invalid media");
+      logger.info({ model, route: "community", width, height }, "Hugging Face provider selected community image fallback");
+      return { provider: this.providerId, route: "community", model, buffer, mimeType, sourceUrl: url, fallbackUsed: true };
+    } finally { clearTimeout(timeout); }
+  }
+
+  async generateVideo(request: AIVideoGenerationRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIVideoGenerationResponse> {
+    const token = apiKey?.trim() || process.env.HF_TOKEN?.trim();
+    const model = request.model?.trim() || safeModel("HF_VIDEO_MODEL", "Wan-AI/Wan2.2-TI2V-5B");
+    if (token) {
+      const client = new InferenceClient(token);
+      try {
+        const video = await withTimeout(client.textToVideo({ model, provider: "auto", inputs: request.prompt } as any, { signal: new AbortController().signal } as any), 180_000, "Hugging Face video");
+        const buffer = Buffer.from(await video.arrayBuffer());
+        const mimeType = detectMime(buffer);
+        if (buffer.length > 2000 && mimeType.startsWith("video/")) {
+          logger.info({ model, route: "inference_provider" }, "Hugging Face video generation succeeded");
+          return { provider: this.providerId, route: "inference_provider", model, buffer, mimeType, fallbackUsed: false };
+        }
+        throw new Error("Hugging Face returned an invalid video payload");
+      } catch (error) {
+        logger.warn({ model, error: String(error) }, "Hugging Face authenticated video route failed; switching to community fallback");
+      }
+    } else {
+      logger.info({ model }, "HF_TOKEN unavailable; using community video fallback");
+    }
+
+    const seed = Math.floor(Math.random() * 1_000_000_000);
+    const encoded = encodeURIComponent(request.prompt.slice(0, 800));
+    const url = `https://image.pollinations.ai/prompt/${encoded}?model=video&nologo=true&seed=${seed}`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 90_000);
+    try {
+      const response = await fetch(url, { signal: controller.signal, headers: { Accept: "video/mp4,video/webm,video/*,*/*", "User-Agent": "Wingbuddy/3.0" } });
+      if (!response.ok) throw new Error(`Community video endpoint returned HTTP ${response.status}`);
+      const buffer = Buffer.from(await response.arrayBuffer());
+      const mimeType = detectMime(buffer);
+      if (buffer.length < 2000 || !mimeType.startsWith("video/")) throw new Error("Community video endpoint returned invalid media");
+      logger.info({ model, route: "community" }, "Hugging Face provider selected community video fallback");
+      return { provider: this.providerId, route: "community", model, buffer, mimeType, sourceUrl: url, fallbackUsed: true };
+    } finally { clearTimeout(timeout); }
+  }
+
+  async test(model: string, provider: AIProviderRecord, apiKey?: string) { const started = Date.now(); try { await this.chat({ model, messages: [{ role: "user", content: "ping" }], maxOutputTokens: 4 }, provider, apiKey); return { ok: true, latencyMs: Date.now() - started }; } catch (error) { return { ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) }; } }
+
+  async listModels(provider: AIProviderRecord, apiKey?: string): Promise<AIModelCatalogEntry[]> {
+    const token = apiKey?.trim() || process.env.HF_TOKEN?.trim();
+    const models = [
+      process.env.HF_TEXT_MODEL?.trim(),
+      process.env.HF_IMAGE_MODEL?.trim(),
+      process.env.HF_VIDEO_MODEL?.trim(),
+    ].filter((value): value is string => Boolean(value));
+    const unique = [...new Set(models)];
+    if (!token || !unique.length) return unique.map((modelId) => catalogEntry(this.providerId, modelId, modelId, "unknown", []));
+    try {
+      const response = await fetch("https://huggingface.co/api/models?inference_provider=all&limit=100", { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } });
+      if (!response.ok) throw new Error(`HF model discovery failed (${response.status})`);
+      const payload: any = await response.json();
+      const rows = Array.isArray(payload) ? payload : [];
+      return rows.filter((row: any) => typeof row?.id === "string").map((row: any) => catalogEntry(this.providerId, row.id, row.id, "active", normalizeCatalogCapabilities(row), Number(row?.config?.max_position_embeddings ?? NaN)));
+    } catch (error) {
+      logger.warn({ error: String(error) }, "Hugging Face model discovery failed; returning configured models");
+      return unique.map((modelId) => catalogEntry(this.providerId, modelId, modelId, "unknown", []));
+    }
+  }
+}
+
 class GroqAdapter extends OpenAICompatibleAdapter { readonly providerId = "groq" as const; protected completionPath = "/chat/completions"; }
 class MistralAdapter extends OpenAICompatibleAdapter { readonly providerId = "mistral" as const; protected completionPath = "/v1/chat/completions"; protected modelPath = "/v1/models"; }
-export const aiProviderAdapters: Record<AIProviderId, AIProviderAdapter & { listModels: (provider: AIProviderRecord, apiKey?: string) => Promise<AIModelCatalogEntry[]> }> = { gemini: new GeminiAdapter(), groq: new GroqAdapter(), mistral: new MistralAdapter() };
+export const aiProviderAdapters: Record<AIProviderId, AIProviderAdapter & { listModels: (provider: AIProviderRecord, apiKey?: string) => Promise<AIModelCatalogEntry[]> }> = { gemini: new GeminiAdapter(), groq: new GroqAdapter(), mistral: new MistralAdapter(), huggingface: new HuggingFaceAdapter() };
