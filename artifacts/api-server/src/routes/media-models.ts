@@ -51,7 +51,7 @@ router.get("/media-models", async (req: Request, res: Response) => {
     const capability = req.query.capability ? resolveCapability(req.query.capability) : undefined;
     const models = await unifiedModelRegistryService.list();
     const filtered = capability
-      ? models.filter((model) => model.enabled && model.capabilities.includes(capability))
+      ? models.filter((model) => model.capabilities.includes(capability))
       : models.filter((model) => model.capabilities.some((item) => MEDIA_CAPABILITIES.has(item)));
     res.json({ timestamp: new Date().toISOString(), controlPlane: "postgresql-authoritative", capability: capability || null, models: filtered });
   } catch (error) {
