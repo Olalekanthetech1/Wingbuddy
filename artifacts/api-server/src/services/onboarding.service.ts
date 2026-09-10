@@ -1,8 +1,9 @@
 import { getPool } from "@workspace/db";
 import { logger } from "../lib/logger";
 
-export type OnboardingStep = "welcome" | "personality" | "mode" | "proactivity" | "memory" | "about_you" | "timezone" | "ready";
+export type OnboardingStep = "welcome" | "migration" | "personality" | "mode" | "proactivity" | "memory" | "about_you" | "timezone" | "ready";
 export type ProactivityPreference = "never" | "occasional" | "proactive";
+export const CURRENT_ONBOARDING_VERSION = 2;
 
 export interface OnboardingState {
   telegramUserId: number;
@@ -12,6 +13,7 @@ export interface OnboardingState {
   proactivityPreference: ProactivityPreference;
   memoryEnabled: boolean;
   timezone: string;
+  version: number;
   updatedAt: string;
   completedAt?: string | null;
 }
@@ -19,12 +21,17 @@ export interface OnboardingState {
 const TABLE = "onboarding_profiles";
 
 function normalizeStep(value: unknown): OnboardingStep {
-  const steps: OnboardingStep[] = ["welcome", "personality", "mode", "proactivity", "memory", "about_you", "timezone", "ready"];
+  const steps: OnboardingStep[] = ["welcome", "migration", "personality", "mode", "proactivity", "memory", "about_you", "timezone", "ready"];
   return typeof value === "string" && steps.includes(value as OnboardingStep) ? value as OnboardingStep : "welcome";
 }
 
 function normalizeProactivity(value: unknown): ProactivityPreference {
   return value === "never" || value === "proactive" ? value : "occasional";
+}
+
+function normalizeVersion(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0;
 }
 
 export class OnboardingService {
@@ -38,10 +45,13 @@ export class OnboardingService {
         proactivity_preference TEXT NOT NULL DEFAULT 'occasional',
         memory_enabled BOOLEAN NOT NULL DEFAULT TRUE,
         timezone TEXT NOT NULL DEFAULT 'Africa/Lagos',
+        version INTEGER NOT NULL DEFAULT 0,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         completed_at TIMESTAMPTZ
       );
+      ALTER TABLE ${TABLE} ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 0;
       CREATE INDEX IF NOT EXISTS onboarding_profiles_status_idx ON ${TABLE}(status);
+      CREATE INDEX IF NOT EXISTS onboarding_profiles_version_idx ON ${TABLE}(version);
     `);
   }
 
@@ -49,7 +59,7 @@ export class OnboardingService {
     const result = await getPool().query(`
       SELECT telegram_user_id AS "telegramUserId", chat_id AS "chatId", status, step,
              proactivity_preference AS "proactivityPreference", memory_enabled AS "memoryEnabled",
-             timezone, updated_at AS "updatedAt", completed_at AS "completedAt"
+             timezone, version, updated_at AS "updatedAt", completed_at AS "completedAt"
       FROM ${TABLE} WHERE telegram_user_id = $1 LIMIT 1
     `, [telegramUserId]);
     const row = result.rows[0];
@@ -62,6 +72,7 @@ export class OnboardingService {
       proactivityPreference: normalizeProactivity(row.proactivityPreference),
       memoryEnabled: row.memoryEnabled !== false,
       timezone: typeof row.timezone === "string" && row.timezone ? row.timezone : "Africa/Lagos",
+      version: normalizeVersion(row.version),
       updatedAt: new Date(row.updatedAt).toISOString(),
       completedAt: row.completedAt ? new Date(row.completedAt).toISOString() : null,
     };
@@ -69,14 +80,42 @@ export class OnboardingService {
 
   async start(telegramUserId: number, chatId: number): Promise<OnboardingState> {
     const existing = await this.get(telegramUserId);
-    if (existing?.status === "completed") return existing;
-    return this.save(telegramUserId, chatId, { status: "in_progress", step: existing?.step ?? "welcome" });
+    if (existing?.status === "completed" && existing.version >= CURRENT_ONBOARDING_VERSION) return existing;
+    return this.save(telegramUserId, chatId, {
+      status: "in_progress",
+      step: existing?.step ?? "welcome",
+      version: CURRENT_ONBOARDING_VERSION,
+    });
+  }
+
+  async startLegacyMigration(telegramUserId: number, chatId: number): Promise<OnboardingState> {
+    const existing = await this.get(telegramUserId);
+    return this.save(telegramUserId, chatId, {
+      status: "in_progress",
+      step: "migration",
+      version: CURRENT_ONBOARDING_VERSION,
+      proactivityPreference: existing?.proactivityPreference ?? "occasional",
+      memoryEnabled: existing?.memoryEnabled ?? true,
+      timezone: existing?.timezone ?? "Africa/Lagos",
+    });
+  }
+
+  async completeLegacyMigration(telegramUserId: number, chatId: number): Promise<OnboardingState> {
+    const existing = await this.get(telegramUserId);
+    return this.save(telegramUserId, chatId, {
+      status: "completed",
+      step: "ready",
+      version: CURRENT_ONBOARDING_VERSION,
+      proactivityPreference: existing?.proactivityPreference ?? "occasional",
+      memoryEnabled: existing?.memoryEnabled ?? true,
+      timezone: existing?.timezone ?? "Africa/Lagos",
+    });
   }
 
   async save(
     telegramUserId: number,
     chatId: number,
-    patch: Partial<Pick<OnboardingState, "status" | "step" | "proactivityPreference" | "memoryEnabled" | "timezone">>,
+    patch: Partial<Pick<OnboardingState, "status" | "step" | "proactivityPreference" | "memoryEnabled" | "timezone" | "version">>,
   ): Promise<OnboardingState> {
     const current = await this.get(telegramUserId);
     const status = patch.status ?? current?.status ?? "in_progress";
@@ -84,9 +123,10 @@ export class OnboardingService {
     const preference = normalizeProactivity(patch.proactivityPreference ?? current?.proactivityPreference);
     const memoryEnabled = patch.memoryEnabled ?? current?.memoryEnabled ?? true;
     const timezone = patch.timezone?.trim() || current?.timezone || "Africa/Lagos";
+    const version = normalizeVersion(patch.version ?? current?.version ?? CURRENT_ONBOARDING_VERSION);
     await getPool().query(`
-      INSERT INTO ${TABLE}(telegram_user_id, chat_id, status, step, proactivity_preference, memory_enabled, timezone, updated_at, completed_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),CASE WHEN $3 = 'completed' THEN NOW() ELSE NULL END)
+      INSERT INTO ${TABLE}(telegram_user_id, chat_id, status, step, proactivity_preference, memory_enabled, timezone, version, updated_at, completed_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),CASE WHEN $3 = 'completed' THEN NOW() ELSE NULL END)
       ON CONFLICT (telegram_user_id) DO UPDATE SET
         chat_id=EXCLUDED.chat_id,
         status=EXCLUDED.status,
@@ -94,16 +134,18 @@ export class OnboardingService {
         proactivity_preference=EXCLUDED.proactivity_preference,
         memory_enabled=EXCLUDED.memory_enabled,
         timezone=EXCLUDED.timezone,
+        version=EXCLUDED.version,
         updated_at=NOW(),
         completed_at=CASE WHEN EXCLUDED.status='completed' THEN NOW() ELSE ${TABLE}.completed_at END
-    `, [telegramUserId, chatId, status, step, preference, memoryEnabled, timezone]);
+    `, [telegramUserId, chatId, status, step, preference, memoryEnabled, timezone, version]);
     const saved = await this.get(telegramUserId);
     if (!saved) throw new Error("Onboarding state could not be persisted.");
     return saved;
   }
 
   async isCompleted(telegramUserId: number): Promise<boolean> {
-    return (await this.get(telegramUserId))?.status === "completed";
+    const state = await this.get(telegramUserId);
+    return state?.status === "completed" && state.version >= CURRENT_ONBOARDING_VERSION;
   }
 
   async memoryEnabled(telegramUserId: number): Promise<boolean> {
