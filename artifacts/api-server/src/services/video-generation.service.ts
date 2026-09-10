@@ -28,17 +28,22 @@ function detectMediaType(buffer: Buffer): { isVideo: boolean; mimeType: string }
   return { isVideo: false, mimeType: "image/jpeg" };
 }
 
+function isPublicHttpsUrl(value: unknown): value is string {
+  if (typeof value !== "string" || !value.trim()) return false;
+  try { return new URL(value).protocol === "https:"; } catch { return false; }
+}
+
 export class VideoGenerationService {
   static async enhanceVideoPrompt(rawPrompt: string, geminiService?: GeminiService): Promise<string> {
     const cleaned = rawPrompt.trim();
     if (!geminiService || cleaned.length > 280) return cleaned;
     try {
       const systemInstruction = "You are an expert director and prompt engineer for modern AI video generation models. Expand the user's prompt into a single descriptive video prompt specifying subject, cinematic camera movement, motion dynamics, atmosphere, and lighting. Output ONLY the final video prompt in English. Maximum 50 words. No explanations, no quotes, no markdown.";
-      const promptRequest = `Expand this idea into a cinematic video generation prompt: "${cleaned}"`;
+      const promptRequest = `Expand this idea into a cinematic video generation prompt: \"${cleaned}\"`;
       const timeoutPromise = new Promise<string>((_, reject) => setTimeout(() => reject(new Error("Video prompt enhancement timeout")), 4000));
       const enhancePromise = geminiService.generateReply([], promptRequest, { modeInstruction: systemInstruction }, { thinkingLevel: undefined, enableSearch: false });
       const enhanced = await Promise.race([enhancePromise, timeoutPromise]);
-      const result = enhanced.replace(/^[“"']+|[”"']+$/g, "").replace(/^Prompt:\s*/i, "").trim();
+      const result = enhanced.replace(/^[“\"']+|[”\"']+$/g, "").replace(/^Prompt:\s*/i, "").trim();
       return result.length > 10 ? result : cleaned;
     } catch (err) {
       logger.warn({ err, originalPrompt: cleaned }, "Video prompt enhancement failed or timed out; falling back to original prompt");
@@ -52,60 +57,77 @@ export class VideoGenerationService {
     const preferredModel = process.env.HF_VIDEO_MODEL?.trim() || undefined;
     const capability = await huggingFaceCapabilityService.resolveModel("text-to-video", preferredModel);
 
-    logger.info({ originalPrompt, enhancedPrompt, model: capability.model, discovered: capability.discovered, preferredAvailable: capability.preferredAvailable }, "Generating video through dynamically selected Hugging Face capability");
-    const execution = await aiProviderGatewayService.generateVideo("huggingface", {
-      model: capability.model,
-      prompt: enhancedPrompt,
-      metadata: { originalPrompt, capabilityDiscovery: capability.discovered, preferredModelAvailable: capability.preferredAvailable },
-    });
-    const result = execution.result;
-    const media = detectMediaType(result.buffer);
-    const provider = result.route === "community" ? "community" : "huggingface";
+    const discoveredModels = capability.candidates.map((candidate) => candidate.id).filter(Boolean);
+    const orderedModels = [
+      capability.model,
+      ...discoveredModels,
+    ].filter((model, index, all) => Boolean(model) && all.indexOf(model) === index).slice(0, 6);
 
-    let deliveryUrl = result.sourceUrl || `huggingface://video/${encodeURIComponent(result.model)}`;
-    let storageProvider: GeneratedVideoResult["storageProvider"] = "source";
-    let cloudinaryPublicId: string | undefined;
+    if (!orderedModels.length) throw new Error("No live Hugging Face text-to-video model is available");
 
-    if (media.isVideo && cloudinaryMediaStorageService.isConfigured()) {
+    let lastError: unknown;
+    for (const model of orderedModels) {
       try {
+        logger.info({ originalPrompt, enhancedPrompt, model, discovered: capability.discovered, preferredAvailable: capability.preferredAvailable }, "Generating video through adaptive Hugging Face model selection");
+        const execution = await aiProviderGatewayService.generateVideo("huggingface", {
+          model,
+          prompt: enhancedPrompt,
+          metadata: { originalPrompt, capabilityDiscovery: capability.discovered, preferredModelAvailable: capability.preferredAvailable },
+        });
+        const result = execution.result;
+        const media = detectMediaType(result.buffer);
+        if (!media.isVideo) throw new Error(`Hugging Face model ${model} returned a non-video payload (${media.mimeType})`);
+
+        let deliveryUrl = "";
+        let storageProvider: GeneratedVideoResult["storageProvider"];
+        let cloudinaryPublicId: string | undefined;
+
+        if (!cloudinaryMediaStorageService.isConfigured()) {
+          throw new Error("Cloudinary is required to persist generated videos as public artifacts");
+        }
+
         const uploaded = await cloudinaryMediaStorageService.uploadGeneratedMedia(result.buffer, {
           resourceType: "video",
           mimeType: media.mimeType,
         });
+        if (!isPublicHttpsUrl(uploaded.secureUrl)) throw new Error("Cloudinary returned an invalid public video URL");
         deliveryUrl = uploaded.secureUrl;
         storageProvider = "cloudinary";
         cloudinaryPublicId = uploaded.publicId;
+
+        mediaArtifactContextService.remember({
+          type: "video",
+          prompt: originalPrompt,
+          publicUrl: deliveryUrl,
+          provider: "huggingface",
+          storageProvider,
+          publicId: cloudinaryPublicId,
+          model: result.model,
+        });
+
+        logger.info({ model, provider: result.provider, storageProvider, cloudinaryPublicId, publicUrl: deliveryUrl }, "Adaptive video generation and persistence succeeded");
+
+        return {
+          buffer: result.buffer,
+          url: deliveryUrl,
+          originalPrompt,
+          enhancedPrompt,
+          provider: "huggingface",
+          route: result.route,
+          model: result.model,
+          fallbackUsed: result.fallbackUsed,
+          isVideo: true,
+          mimeType: media.mimeType,
+          storageProvider,
+          cloudinaryPublicId,
+        };
       } catch (error) {
-        logger.warn({ error: String(error), model: result.model }, "Cloudinary video storage failed; retaining generation source");
+        lastError = error;
+        logger.warn({ model, error: String(error) }, "Adaptive Hugging Face video model attempt failed; trying next discovered candidate");
       }
     }
 
-    if (media.isVideo) {
-      mediaArtifactContextService.remember({
-        type: "video",
-        prompt: originalPrompt,
-        publicUrl: deliveryUrl,
-        provider,
-        storageProvider,
-        publicId: cloudinaryPublicId,
-        model: result.model,
-      });
-    }
-
-    return {
-      buffer: result.buffer,
-      url: deliveryUrl,
-      originalPrompt,
-      enhancedPrompt,
-      provider,
-      route: result.route,
-      model: result.model,
-      fallbackUsed: result.fallbackUsed,
-      isVideo: media.isVideo,
-      mimeType: media.mimeType,
-      storageProvider,
-      cloudinaryPublicId,
-    };
+    throw new Error(`Hugging Face video generation failed after ${orderedModels.length} adaptive model attempts. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
   }
 
   static extractVideoPrompt(rawText: string): string {
