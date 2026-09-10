@@ -27,12 +27,7 @@ export class AIModelCatalogService {
     await aiProviderRegistryService.get(provider);
     const key = apiKey.trim();
     if (key.length < 10) throw new Error("A valid provider API key is required for model discovery");
-    if (provider === "huggingface") {
-      const previous = process.env.HF_TOKEN;
-      process.env.HF_TOKEN = key;
-      try { return this.normalize(await huggingFaceMediaService.listModels()); }
-      finally { process.env.HF_TOKEN = previous; }
-    }
+    if (provider === "huggingface") return this.normalize(await huggingFaceMediaService.listModels(key));
     const record = await aiProviderRegistryService.get(provider);
     const adapter = aiProviderAdapters[record.adapter as keyof typeof aiProviderAdapters];
     if (!adapter || typeof adapter.listModels !== "function") throw new Error(`Model discovery is not available for provider ${provider}`);
