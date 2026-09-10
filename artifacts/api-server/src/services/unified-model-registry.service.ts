@@ -22,6 +22,7 @@ export interface UnifiedModelRecord {
 const REGISTRY_KEY = "AI_MODEL_REGISTRY";
 const LEGACY_GEMINI_KEY = "GEMINI_MODEL_REGISTRY";
 const ROLES: UnifiedModelRole[] = ["primary", "fast", "reasoning", "extraction", "embedding"];
+const PROVIDERS: AIProviderId[] = ["gemini", "groq", "mistral", "huggingface"];
 const makeId = (provider: AIProviderId, modelId: string): string => `${provider}:${modelId}`.replace(/[^a-zA-Z0-9:_-]/g, "_");
 function unique<T>(items: T[]): T[] { return [...new Set(items)]; }
 function parseList(value?: string): string[] { return String(value || "").split(",").map((v) => v.trim()).filter(Boolean); }
@@ -31,7 +32,7 @@ function normalize(value: unknown): UnifiedModelRecord[] {
   return value.filter((item) => {
     if (!item || typeof item !== "object") return false;
     const candidate = item as Partial<UnifiedModelRecord>;
-    return typeof candidate.modelId === "string" && (candidate.provider === "gemini" || candidate.provider === "groq" || candidate.provider === "mistral");
+    return typeof candidate.modelId === "string" && PROVIDERS.includes(candidate.provider as AIProviderId);
   }).map((item) => {
     const candidate = item as Partial<UnifiedModelRecord>;
     const provider = candidate.provider as AIProviderId;
@@ -75,12 +76,17 @@ export class UnifiedModelRegistryService {
       ...(process.env.GEMINI_EMBEDDING_MODEL?.trim() ? [{ provider: "gemini" as const, role: "embedding" as const, value: process.env.GEMINI_EMBEDDING_MODEL.trim() }] : []),
       ...parseList(process.env.GROQ_MODEL_POOL).map((value) => ({ provider: "groq" as const, value })),
       ...parseList(process.env.MISTRAL_MODEL_POOL).map((value) => ({ provider: "mistral" as const, value })),
+      ...(process.env.HF_IMAGE_MODEL?.trim() ? [{ provider: "huggingface" as const, value: process.env.HF_IMAGE_MODEL.trim() }] : []),
+      ...(process.env.HF_VIDEO_MODEL?.trim() ? [{ provider: "huggingface" as const, value: process.env.HF_VIDEO_MODEL.trim() }] : []),
     ];
     const models = new Map<string, UnifiedModelRecord>();
     for (const source of sources) {
       if (!source.value) continue;
       const key = `${source.provider}:${source.value}`;
       const existing = models.get(key);
+      const mediaCapability = source.provider === "huggingface"
+        ? (process.env.HF_VIDEO_MODEL?.trim() === source.value ? "video_generation" : "image_generation")
+        : undefined;
       models.set(key, {
         id: existing?.id || makeId(source.provider, source.value),
         provider: source.provider,
@@ -89,7 +95,7 @@ export class UnifiedModelRegistryService {
         roles: unique([...(existing?.roles || []), ...(source.role ? [source.role] : [])]).filter((role) => !(source.provider !== "gemini" && role === "embedding")),
         enabled: existing?.enabled ?? true,
         priority: existing?.priority ?? models.size,
-        capabilities: existing?.capabilities || (source.role === "embedding" ? ["embedding"] : ["generate"]),
+        capabilities: unique([...(existing?.capabilities || []), ...(mediaCapability ? [mediaCapability, mediaCapability === "image_generation" ? "text-to-image" : "text-to-video"] : (source.role === "embedding" ? ["embedding"] : ["generate"]))]),
         createdAt: existing?.createdAt || now,
         updatedAt: now,
       });
@@ -203,10 +209,16 @@ export class UnifiedModelRegistryService {
     await this.persist(models.filter((model) => model.id !== id));
   }
 
-  async test(id: string): Promise<{ ok: boolean; latencyMs: number; error?: string }> {
+  async test(id: string): Promise<{ ok: boolean; latencyMs: number; task?: string; provider?: AIProviderId; model?: string; mimeType?: string; sizeBytes?: number; fallbackUsed?: boolean; error?: string }> {
     const model = (await this.list()).find((item) => item.id === id);
     if (!model) throw new Error("Model not found");
-    return aiProviderRegistryService.test(model.provider, model.modelId);
+    const capabilitySet = new Set(model.capabilities.map((value) => value.toLowerCase()));
+    if (model.provider === "huggingface" && (capabilitySet.has("image_generation") || capabilitySet.has("text-to-image") || capabilitySet.has("video_generation") || capabilitySet.has("text-to-video"))) {
+      const { huggingFaceMediaService } = await import("./huggingface-media.service");
+      return huggingFaceMediaService.testModel(model);
+    }
+    const result = await aiProviderRegistryService.test(model.provider, model.modelId);
+    return { ...result, provider: model.provider, model: model.modelId, fallbackUsed: false };
   }
 }
 
