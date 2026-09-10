@@ -17,12 +17,11 @@ type DayPart = "morning" | "afternoon" | "evening" | "lateNight";
 const MODE_PRESENTATION: Record<ModeKey, { emoji: string; focus: string }> = {
   general: { emoji: "💬", focus: "Chat, think, plan, or explore" },
   study: { emoji: "📚", focus: "Learn, revise, solve, or practice" },
-  coding: { emoji: "💻", focus: "Build, debug, review, or ship" },
-  research: { emoji: "🔎", focus: "Research, compare, verify, or analyze" },
-  reasoning: { emoji: "🧩", focus: "Break down a difficult problem" },
-  writing: { emoji: "✍️", focus: "Write, rewrite, edit, or polish" },
-  brainstorming: { emoji: "💡", focus: "Brainstorm, explore, or create" },
-  travel: { emoji: "🧳", focus: "Plan routes, trips, and travel details" },
+  coder: { emoji: "💻", focus: "Build, debug, review, or ship" },
+  deep_research: { emoji: "🔎", focus: "Research, compare, verify, or analyze" },
+  math: { emoji: "🧩", focus: "Break down a difficult problem" },
+  creative: { emoji: "✨", focus: "Write, brainstorm, create, or polish" },
+  auto: { emoji: "⚡", focus: "Adapt to whatever you need next" },
 };
 
 function escapeHtml(value: string): string {
@@ -38,7 +37,7 @@ function getDayPart(hour: number): DayPart {
 
 function getGreeting(dayPart: DayPart, isReturningUser: boolean, displayName: string): string {
   const name = escapeHtml(displayName);
-  if (dayPart === "morning") return `${isReturningUser ? "Good morning" : "Good morning"}, ${name}! ☀️`;
+  if (dayPart === "morning") return `Good morning, ${name}! ☀️`;
   if (dayPart === "afternoon") return `${isReturningUser ? "Welcome back" : "Good afternoon"}, ${name}! 🌤️`;
   if (dayPart === "evening") return `${isReturningUser ? "Welcome back" : "Good evening"}, ${name}! 🌆`;
   return `${isReturningUser ? "Still up" : "Hey"}, ${name}? 🌙`;
@@ -106,7 +105,7 @@ export class AdaptiveStartExperienceService {
     return [
       `🪽 <b>${getGreeting(dayPart, input.isReturningUser, input.displayName)}</b>`,
       "",
-      `${presentation.emoji} <b>${escapeHtml(modeLabel)} focus:</b> ${escapeHtml(presentation.focus)}`,
+      `${presentation.emoji} <b>${escapeHtml(modeLabel)}</b> — ${escapeHtml(presentation.focus)}`,
       contextBlock,
       "",
       footer,
