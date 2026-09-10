@@ -54,7 +54,7 @@ export class HuggingFaceCapabilityService {
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-    const url = `${HUB_API}?inference_provider=all&pipeline_tag=${encodeURIComponent(task)}&sort=trending_score&direction=-1&limit=${LIMIT}`;
+    const url = `${HUB_API}?inference_provider=all&pipeline_tag=${encodeURIComponent(task)}&limit=${LIMIT}`;
 
     try {
       const response = await fetch(url, {
@@ -85,7 +85,7 @@ export class HuggingFaceCapabilityService {
     } catch (error) {
       const preferred = normalizeModelId(preferredModel);
       if (preferred) {
-        logger.warn({ task, preferredModel: preferred, error: String(error) }, "Hugging Face discovery unavailable; using configured model");
+        logger.warn({ task, preferredModel: preferred, error: String(error) }, "Hugging Face discovery unavailable; using explicitly configured model");
         return { model: preferred, discovered: false, preferredAvailable: true, candidates: [] };
       }
       throw error;
