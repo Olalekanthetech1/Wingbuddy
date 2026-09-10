@@ -8,7 +8,7 @@ import { geminiModelPoolService } from "../services/gemini-model-pool.service";
 import { adaptiveAIRouterService } from "../services/adaptive-ai-router.service";
 import type { AIChatRequest } from "../services/ai-provider.types";
 
-export interface GeminiMessage { role: "user" | "model"; content: string; }
+export interface GeminiMessage { role: "user"; content: string; }
 export interface AssistantGuidance { personalityInstruction?: string; modeInstruction?: string; memoryInstruction?: string; }
 export interface MultimodalAttachment { mimeType: string; data: string; fileName?: string; }
 export interface GenerateReplyOptions { enableSearch?: boolean; thinkingLevel?: string; attachments?: MultimodalAttachment[]; hasAudio?: boolean; hasVisionOrDocument?: boolean; mediaSizeBytes?: number; mode?: string; isDeepReasoning?: boolean; isExtraction?: boolean; }
@@ -133,13 +133,23 @@ export class GeminiService {
     if (!this.shouldUseNativeGemini(options) && !this.customClient) {
       const request = this.adaptiveRequest(history, message, guidance, options);
       let accumulated = "";
-      for await (const chunk of adaptiveAIRouterService.routeStream(request, { mode: options?.mode, isDeepReasoning: options?.isDeepReasoning, isExtraction: options?.isExtraction })) {
-        if (chunk.delta) {
-          accumulated += chunk.delta;
-          if (onChunk) await onChunk(accumulated);
+      try {
+        for await (const chunk of adaptiveAIRouterService.routeStream(request, { mode: options?.mode, isDeepReasoning: options?.isDeepReasoning, isExtraction: options?.isExtraction })) {
+          if (chunk.delta) {
+            accumulated += chunk.delta;
+            if (onChunk) await onChunk(accumulated);
+          }
         }
+      } catch (error) {
+        logger.warn({ error: safeErrorMetadata(error), accumulatedChars: accumulated.length }, "Adaptive stream exhausted before completion");
+        if (!accumulated.trim()) {
+          return "⚠️ I’m temporarily unable to complete that response because the available AI capacity is unavailable right now. Please try again shortly.";
+        }
+        throw error;
       }
-      if (!accumulated.trim()) throw new GeminiMalformedResponseError();
+      if (!accumulated.trim()) {
+        return "⚠️ I’m temporarily unable to complete that response because the available AI capacity is unavailable right now. Please try again shortly.";
+      }
       return accumulated.trim();
     }
 
