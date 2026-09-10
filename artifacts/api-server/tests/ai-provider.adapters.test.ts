@@ -1,6 +1,27 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({ list: vi.fn() }));
+
+vi.mock("@google/genai", () => ({
+  GoogleGenAI: vi.fn().mockImplementation(() => ({
+    models: { list: mocks.list },
+  })),
+}));
+
 import { aiProviderAdapters } from "../src/services/ai-provider.adapters";
 import type { AIProviderRecord } from "../src/services/ai-provider.types";
+
+const gemini: AIProviderRecord = {
+  id: "gemini",
+  name: "Google Gemini",
+  adapter: "gemini",
+  enabled: true,
+  baseUrl: "https://generativelanguage.googleapis.com",
+  apiKeyEnv: "GEMINI_API_KEY",
+  capabilities: ["chat", "streaming", "vision", "reasoning", "long_context", "web_search"],
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
+};
 
 const groq: AIProviderRecord = {
   id: "groq",
@@ -28,8 +49,39 @@ const mistral: AIProviderRecord = {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  mocks.list.mockReset();
+  delete process.env.GEMINI_API_KEY;
   delete process.env.GROQ_API_KEY;
   delete process.env.MISTRAL_API_KEY;
+});
+
+describe("Gemini provider adapter", () => {
+  it("awaits the model pager and normalizes supported actions into model capabilities", async () => {
+    process.env.GEMINI_API_KEY = "test-key";
+    mocks.list.mockResolvedValue({
+      [Symbol.asyncIterator]: async function* () {
+        yield {
+          name: "models/gemini-dynamic-test",
+          displayName: "Gemini Dynamic Test",
+          supportedActions: ["generateContent"],
+          thinking: true,
+          inputTokenLimit: 123_456,
+        };
+      },
+    });
+
+    const result = await aiProviderAdapters.gemini.listModels(gemini);
+
+    expect(mocks.list).toHaveBeenCalledOnce();
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      provider: "gemini",
+      modelId: "gemini-dynamic-test",
+      name: "Gemini Dynamic Test",
+      contextWindow: 123_456,
+    });
+    expect(result[0]?.capabilities).toEqual(expect.arrayContaining(["generate", "reasoning"]));
+  });
 });
 
 describe("OpenAI-compatible provider adapters", () => {
