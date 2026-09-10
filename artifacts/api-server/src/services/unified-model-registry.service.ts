@@ -9,7 +9,7 @@ export interface UnifiedModelRecord { id: string; provider: AIProviderId; modelI
 const REGISTRY_KEY = "AI_MODEL_REGISTRY";
 const LEGACY_GEMINI_KEY = "GEMINI_MODEL_REGISTRY";
 const ROLES: UnifiedModelRole[] = ["primary", "fast", "reasoning", "extraction", "embedding"];
-const SUPPORTED_PROVIDERS: AIProviderId[] = ["gemini", "groq", "mistral", "huggingface"];
+const SUPPORTED_PROVIDERS: AIProviderId[] = ["gemini", "groq", "mistral", "huggingface", "nvidia"];
 const makeId = (provider: AIProviderId, modelId: string): string => `${provider}:${modelId}`.replace(/[^a-zA-Z0-9:_-]/g, "_");
 function unique<T>(items: T[]): T[] { return [...new Set(items)]; }
 function parseList(value?: string): string[] { return String(value || "").split(",").map((v) => v.trim()).filter(Boolean); }
@@ -53,7 +53,7 @@ export class UnifiedModelRegistryService {
 
   private envBootstrap(): UnifiedModelRecord[] {
     const now = new Date().toISOString();
-    const sources: Array<{ provider: AIProviderId; role?: UnifiedModelRole; value?: string }> = [
+    const sources: Array<{ provider: AIProviderId; role?: UnifiedModelRole; value?: string; capabilities?: string[] }> = [
       { provider: "gemini", value: process.env.GEMINI_MODEL?.trim() || process.env.GEMINI_DEFAULT_MODEL?.trim() },
       ...parseList(process.env.GEMINI_MODEL_POOL).map((value) => ({ provider: "gemini" as const, value })),
       ...parseList(process.env.GEMINI_MODEL_FALLBACKS).map((value) => ({ provider: "gemini" as const, value })),
@@ -63,8 +63,16 @@ export class UnifiedModelRegistryService {
       ...(process.env.GEMINI_EMBEDDING_MODEL?.trim() ? [{ provider: "gemini" as const, role: "embedding" as const, value: process.env.GEMINI_EMBEDDING_MODEL.trim() }] : []),
       ...parseList(process.env.GROQ_MODEL_POOL).map((value) => ({ provider: "groq" as const, value })),
       ...parseList(process.env.MISTRAL_MODEL_POOL).map((value) => ({ provider: "mistral" as const, value })),
-      ...(process.env.HF_TEXT_MODEL?.trim() ? [{ provider: "huggingface" as const, value: process.env.HF_TEXT_MODEL.trim() }] : []),
-      ...parseList(process.env.HF_TEXT_MODEL_POOL).map((value) => ({ provider: "huggingface" as const, value })),
+      ...(process.env.HF_TEXT_MODEL?.trim() ? [{ provider: "huggingface" as const, value: process.env.HF_TEXT_MODEL.trim(), capabilities: ["chat"] }] : []),
+      ...parseList(process.env.HF_TEXT_MODEL_POOL).map((value) => ({ provider: "huggingface" as const, value, capabilities: ["chat"] })),
+      ...(process.env.HF_IMAGE_MODEL?.trim() ? [{ provider: "huggingface" as const, value: process.env.HF_IMAGE_MODEL.trim(), capabilities: ["image_generation"] }] : []),
+      ...parseList(process.env.HF_IMAGE_MODEL_POOL).map((value) => ({ provider: "huggingface" as const, value, capabilities: ["image_generation"] })),
+      ...(process.env.HF_VIDEO_MODEL?.trim() ? [{ provider: "huggingface" as const, value: process.env.HF_VIDEO_MODEL.trim(), capabilities: ["video_generation"] }] : []),
+      ...parseList(process.env.HF_VIDEO_MODEL_POOL).map((value) => ({ provider: "huggingface" as const, value, capabilities: ["video_generation"] })),
+      ...(process.env.NVIDIA_IMAGE_MODEL?.trim() ? [{ provider: "nvidia" as const, value: process.env.NVIDIA_IMAGE_MODEL.trim(), capabilities: ["image_generation"] }] : []),
+      ...parseList(process.env.NVIDIA_IMAGE_MODEL_POOL).map((value) => ({ provider: "nvidia" as const, value, capabilities: ["image_generation"] })),
+      ...(process.env.NVIDIA_VIDEO_MODEL?.trim() ? [{ provider: "nvidia" as const, value: process.env.NVIDIA_VIDEO_MODEL.trim(), capabilities: ["video_generation"] }] : []),
+      ...parseList(process.env.NVIDIA_VIDEO_MODEL_POOL).map((value) => ({ provider: "nvidia" as const, value, capabilities: ["video_generation"] })),
     ];
     const models = new Map<string, UnifiedModelRecord>();
     for (const source of sources) {
@@ -79,7 +87,7 @@ export class UnifiedModelRegistryService {
         roles: unique([...(existing?.roles || []), ...(source.role ? [source.role] : [])]).filter((role) => !(source.provider !== "gemini" && role === "embedding")),
         enabled: existing?.enabled ?? true,
         priority: existing?.priority ?? models.size,
-        capabilities: existing?.capabilities || ["generate"],
+        capabilities: unique([...(existing?.capabilities || []), ...(source.capabilities || ["generate"])]),
         createdAt: existing?.createdAt || now,
         updatedAt: now,
       });
@@ -118,6 +126,7 @@ export class UnifiedModelRegistryService {
   private async persist(models: UnifiedModelRecord[]): Promise<void> { const normalized = this.enforce(models); await db.insert(systemSettingsTable).values({ key: REGISTRY_KEY, value: JSON.stringify(normalized), updatedAt: new Date() }).onConflictDoUpdate({ target: systemSettingsTable.key, set: { value: JSON.stringify(normalized), updatedAt: new Date() } }); await this.syncLegacyGemini(normalized); this.cache = normalized; this.cacheAt = Date.now(); }
   async initialize(): Promise<UnifiedModelRecord[]> { await this.load(); await aiProviderRegistryService.list(); return this.list(); }
   async list(): Promise<UnifiedModelRecord[]> { const models = await this.load(); return models.map((model) => ({ ...model, roles: [...model.roles], capabilities: [...model.capabilities] })); }
+  async listByCapability(capability: string): Promise<UnifiedModelRecord[]> { return (await this.list()).filter((model) => model.enabled && model.capabilities.includes(capability)); }
 
   async add(input: { provider: AIProviderId; modelId: string; name?: string; roles?: UnifiedModelRole[]; priority?: number; capabilities?: string[] }): Promise<UnifiedModelRecord> {
     const modelId = input.modelId.trim(); if (!modelId) throw new Error("modelId is required");
