@@ -2,7 +2,6 @@ import { logger } from "../lib/logger";
 import type { GeminiService } from "../gemini/gemini.service";
 import { aiProviderGatewayService } from "./ai-provider-gateway.service";
 import { cloudinaryMediaStorageService } from "./cloudinary-media-storage.service";
-import { huggingFaceCapabilityService } from "./huggingface-capability.service";
 import { mediaArtifactContextService } from "./media-artifact-context.service";
 import { unifiedModelRegistryService } from "./unified-model-registry.service";
 import type { AIProviderId } from "./ai-provider.types";
@@ -33,18 +32,15 @@ export class ImageGenerationService {
     const width = options.width || 1024;
     const height = options.height || 1024;
     const registered = await unifiedModelRegistryService.listByCapability("image_generation");
-    const candidates: Array<{ provider: AIProviderId; model: string; priority: number }> = registered.map((m) => ({ provider: m.provider, model: m.modelId, priority: m.priority }));
-    try {
-      const hf = await huggingFaceCapabilityService.resolveModel("text-to-image", process.env.HF_IMAGE_MODEL?.trim() || undefined);
-      const discovered = [hf.model, ...hf.candidates.map((m) => m.id)].filter(Boolean).slice(0, 6);
-      for (const model of discovered) candidates.push({ provider: "huggingface", model, priority: candidates.length + 100 });
-    } catch (error) { logger.warn({ error: String(error) }, "Live Hugging Face image discovery unavailable; continuing with registered media models"); }
-    const ordered = [...new Map(candidates.sort((a, b) => a.priority - b.priority).map((c) => [`${c.provider}:${c.model}`, c])).values()];
-    if (!ordered.length) throw new Error("No enabled image-generation model is currently registered or discoverable");
+    const ordered = [...registered]
+      .sort((a, b) => a.priority - b.priority || a.provider.localeCompare(b.provider) || a.modelId.localeCompare(b.modelId))
+      .map((m) => ({ provider: m.provider, model: m.modelId, priority: m.priority }));
+    if (!ordered.length) throw new Error("No enabled image-generation model is registered in the Dashboard model registry");
+
     let lastError: unknown;
     for (const candidate of ordered) {
       try {
-        logger.info({ provider: candidate.provider, model: candidate.model, width, height }, "Generating image through adaptive media model selection");
+        logger.info({ provider: candidate.provider, model: candidate.model, width, height }, "Generating image through Dashboard-registered adaptive media model");
         const execution = await aiProviderGatewayService.generateImage(candidate.provider, { model: candidate.model, prompt: enhancedPrompt, width, height, metadata: { originalPrompt } });
         const result = execution.result;
         const provider = result.route === "community" ? "community" : result.provider;
@@ -57,9 +53,9 @@ export class ImageGenerationService {
         }
         mediaArtifactContextService.remember({ type: "image", prompt: originalPrompt, publicUrl: deliveryUrl, provider, storageProvider, publicId: cloudinaryPublicId, model: result.model });
         return { buffer: result.buffer, url: deliveryUrl, originalPrompt, enhancedPrompt, provider, route: result.route, model: result.model, fallbackUsed: result.fallbackUsed, storageProvider, cloudinaryPublicId };
-      } catch (error) { lastError = error; logger.warn({ provider: candidate.provider, model: candidate.model, error: String(error) }, "Adaptive image model attempt failed; trying next candidate"); }
+      } catch (error) { lastError = error; logger.warn({ provider: candidate.provider, model: candidate.model, error: String(error) }, "Adaptive image model attempt failed; trying next registered candidate"); }
     }
-    throw new Error(`Image generation failed after ${ordered.length} adaptive model attempts. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+    throw new Error(`Image generation failed after ${ordered.length} registered adaptive model attempts. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
   }
 
   static extractImagePrompt(rawText: string): string {
