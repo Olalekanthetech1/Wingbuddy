@@ -24,7 +24,7 @@ export interface ExecutionPlan {
   requiredCapabilities: Capability[];
   enableSearch: boolean;
   thinkingLevel?: "LOW" | "MEDIUM" | "HIGH";
-  providerPreference: "gemini_flash" | "gemini_pro" | "default";
+  providerPreference: "default";
   imagePrompt?: string;
   videoPrompt?: string;
   effectiveSystemPrompt: string;
@@ -34,6 +34,7 @@ export interface ExecutionPlan {
 /**
  * Converts a semantic interaction decision into an executable presentation plan.
  * Natural-language interpretation belongs exclusively to the semantic resolver.
+ * Provider/model selection belongs to the unified model registry and adaptive router.
  */
 export class ExecutionPlannerService {
   constructor(private readonly modeService: ModeService) {}
@@ -82,10 +83,9 @@ export class ExecutionPlannerService {
     const detectedIntent: ExecutionPlan["detectedIntent"] =
       semantic.intent === "greeting" ? "general" : semantic.intent as ExecutionPlan["detectedIntent"];
 
-    const providerPreference: ExecutionPlan["providerPreference"] =
-      semantic.thinkingLevel || ["deep_research", "coding", "image_generation", "video_generation"].includes(semantic.intent)
-        ? "gemini_pro"
-        : "default";
+    // Provider/model selection is intentionally not inferred from intent, thinking depth,
+    // or media type. The unified registry/router is the execution authority.
+    const providerPreference: ExecutionPlan["providerPreference"] = "default";
 
     let effectiveSystemPrompt = profile.systemBehavior;
     if (enableSearch) {
