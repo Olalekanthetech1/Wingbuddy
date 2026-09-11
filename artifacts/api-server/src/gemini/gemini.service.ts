@@ -233,7 +233,13 @@ export class GeminiService {
     }
     let finalText = accumulated.trim();
     if (!finalText) throw new GeminiMalformedResponseError();
-    if (sources.length) finalText = `${finalText}\n\n🔍 Sources:\n${sources.slice(0, 8).map((s) => `• ${s.title ? `${s.title}: ` : ""}${s.uri}`).join("\n")}`;
+    if (sources.length) finalText = `${finalText}\n\n🔍 Sources:\n${sources.slice(0, 8).map((s) => {
+      let display = s.title;
+      if (!display) {
+        try { display = new URL(s.uri).hostname; } catch (e) { display = "Source"; }
+      }
+      return `• [${display}](${s.uri})`;
+    }).join("\n")}`;
     return { text: finalText };
   }
 
@@ -241,7 +247,13 @@ export class GeminiService {
     if (!text) return "";
     const sources = (response.candidates?.[0]?.groundingMetadata?.groundingChunks || []).map((c) => c.web).filter((w): w is { uri: string; title?: string } => Boolean(w?.uri)).slice(0, 8);
     if (!sources.length) return text;
-    return `${text}\n\n🔍 Sources:\n${sources.map((s) => `• ${s.title ? `${s.title}: ` : ""}${s.uri}`).join("\n")}`;
+    return `${text}\n\n🔍 Sources:\n${sources.map((s) => {
+      let display = s.title;
+      if (!display) {
+        try { display = new URL(s.uri).hostname; } catch (e) { display = "Source"; }
+      }
+      return `• [${display}](${s.uri})`;
+    }).join("\n")}`;
   }
 
   async embedText(text: string): Promise<number[]> {
