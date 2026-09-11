@@ -10,8 +10,102 @@ function normalizeUsage(usage: any): AIUsage | undefined { if (!usage || typeof 
 function asOpenAIMessage(message: AIMessage): Record<string, unknown> { return { role: message.role, content: message.content, ...(message.name ? { name: message.name } : {}), ...(message.toolCallId ? { tool_call_id: message.toolCallId } : {}) }; }
 async function requireOk(response: Response, provider: AIProviderId): Promise<void> { if (response.ok) return; const body = await response.text().catch(() => ""); const suffix = body ? `: ${body.slice(0, 800)}` : ""; throw new Error(`${provider} request failed (${response.status})${suffix}`); }
 async function* parseSSE(response: Response, mapEvent: (payload: any) => AIStreamChunk | null): AsyncGenerator<AIStreamChunk> { if (!response.body) throw new Error("Provider returned an empty stream"); const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = ""; try { while (true) { const { done, value } = await reader.read(); if (done) break; buffer += decoder.decode(value, { stream: true }); const events = buffer.split(/\r?\n\r?\n/); buffer = events.pop() || ""; for (const event of events) { const data = event.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).join(""); if (!data || data === "[DONE]") continue; try { const chunk = mapEvent(JSON.parse(data)); if (chunk) yield chunk; } catch { /* Ignore malformed provider SSE frames. */ } } } } finally { reader.releaseLock(); } }
-function normalizeCatalogCapabilities(source: any): string[] { if (Array.isArray(source?.capabilities)) return source.capabilities.filter((value: unknown): value is string => typeof value === "string"); if (source?.capabilities && typeof source.capabilities === "object") return Object.entries(source.capabilities).filter(([, enabled]) => enabled === true).map(([name]) => name); if (Array.isArray(source?.supported_actions)) return source.supported_actions.filter((value: unknown): value is string => typeof value === "string"); return []; }
-function catalogEntry(provider: AIProviderId, modelId: string, name: string | undefined, status: string | undefined, capabilities: string[], contextWindow?: number): AIModelCatalogEntry { return { provider, modelId, name: name?.trim() || modelId, status: status === "active" ? "active" : status === "inactive" ? "inactive" : "unknown", capabilities: [...new Set(capabilities)], ...(Number.isFinite(contextWindow) && contextWindow! > 0 ? { contextWindow: contextWindow! } : {}), source: "provider_api" }; }
+function inferModelCapabilities(provider: AIProviderId, modelId: string, sourceCaps: string[] = []): string[] {
+  const caps = new Set<string>(sourceCaps.map((c) => String(c).toLowerCase().trim()).filter(Boolean));
+  
+  const id = modelId.toLowerCase();
+
+  // Media generation detection
+  if (id.includes("flux") || id.includes("stable-diffusion") || id.includes("sdxl") || id.includes("image") || id.includes("dall-e") || id.includes("midjourney")) {
+    caps.add("image_generation");
+  } else if (id.includes("wan") || id.includes("video") || id.includes("sora") || id.includes("kling") || id.includes("runway")) {
+    caps.add("video_generation");
+  } else {
+    caps.add("chat");
+    caps.add("streaming");
+  }
+
+  // Reasoning detection (DeepSeek R1, OpenAI o-series, GPT-OSS, QwQ, etc.)
+  if (
+    id.includes("r1") ||
+    id.includes("reasoning") ||
+    id.includes("reasoner") ||
+    id.includes("qwq") ||
+    id.includes("gpt-oss") ||
+    id.includes("o1") ||
+    id.includes("o3") ||
+    id.includes("thinking")
+  ) {
+    caps.add("reasoning");
+  }
+
+  // Fast / latency optimized detection (8b, 9b, small, mini, flash, instant)
+  if (
+    id.includes("8b") ||
+    id.includes("7b") ||
+    id.includes("9b") ||
+    id.includes("fast") ||
+    id.includes("instant") ||
+    id.includes("flash") ||
+    id.includes("mini") ||
+    id.includes("haiku") ||
+    id.includes("small")
+  ) {
+    caps.add("fast");
+  }
+
+  // Structured extraction / function calling / tool use
+  if (
+    id.includes("gpt") ||
+    id.includes("llama-3") ||
+    id.includes("mistral") ||
+    id.includes("mixtral") ||
+    id.includes("qwen") ||
+    id.includes("gemini") ||
+    id.includes("instruct") ||
+    id.includes("command")
+  ) {
+    caps.add("extraction");
+  }
+
+  // Embedding models
+  if (id.includes("embed") || id.includes("bge") || id.includes("e5")) {
+    caps.add("embedding");
+    caps.delete("chat");
+    caps.delete("streaming");
+  }
+
+  return [...caps];
+}
+
+function normalizeCatalogCapabilities(source: any, provider?: AIProviderId, modelId?: string): string[] {
+  const explicit: string[] = [];
+  if (Array.isArray(source?.capabilities)) {
+    explicit.push(...source.capabilities.filter((value: unknown): value is string => typeof value === "string"));
+  } else if (source?.capabilities && typeof source.capabilities === "object") {
+    explicit.push(...Object.entries(source.capabilities).filter(([, enabled]) => enabled === true).map(([name]) => name));
+  }
+  if (Array.isArray(source?.supported_actions)) {
+    explicit.push(...source.supported_actions.filter((value: unknown): value is string => typeof value === "string"));
+  }
+  if (provider && modelId) {
+    return inferModelCapabilities(provider, modelId, explicit);
+  }
+  return explicit;
+}
+
+function catalogEntry(provider: AIProviderId, modelId: string, name: string | undefined, status: string | undefined, capabilities: string[], contextWindow?: number): AIModelCatalogEntry {
+  const dynamicCaps = inferModelCapabilities(provider, modelId, capabilities);
+  return {
+    provider,
+    modelId,
+    name: name?.trim() || modelId,
+    status: status === "active" ? "active" : status === "inactive" ? "inactive" : "unknown",
+    capabilities: dynamicCaps,
+    ...(Number.isFinite(contextWindow) && contextWindow! > 0 ? { contextWindow: contextWindow! } : {}),
+    source: "provider_api"
+  };
+}
 function safeModel(envName: string, fallback: string): string { return process.env[envName]?.trim() || fallback; }
 function detectMime(buffer: Buffer): string { if (buffer.length >= 12 && buffer.subarray(4, 8).toString("ascii") === "ftyp") return "video/mp4"; if (buffer.length >= 4 && buffer.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) return "video/webm"; if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png"; if (buffer.length >= 3 && buffer.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) return "image/jpeg"; return "application/octet-stream"; }
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> { return new Promise<T>((resolve, reject) => { const timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs); promise.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); }); }); }
@@ -101,25 +195,115 @@ class HuggingFaceAdapter implements AIProviderAdapter {
 
   async generateVideo(request: AIVideoGenerationRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIVideoGenerationResponse> {
     const token = apiKey?.trim() || process.env.HF_TOKEN?.trim();
-    if (!token) throw new Error("HF_TOKEN is not configured for video generation");
     const model = request.model?.trim() || safeModel("HF_VIDEO_MODEL", "Wan-AI/Wan2.2-TI2V-5B");
-    const client = new InferenceClient(token);
-    try {
-      const video = await withTimeout(client.textToVideo({ model, provider: "auto", inputs: request.prompt } as any, { signal: new AbortController().signal } as any), 180_000, "Hugging Face video");
-      const buffer = Buffer.from(await video.arrayBuffer());
-      const mimeType = detectMime(buffer);
-      if (buffer.length > 2000 && mimeType.startsWith("video/")) {
-        logger.info({ model, route: "inference_provider" }, "Hugging Face video generation succeeded");
-        return { provider: this.providerId, route: "inference_provider", model, buffer, mimeType, fallbackUsed: false };
+
+    if (token) {
+      const client = new InferenceClient(token);
+      try {
+        const video = await withTimeout(client.textToVideo({ model, provider: "auto", inputs: request.prompt } as any, { signal: new AbortController().signal } as any), 180_000, "Hugging Face video");
+        const buffer = Buffer.from(await video.arrayBuffer());
+        const mimeType = detectMime(buffer);
+        if (buffer.length > 2000 && mimeType.startsWith("video/")) {
+          logger.info({ model, route: "inference_provider" }, "Hugging Face video generation succeeded");
+          return { provider: this.providerId, route: "inference_provider", model, buffer, mimeType, fallbackUsed: false };
+        }
+        throw new Error("Hugging Face returned an invalid video payload");
+      } catch (error) {
+        logger.warn({ model, error: String(error) }, "Hugging Face video generation attempt failed; switching to community motion fallback");
       }
-      throw new Error("Hugging Face returned an invalid video payload");
-    } catch (error) {
-      logger.error({ model, error: String(error) }, "Hugging Face video generation attempt failed");
-      throw error instanceof Error ? error : new Error(String(error));
+    } else {
+      logger.info({ model }, "HF_TOKEN unavailable; using community motion fallback");
+    }
+
+    return this.generateVideoViaCommunity(request, model);
+  }
+
+  private async generateVideoViaCommunity(request: AIVideoGenerationRequest, model: string): Promise<AIVideoGenerationResponse> {
+    const fs = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const crypto = await import("node:crypto");
+    const { execFile } = await import("node:child_process");
+
+    const imageRequest: AIImageGenerationRequest = {
+      prompt: request.prompt,
+      width: 1024,
+      height: 576,
+      metadata: request.metadata,
+    };
+    const imageResponse = await this.generateImageViaCommunity(imageRequest, model);
+    const uniqueId = crypto.randomUUID();
+    const tmpInputImage = path.join(os.tmpdir(), `wingbuddy_vframe_${uniqueId}.png`);
+    const tmpOutputVideo = path.join(os.tmpdir(), `wingbuddy_vout_${uniqueId}.mp4`);
+
+    try {
+      await fs.writeFile(tmpInputImage, imageResponse.buffer);
+
+      const ffmpegArgs = [
+        "-y",
+        "-loop", "1",
+        "-i", tmpInputImage,
+        "-vf", "zoompan=z=\x27min(zoom+0.0012,1.18)\x27:d=96:x=\x27iw/2-(iw/zoom/2)\x27:y=\x27ih/2-(ih/zoom/2)\x27:s=1024x576,fps=24",
+        "-c:v", "libx264",
+        "-t", "4",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        tmpOutputVideo,
+      ];
+
+      await new Promise<void>((resolve, reject) => {
+        execFile("ffmpeg", ffmpegArgs, (error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      });
+
+      const videoBuffer = await fs.readFile(tmpOutputVideo);
+      const mimeType = detectMime(videoBuffer);
+      if (videoBuffer.length > 2000 && mimeType === "video/mp4") {
+        logger.info({ model, route: "community", size: videoBuffer.length }, "Synthesized cinematic motion video via community route");
+        return {
+          provider: this.providerId,
+          route: "community",
+          model: `${model}+cinematic-motion`,
+          buffer: videoBuffer,
+          mimeType,
+          sourceUrl: imageResponse.sourceUrl,
+          fallbackUsed: true,
+        };
+      }
+      throw new Error("Community video synthesis did not yield a valid MP4 stream");
+    } finally {
+      await fs.unlink(tmpInputImage).catch(() => {});
+      await fs.unlink(tmpOutputVideo).catch(() => {});
     }
   }
 
-  async test(model: string, provider: AIProviderRecord, apiKey?: string) { const started = Date.now(); try { await this.chat({ model, messages: [{ role: "user", content: "ping" }], maxOutputTokens: 4 }, provider, apiKey); return { ok: true, latencyMs: Date.now() - started }; } catch (error) { return { ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) }; } }
+  async test(model: string, provider: AIProviderRecord, apiKey?: string) {
+    const started = Date.now();
+    try {
+      const token = requireApiKey(provider, apiKey);
+      // Fetch model info to check its pipeline_tag
+      const res = await fetch(`https://huggingface.co/api/models/${model}`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) {
+        if (res.status === 401) throw new Error("Invalid Hugging Face token");
+        if (res.status === 404) throw new Error("Model not found on Hugging Face");
+        throw new Error(`HTTP ${res.status} when looking up model`);
+      }
+      const info = await res.json();
+      
+      // If it's not a text generation model, we can't test it with chat completion.
+      // We consider it OK if the model exists and is accessible.
+      if (info.pipeline_tag && !["text-generation", "text2text-generation"].includes(info.pipeline_tag)) {
+        return { ok: true, latencyMs: Date.now() - started };
+      }
+
+      await this.chat({ model, messages: [{ role: "user", content: "ping" }], maxOutputTokens: 4 }, provider, apiKey);
+      return { ok: true, latencyMs: Date.now() - started };
+    } catch (error) {
+      return { ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
 
   async listModels(provider: AIProviderRecord, apiKey?: string): Promise<AIModelCatalogEntry[]> {
     const token = apiKey?.trim() || process.env.HF_TOKEN?.trim();
@@ -145,4 +329,81 @@ class HuggingFaceAdapter implements AIProviderAdapter {
 
 class GroqAdapter extends OpenAICompatibleAdapter { readonly providerId = "groq" as const; protected completionPath = "/chat/completions"; }
 class MistralAdapter extends OpenAICompatibleAdapter { readonly providerId = "mistral" as const; protected completionPath = "/v1/chat/completions"; protected modelPath = "/v1/models"; }
-export const aiProviderAdapters: Record<AIProviderId, AIProviderAdapter & { listModels: (provider: AIProviderRecord, apiKey?: string) => Promise<AIModelCatalogEntry[]> }> = { gemini: new GeminiAdapter(), groq: new GroqAdapter(), mistral: new MistralAdapter(), huggingface: new HuggingFaceAdapter() };
+
+class ElevenLabsAdapter implements AIProviderAdapter {
+  readonly providerId = "elevenlabs" as const;
+
+  async test(model: string, provider: AIProviderRecord, apiKey?: string) {
+    const key = apiKey?.trim() || process.env.ELEVENLABS_API_KEY?.trim();
+    if (!key) return { ok: false, latencyMs: 0, error: "Missing ElevenLabs API key" };
+    const started = Date.now();
+    try {
+      const response = await fetch(`${provider.baseUrl}/v1/user`, {
+        headers: { "xi-api-key": key },
+      });
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "");
+        return { ok: false, latencyMs: Date.now() - started, error: `ElevenLabs authentication failed (${response.status}): ${errorText.slice(0, 250)}` };
+      }
+      return { ok: true, latencyMs: Date.now() - started };
+    } catch (error) {
+      return { ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  async listModels(provider: AIProviderRecord, apiKey?: string): Promise<AIModelCatalogEntry[]> {
+    const key = apiKey?.trim() || process.env.ELEVENLABS_API_KEY?.trim();
+    if (!key) throw new Error("ELEVENLABS_API_KEY is not configured");
+    try {
+      const response = await fetch(`${provider.baseUrl}/v1/models`, {
+        headers: { "xi-api-key": key },
+      });
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "");
+        throw new Error(`ElevenLabs models request failed (${response.status}): ${errorText.slice(0, 200)}`);
+      }
+      const data: any = await response.json();
+      const models = Array.isArray(data) ? data : (Array.isArray(data?.models) ? data.models : []);
+      const entries: AIModelCatalogEntry[] = models.map((m: any) => catalogEntry(
+        this.providerId,
+        m.model_id || m.id,
+        m.name || m.model_id || m.id,
+        "active",
+        ["audio_generation", "sound_generation", "text_to_speech"]
+      ));
+      if (!entries.some(e => e.modelId === "elevenlabs-sound-effects")) {
+        entries.unshift(catalogEntry(
+          this.providerId,
+          "elevenlabs-sound-effects",
+          "ElevenLabs Sound Effects (Foley & Ambient)",
+          "active",
+          ["audio_generation", "sound_generation"]
+        ));
+      }
+      return entries;
+    } catch (error) {
+      logger.warn({ error: String(error) }, "ElevenLabs live model discovery failed; returning defaults");
+      return [
+        catalogEntry(this.providerId, "elevenlabs-sound-effects", "ElevenLabs Sound Effects (Foley & Ambient)", "active", ["audio_generation", "sound_generation"]),
+        catalogEntry(this.providerId, "eleven_multilingual_v2", "Eleven Multilingual v2", "active", ["audio_generation", "text_to_speech"]),
+        catalogEntry(this.providerId, "eleven_turbo_v2_5", "Eleven Turbo v2.5", "active", ["audio_generation", "text_to_speech"]),
+      ];
+    }
+  }
+
+  async chat(): Promise<any> {
+    throw new Error("ElevenLabs is an audio and sound generation provider, not a text chat provider.");
+  }
+
+  async *stream(): AsyncGenerator<any> {
+    throw new Error("ElevenLabs is an audio and sound generation provider, not a text chat provider.");
+  }
+}
+
+export const aiProviderAdapters: Record<AIProviderId, AIProviderAdapter & { listModels: (provider: AIProviderRecord, apiKey?: string) => Promise<AIModelCatalogEntry[]> }> = {
+  gemini: new GeminiAdapter(),
+  groq: new GroqAdapter(),
+  mistral: new MistralAdapter(),
+  huggingface: new HuggingFaceAdapter(),
+  elevenlabs: new ElevenLabsAdapter(),
+};

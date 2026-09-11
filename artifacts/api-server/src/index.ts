@@ -14,6 +14,7 @@ import { adaptiveAIRouterService } from "./services/adaptive-ai-router.service";
 import { aiObservabilityService } from "./services/ai-observability.service";
 import { proactiveAssistantService } from "./services/proactive-assistant.service";
 import { onboardingService } from "./services/onboarding.service";
+import { knowledgeVaultService } from "./services/knowledge-vault.service";
 
 const port = 3000;
 let startupStateReady = false;
@@ -28,6 +29,7 @@ const server = app.listen(port, "0.0.0.0", async () => {
     await geminiKeyRecoveryService.recover();
     await apiKeyPoolService.initializeDb();
     await apiKeyPoolService.hydrateFromDatabase();
+    await knowledgeVaultService.initialize();
     await runtimeBehaviorConfigService.initialize();
     await aiObservabilityService.initialize();
     await onboardingService.initialize();

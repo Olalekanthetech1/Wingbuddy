@@ -10,6 +10,7 @@ import { AdaptiveEngineService } from "./adaptive-engine.service";
 import { TemporalContextService } from "./temporal-context.service";
 import { SemanticInteractionResolverService } from "./semantic-interaction-resolver.service";
 import type { SemanticInteractionDecision } from "./semantic-interaction-cache.service";
+import { knowledgeVaultService, type KnowledgeSearchResult } from "./knowledge-vault.service";
 
 export interface UserGlobalContext {
   telegramUserId: number;
@@ -27,6 +28,7 @@ export interface UserGlobalContext {
   };
   memories: UserMemoryRecord[];
   sessionSummaries: Array<{ id: number; summary: string; updatedAt: Date }>;
+  knowledgeVaultResults?: KnowledgeSearchResult[];
   semanticRecall?: Array<{ role: string; content: string }>;
   recentHistory: Array<{ role: "user" | "model"; content: string }>;
   promptInstruction: string;
@@ -68,6 +70,7 @@ export class GlobalContextService {
     let memories: UserMemoryRecord[] = [];
     let semanticRecall: Array<{ role: string; content: string }> = [];
     let memoryRecallSource: "vector" | "lexical" | "none" = "none";
+    let knowledgeVaultResults: KnowledgeSearchResult[] = [];
 
     if (query.length > 3) {
       try {
@@ -75,6 +78,7 @@ export class GlobalContextService {
         if (geminiService && typeof geminiService.embedText === "function") {
           queryVec = await geminiService.embedText(query);
         }
+        knowledgeVaultResults = await knowledgeVaultService.searchSimilar(telegramUserId.toString(), query, 3);
         if (queryVec.length > 0) {
           memories = await chatDatabaseService.searchSimilarMemories(telegramUserId, queryVec);
           memoryRecallSource = memories.length > 0 ? "vector" : "none";
@@ -139,6 +143,7 @@ export class GlobalContextService {
       memories,
       sessionSummaries,
       semanticRecall,
+      knowledgeVaultResults,
     });
     const identityInstruction = [
       "[IDENTITY CONTEXT]",
@@ -146,6 +151,12 @@ export class GlobalContextService {
       "Use the user's name naturally when it improves warmth, clarity, or personalization. Never invent or repeatedly insert a name.",
     ].join("\n");
     const temporalInstruction = TemporalContextService.buildPromptInstruction(temporalContext);
+    const knowledgeVaultInstruction = knowledgeVaultResults.length > 0 ? 
+      "[KNOWLEDGE VAULT RECALL]\n" +
+      "The following chunks were retrieved from the user's private documents based on semantic similarity to their query. Use these exclusively if they contain the answer to the user's question:\n" +
+      knowledgeVaultResults.map(r => "- From '" + r.filename + "': " + r.content).join("\n") 
+      : "";
+
     const greetingInstruction = semanticInteraction?.isGreeting
       ? [
           "[GREETING BEHAVIOR]",
@@ -160,6 +171,7 @@ export class GlobalContextService {
       promptInstructionBase,
       identityInstruction,
       temporalInstruction,
+      knowledgeVaultInstruction,
       greetingInstruction,
       "[MEMORY SILENCE POLICY] Persistent memory is background context, not response content. Never mention, enumerate, expose, or narrate stored memories, memory keys, personalization, or the fact that something was remembered unless the user explicitly asks what you remember, asks to inspect/manage memories, or otherwise makes memory itself the subject of the request.",
     ].filter(Boolean).join("\n\n");

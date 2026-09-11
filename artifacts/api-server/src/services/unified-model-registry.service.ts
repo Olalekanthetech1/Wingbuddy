@@ -4,11 +4,11 @@ import { logger } from "../lib/logger";
 import { aiProviderRegistryService } from "./ai-provider-registry.service";
 import type { AIProviderId } from "./ai-provider.types";
 
-export type UnifiedModelRole = "primary" | "fast" | "reasoning" | "extraction" | "embedding";
+export type UnifiedModelRole = "primary" | "primary_chat" | "primary_image" | "primary_video" | "fast" | "reasoning" | "extraction" | "embedding";
 export interface UnifiedModelRecord { id: string; provider: AIProviderId; modelId: string; name: string; roles: UnifiedModelRole[]; enabled: boolean; priority: number; capabilities: string[]; createdAt: string; updatedAt: string; }
 const REGISTRY_KEY = "AI_MODEL_REGISTRY";
 const LEGACY_GEMINI_KEY = "GEMINI_MODEL_REGISTRY";
-const ROLES: UnifiedModelRole[] = ["primary", "fast", "reasoning", "extraction", "embedding"];
+const ROLES: UnifiedModelRole[] = ["primary", "primary_chat", "primary_image", "primary_video", "fast", "reasoning", "extraction", "embedding"];
 const SUPPORTED_PROVIDERS: AIProviderId[] = ["gemini", "groq", "mistral", "huggingface"];
 const makeId = (provider: AIProviderId, modelId: string): string => `${provider}:${modelId}`.replace(/[^a-zA-Z0-9:_-]/g, "_");
 function unique<T>(items: T[]): T[] { return [...new Set(items)]; }
@@ -132,7 +132,32 @@ export class UnifiedModelRegistryService {
     const models = await this.list(); const index = models.findIndex((model) => model.id === id); if (index < 0) throw new Error("Model not found"); const current = models[index]; const provider = patch.provider || current.provider; const modelId = patch.modelId?.trim() || current.modelId; const providerRecord = await aiProviderRegistryService.get(provider); if (!providerRecord.enabled && provider !== current.provider) throw new Error(`Provider ${provider} is disabled`); if (models.some((model, i) => i !== index && model.provider === provider && model.modelId === modelId)) throw new Error(`Model ${provider}/${modelId} is already registered.`); const roles = patch.roles ? unique(patch.roles.filter((role): role is UnifiedModelRole => ROLES.includes(role))) : current.roles; if (roles.includes("primary") && roles.includes("embedding")) throw new Error("Embedding models cannot be primary."); if (roles.includes("primary") && patch.enabled === false) throw new Error("A preferred model must remain enabled."); const updated: UnifiedModelRecord = { ...current, ...patch, provider, modelId, id: makeId(provider, modelId), name: patch.name?.trim() || current.name, roles, enabled: patch.enabled ?? current.enabled, priority: patch.priority ?? current.priority, capabilities: patch.capabilities ? unique(patch.capabilities) : current.capabilities, updatedAt: new Date().toISOString() }; const base = models.map((model, i) => i === index ? updated : model); const normalized = roles.includes("primary") ? base.map((model, i) => i === index ? model : ({ ...model, roles: model.roles.filter((role) => role !== "primary") })) : base; await this.persist(normalized); return updated;
   }
 
-  async setPrimary(id: string): Promise<UnifiedModelRecord> { const models = await this.list(); const target = models.find((model) => model.id === id); if (!target) throw new Error("Model not found"); const provider = await aiProviderRegistryService.get(target.provider); if (!provider.enabled) throw new Error(`Provider ${provider.id} is disabled`); if (!target.enabled) throw new Error("Enable the model before making it preferred."); if (target.roles.includes("embedding")) throw new Error("Embedding models cannot be primary."); const next = models.map((model) => ({ ...model, roles: model.id === id ? unique([...model.roles.filter((role) => role !== "primary"), "primary"]) : model.roles.filter((role) => role !== "primary") })); await this.persist(next); return next.find((model) => model.id === id)!; }
+  async setPrimary(id: string): Promise<UnifiedModelRecord> {
+    const models = await this.list();
+    const target = models.find((model) => model.id === id);
+    if (!target) throw new Error("Model not found");
+    const provider = await aiProviderRegistryService.get(target.provider);
+    if (!provider.enabled) throw new Error(`Provider ${provider.id} is disabled`);
+    if (!target.enabled) throw new Error("Enable the model before making it preferred.");
+    if (target.roles.includes("embedding")) throw new Error("Embedding models cannot be primary.");
+
+    let primaryRole: UnifiedModelRole = "primary";
+    if (target.capabilities.includes("image_generation")) primaryRole = "primary_image";
+    else if (target.capabilities.includes("video_generation")) primaryRole = "primary_video";
+    else primaryRole = "primary_chat";
+
+    const next = models.map((model) => {
+      if (model.id === id) {
+        // Remove old primary variants and add the new one
+        return { ...model, roles: unique([...model.roles.filter((role) => !role.startsWith("primary")), primaryRole, ...(primaryRole === "primary_chat" ? ["primary" as UnifiedModelRole] : [])]) };
+      }
+      // Remove this specific primary role from other models
+      return { ...model, roles: model.roles.filter((role) => role !== primaryRole && (primaryRole !== "primary_chat" || role !== "primary")) };
+    });
+    
+    await this.persist(next);
+    return next.find((model) => model.id === id)!;
+  }
   async remove(id: string): Promise<void> { const models = await this.list(); const target = models.find((model) => model.id === id); if (!target) throw new Error("Model not found"); await this.persist(models.filter((model) => model.id !== id)); }
   async test(id: string): Promise<{ ok: boolean; latencyMs: number; error?: string }> { const model = (await this.list()).find((item) => item.id === id); if (!model) throw new Error("Model not found"); return aiProviderRegistryService.test(model.provider, model.modelId); }
 }

@@ -3,8 +3,7 @@ import { aiProviderRegistryService } from "../services/ai-provider-registry.serv
 import type { AIProviderCapability, AIProviderId } from "../services/ai-provider.types";
 
 const router: IRouter = Router();
-const PROVIDER_IDS: AIProviderId[] = ["gemini", "groq", "mistral"];
-const CAPABILITIES: AIProviderCapability[] = ["chat", "streaming", "tool_calling", "vision", "reasoning", "long_context"];
+const CAPABILITIES: AIProviderCapability[] = ["chat", "streaming", "tool_calling", "vision", "reasoning", "long_context", "web_search", "image_generation", "video_generation", "audio_generation"];
 
 router.get("/providers", async (_req: Request, res: Response) => {
   try {
@@ -18,7 +17,7 @@ router.patch("/providers/:id", async (req: Request, res: Response) => {
   try {
     const rawId = req.params.id;
     const id = Array.isArray(rawId) ? rawId[0] : rawId;
-    if (!PROVIDER_IDS.includes(id as AIProviderId)) {
+    if (!aiProviderRegistryService.isKnownProvider(id)) {
       res.status(404).json({ error: `Unknown AI provider: ${id}` });
       return;
     }
@@ -42,13 +41,15 @@ router.post("/providers/:id/test", async (req: Request, res: Response) => {
   try {
     const rawId = req.params.id;
     const id = Array.isArray(rawId) ? rawId[0] : rawId;
-    if (!PROVIDER_IDS.includes(id as AIProviderId)) {
+    if (!aiProviderRegistryService.isKnownProvider(id)) {
       res.status(404).json({ error: `Unknown AI provider: ${id}` });
       return;
     }
+    const provider = await aiProviderRegistryService.get(id);
+    const requiresModel = (provider.capabilities || []).includes("chat");
     const model = typeof req.body?.model === "string" ? req.body.model.trim() : "";
-    if (!model) {
-      res.status(400).json({ error: "model is required" });
+    if (requiresModel && !model) {
+      res.status(400).json({ error: "model is required for chat provider testing" });
       return;
     }
     res.json(await aiProviderRegistryService.test(id, model));

@@ -12,6 +12,7 @@ import simulatorRouter from "./simulator";
 import behaviorConfigRouter from "./behavior-config";
 import proactiveAssistantRouter from "./proactive-assistant";
 import mediaStorageRouter from "./media-storage";
+import knowledgeRouter from "./knowledge";
 
 const router: IRouter = Router();
 
@@ -28,5 +29,6 @@ router.use(simulatorRouter);
 router.use(behaviorConfigRouter);
 router.use(proactiveAssistantRouter);
 router.use(mediaStorageRouter);
+router.use(knowledgeRouter);
 
 export default router;

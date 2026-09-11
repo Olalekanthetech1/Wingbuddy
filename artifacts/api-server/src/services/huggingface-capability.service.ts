@@ -45,6 +45,11 @@ function parseModels(payload: unknown): HuggingFaceDiscoveredModel[] {
     .filter((item): item is HuggingFaceDiscoveredModel => Boolean(item));
 }
 
+const DEFAULT_MODELS: Record<HuggingFaceTask, string[]> = {
+  "text-to-image": ["Qwen/Qwen-Image", "black-forest-labs/FLUX.1-schnell", "stabilityai/stable-diffusion-xl-base-1.0"],
+  "text-to-video": ["Wan-AI/Wan2.2-TI2V-5B", "Wan-AI/Wan2.1-T2V-1.3B", "Lightricks/LTX-Video", "damo-vilab/modelscope-damo-text-to-video"],
+};
+
 export class HuggingFaceCapabilityService {
   private readonly cache = new Map<HuggingFaceTask, CacheEntry>();
 
@@ -81,15 +86,28 @@ export class HuggingFaceCapabilityService {
         if (match) return { model: match.id, discovered: true, preferredAvailable: true, candidates };
       }
       const selected = candidates[0];
-      return { model: selected.id, discovered: true, preferredAvailable: false, candidates };
-    } catch (error) {
-      const preferred = normalizeModelId(preferredModel);
-      if (preferred) {
-        logger.warn({ task, preferredModel: preferred, error: String(error) }, "Hugging Face discovery unavailable; using explicitly configured model");
-        return { model: preferred, discovered: false, preferredAvailable: true, candidates: [] };
+      if (selected) {
+        return { model: selected.id, discovered: true, preferredAvailable: false, candidates };
       }
-      throw error;
+    } catch (error) {
+      logger.warn({ task, preferredModel, error: String(error) }, "Hugging Face discovery unavailable or returned no models; using curated model defaults");
     }
+
+    const preferred = normalizeModelId(preferredModel);
+    if (preferred) {
+      return { model: preferred, discovered: false, preferredAvailable: true, candidates: [] };
+    }
+
+    const defaults = DEFAULT_MODELS[task] || [];
+    const fallbackModel = defaults[0] || "Wan-AI/Wan2.2-TI2V-5B";
+    const defaultCandidates: HuggingFaceDiscoveredModel[] = defaults.map((id) => ({ id, pipelineTag: task }));
+
+    return {
+      model: fallbackModel,
+      discovered: false,
+      preferredAvailable: false,
+      candidates: defaultCandidates,
+    };
   }
 
   invalidate(task?: HuggingFaceTask): void {

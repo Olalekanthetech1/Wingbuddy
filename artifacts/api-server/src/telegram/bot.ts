@@ -422,7 +422,8 @@ export function createTelegramBot(): TelegramBotRuntime {
       await conversations.addMessage(conversationId, "user", `/image ${rawPrompt}`);
       await conversations.addMessage(conversationId, "model", `[Generated Image for: "${rawPrompt}"] Enhanced: "${result.enhancedPrompt}"`);
       const imageBadge = result.provider === "huggingface" ? "<i>Engine: 🤗 Hugging Face (FLUX.1)</i>" : "<i>Engine: 🌐 Free Community (FLUX.1)</i>";
-      const caption = [`<b>🎨 Prompt:</b> ${escapeHtml(result.originalPrompt)}`, result.enhancedPrompt.toLowerCase() !== result.originalPrompt.toLowerCase() ? `<i>✨ Gemini Enhanced:</i> ${escapeHtml(result.enhancedPrompt)}` : null, imageBadge].filter(Boolean).join("\n\n");
+      const enhancerTag = result.enhancerName ? `<i>✨ Enhanced (${escapeHtml(result.enhancerName)}):</i>` : `<i>✨ AI Enhanced:</i>`;
+      const caption = [`<b>🎨 Prompt:</b> ${escapeHtml(result.originalPrompt)}`, result.enhancedPrompt.toLowerCase() !== result.originalPrompt.toLowerCase() ? `${enhancerTag} ${escapeHtml(result.enhancedPrompt)}` : null, imageBadge].filter(Boolean).join("\n\n");
       const safeCaption = caption.length > 1000 ? caption.slice(0, 995) + "..." : caption;
       if (!result?.buffer || !Buffer.isBuffer(result.buffer) || result.buffer.length < 500) throw new Error("Image generation did not produce a valid image buffer");
       await ctx.replyWithPhoto(new InputFile(result.buffer, "image.jpg"), { caption: safeCaption, parse_mode: "HTML", reply_markup: feedbackKeyboard() });
@@ -455,7 +456,8 @@ export function createTelegramBot(): TelegramBotRuntime {
       await conversations.addMessage(conversationId, "user", `/video ${rawPrompt}`);
       await conversations.addMessage(conversationId, "model", `[Generated Visual (${result.provider}) for: "${rawPrompt}"] Enhanced: "${result.enhancedPrompt}"`);
       const providerBadge = result.provider === "huggingface" ? "🤗 Hugging Face" : "🌐 Free Community";
-      const caption = [`<b>🎬 Prompt:</b> ${escapeHtml(result.originalPrompt)}`, result.enhancedPrompt.toLowerCase() !== result.originalPrompt.toLowerCase() ? `<i>✨ Gemini Enhanced:</i> ${escapeHtml(result.enhancedPrompt)}` : null, `<i>Engine: ${providerBadge}</i>`].filter(Boolean).join("\n\n");
+      const enhancerTag = result.enhancerName ? `<i>✨ Enhanced (${escapeHtml(result.enhancerName)}):</i>` : `<i>✨ AI Enhanced:</i>`;
+      const caption = [`<b>🎬 Prompt:</b> ${escapeHtml(result.originalPrompt)}`, result.enhancedPrompt.toLowerCase() !== result.originalPrompt.toLowerCase() ? `${enhancerTag} ${escapeHtml(result.enhancedPrompt)}` : null, `<i>Engine: ${providerBadge}</i>`].filter(Boolean).join("\n\n");
       const safeCaption = caption.length > 1000 ? caption.slice(0, 995) + "..." : caption;
       if (progressMsg) await ctx.api.deleteMessage(ctx.chat.id, progressMsg).catch(() => {});
       if (result.isVideo && Buffer.isBuffer(result.buffer) && result.buffer.length > 1000) {
@@ -641,7 +643,8 @@ export function createTelegramBot(): TelegramBotRuntime {
           await runStage("user_message_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => conversations.addMessage(globalContextData.conversationId, "user", prompt));
           await runStage("model_response_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => conversations.addMessage(globalContextData.conversationId, "model", `[Generated Video (${videoResult.provider}) for: "${adaptivePlan.videoPrompt}"] Enhanced: "${videoResult.enhancedPrompt}"`));
           const providerBadge = videoResult.provider === "huggingface" ? "🤗 Hugging Face" : "🌐 Free Community";
-          const caption = [`<b>🎬 Prompt:</b> ${escapeHtml(videoResult.originalPrompt)}`, videoResult.enhancedPrompt.toLowerCase() !== videoResult.originalPrompt.toLowerCase() ? `<i>✨ Gemini Enhanced:</i> ${escapeHtml(videoResult.enhancedPrompt)}` : null, `<i>Engine: ${providerBadge}</i>`].filter(Boolean).join("\n\n");
+          const vidEnhancerTag = videoResult.enhancerName ? `<i>✨ Enhanced (${escapeHtml(videoResult.enhancerName)}):</i>` : `<i>✨ AI Enhanced:</i>`;
+          const caption = [`<b>🎬 Prompt:</b> ${escapeHtml(videoResult.originalPrompt)}`, videoResult.enhancedPrompt.toLowerCase() !== videoResult.originalPrompt.toLowerCase() ? `${vidEnhancerTag} ${escapeHtml(videoResult.enhancedPrompt)}` : null, `<i>Engine: ${providerBadge}</i>`].filter(Boolean).join("\n\n");
           const safeCaption = caption.length > 1000 ? caption.slice(0, 995) + "..." : caption;
           if (progressMessageId) await ctx.api.deleteMessage(ctx.chat.id, progressMessageId).catch(() => {});
           if (videoResult.isVideo && Buffer.isBuffer(videoResult.buffer) && videoResult.buffer.length > 1000) await ctx.replyWithVideo(new InputFile(videoResult.buffer, "video.mp4"), { caption: safeCaption, parse_mode: "HTML", reply_markup: feedbackKeyboard() });
@@ -664,7 +667,8 @@ export function createTelegramBot(): TelegramBotRuntime {
           await runStage("user_message_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => conversations.addMessage(globalContextData.conversationId, "user", prompt));
           await runStage("model_response_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => conversations.addMessage(globalContextData.conversationId, "model", `[Generated Image for: "${adaptivePlan.imagePrompt}"] Enhanced: "${imageResult.enhancedPrompt}"`));
           const imageBadge = imageResult.provider === "huggingface" ? "<i>Engine: 🤗 Hugging Face (FLUX.1)</i>" : "<i>Engine: 🌐 Free Community (FLUX.1)</i>";
-          const caption = [`<b>🎨 Prompt:</b> ${escapeHtml(imageResult.originalPrompt)}`, imageResult.enhancedPrompt.toLowerCase() !== imageResult.originalPrompt.toLowerCase() ? `<i>✨ Gemini Enhanced:</i> ${escapeHtml(imageResult.enhancedPrompt)}` : null, imageBadge].filter(Boolean).join("\n\n");
+          const imgEnhancerTag = imageResult.enhancerName ? `<i>✨ Enhanced (${escapeHtml(imageResult.enhancerName)}):</i>` : `<i>✨ AI Enhanced:</i>`;
+          const caption = [`<b>🎨 Prompt:</b> ${escapeHtml(imageResult.originalPrompt)}`, imageResult.enhancedPrompt.toLowerCase() !== imageResult.originalPrompt.toLowerCase() ? `${imgEnhancerTag} ${escapeHtml(imageResult.enhancedPrompt)}` : null, imageBadge].filter(Boolean).join("\n\n");
           const safeCaption = caption.length > 1000 ? caption.slice(0, 995) + "..." : caption;
           if (!Buffer.isBuffer(imageResult.buffer) || imageResult.buffer.length < 500) throw new Error("Natural image generation did not produce a valid image buffer");
           await ctx.replyWithPhoto(new InputFile(imageResult.buffer, "image.jpg"), { caption: safeCaption, parse_mode: "HTML", reply_markup: feedbackKeyboard() });

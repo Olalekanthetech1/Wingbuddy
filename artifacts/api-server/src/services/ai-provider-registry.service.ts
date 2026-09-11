@@ -12,6 +12,7 @@ const BUILT_IN_PROVIDERS: Record<AIProviderId, Omit<AIProviderRecord, "createdAt
   groq: { id: "groq", name: "Groq", adapter: "groq", baseUrl: "https://api.groq.com/openai/v1", apiKeyEnv: "GROQ_API_KEY", capabilities: ["chat", "streaming"] },
   mistral: { id: "mistral", name: "Mistral AI", adapter: "mistral", baseUrl: "https://api.mistral.ai", apiKeyEnv: "MISTRAL_API_KEY", capabilities: ["chat", "streaming"] },
   huggingface: { id: "huggingface", name: "Hugging Face", adapter: "huggingface", baseUrl: "https://huggingface.co", apiKeyEnv: "HF_TOKEN", capabilities: ["chat", "streaming", "image_generation", "video_generation"] },
+  elevenlabs: { id: "elevenlabs", name: "ElevenLabs", adapter: "elevenlabs", baseUrl: "https://api.elevenlabs.io", apiKeyEnv: "ELEVENLABS_API_KEY", capabilities: ["audio_generation"] },
 };
 
 function normalize(value: unknown): AIProviderRecord[] {
@@ -112,6 +113,14 @@ export class AIProviderRegistryService {
         keyCount,
       };
     }));
+  }
+
+  getKnownProviderIds(): AIProviderId[] {
+    return Object.keys(BUILT_IN_PROVIDERS) as AIProviderId[];
+  }
+
+  isKnownProvider(id: string): id is AIProviderId {
+    return id in BUILT_IN_PROVIDERS;
   }
 
   async get(id: string): Promise<AIProviderRecord> {

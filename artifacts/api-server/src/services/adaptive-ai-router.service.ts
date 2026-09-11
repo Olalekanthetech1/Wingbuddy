@@ -124,39 +124,60 @@ export class AdaptiveAIRouterService {
       return this.healthScore(model) > 0;
     });
     const hasRole = (model: UnifiedModelRecord, role: UnifiedModelRole): boolean => model.roles.includes(role);
-    const preferredRole: UnifiedModelRole | undefined = context.isExtraction ? "extraction" : context.isDeepReasoning ? "reasoning" : undefined;
+    
+    let preferredCapability: string | undefined = context.isExtraction ? "extraction" : context.isDeepReasoning ? "reasoning" : undefined;
+    if (!preferredCapability && context.mode) {
+      if (context.mode === "fast" || context.mode === "prompt_enhancement" || context.mode === "video_prompt_enhancement") preferredCapability = "fast";
+      else if (context.mode === "reasoning") preferredCapability = "reasoning";
+      else if (context.mode === "extraction") preferredCapability = "extraction";
+      else if (context.mode === "embedding") preferredCapability = "embedding";
+    }
+
+    const targetPrimaryRole: UnifiedModelRole = 
+      context.capabilities.includes("image_generation") ? "primary_image" :
+      context.capabilities.includes("video_generation") ? "primary_video" :
+      context.capabilities.includes("embedding") ? "primary_embedding" : "primary_chat";
+      
+    const isTargetPrimary = (m: UnifiedModelRecord) => m.roles.includes(targetPrimaryRole) || (targetPrimaryRole === "primary_chat" && m.roles.includes("primary"));
+
     const scored = eligible.map((model) => {
-      const capabilityMatches = [
-        context.requiresVision ? (model.capabilities.includes("vision") || providerMap.get(model.provider)?.capabilities.includes("vision") ? 1 : 0) : undefined,
-        context.requiresTools ? (model.capabilities.includes("tool_calling") || providerMap.get(model.provider)?.capabilities.includes("tool_calling") ? 1 : 0) : undefined,
-        context.enableSearch ? (model.capabilities.includes("web_search") || providerMap.get(model.provider)?.capabilities.includes("web_search") ? 1 : 0) : undefined,
-        context.isDeepReasoning ? (hasRole(model, "reasoning") || model.capabilities.includes("reasoning") ? 1 : 0) : undefined,
-        context.isExtraction ? (hasRole(model, "extraction") ? 1 : 0) : undefined,
-      ].filter((value): value is number => value !== undefined);
-      const capabilityMatch = capabilityMatches.length ? (capabilityMatches.reduce((a, b) => a + b, 0) / capabilityMatches.length) * 100 : 70;
-      const roleBonus = preferredRole && hasRole(model, preferredRole) ? 20 : 0;
-      const primaryBonus = hasRole(model, "primary") ? PRIMARY_ROLE_BONUS : 0;
+      let capabilityAffinityScore = 0;
+      if (preferredCapability && model.capabilities.includes(preferredCapability)) {
+        capabilityAffinityScore += 250;
+      }
+
+      if (context.requiresVision && !model.capabilities.includes("vision") && !providerMap.get(model.provider)?.capabilities.includes("vision")) {
+         // Should be filtered out already, but just in case
+      }
+
+      const primaryBonus = isTargetPrimary(model) ? PRIMARY_ROLE_BONUS : 0;
       const priorityScore = 100 - clamp(model.priority * 8, 0, 100);
       const healthScore = this.healthScore(model);
       const latencyScore = this.latencyScore(model);
+      
       const totalWeight = Math.max(1, policy.capabilityWeight + policy.healthWeight + policy.latencyWeight + policy.priorityWeight);
-      let score = (capabilityMatch * policy.capabilityWeight + healthScore * policy.healthWeight + latencyScore * policy.latencyWeight + priorityScore * policy.priorityWeight) / totalWeight;
-      if (policy.strategy === "priority_only") score = priorityScore;
+      
+      let baseScore = (100 * policy.capabilityWeight + healthScore * policy.healthWeight + latencyScore * policy.latencyWeight + priorityScore * policy.priorityWeight) / totalWeight;
+      
+      let score = baseScore + capabilityAffinityScore;
+      
+      if (policy.strategy === "priority_only") score = priorityScore + capabilityAffinityScore;
       if (policy.strategy === "adaptive" && !context.preferredProvider && !context.preferredModelId) score += primaryBonus;
-      if (policy.strategy === "primary_first" && hasRole(model, "primary")) score += PRIMARY_ROLE_BONUS;
-      if (context.preferredProvider || context.preferredModelId) score += hasRole(model, "primary") ? PRIMARY_ROLE_BONUS / 2 : 0;
+      if (policy.strategy === "primary_first" && isTargetPrimary(model)) score += PRIMARY_ROLE_BONUS;
+      if (context.preferredProvider || context.preferredModelId) score += isTargetPrimary(model) ? PRIMARY_ROLE_BONUS / 2 : 0;
+      
       const reasons: string[] = [];
-      if (hasRole(model, "primary")) reasons.push("primary");
-      if (preferredRole && hasRole(model, preferredRole)) reasons.push(preferredRole);
-      if (capabilityMatch >= 90) reasons.push("capability match");
+      if (isTargetPrimary(model)) reasons.push("primary");
+      if (preferredCapability && model.capabilities.includes(preferredCapability)) reasons.push(`capability affinity: ${preferredCapability}`);
       if (healthScore >= 85) reasons.push("healthy");
       if (latencyScore >= 85) reasons.push("low latency");
+      
       return { model, score, reasons, healthScore, latencyMs: this.getHealth(model).ewmaLatencyMs };
     });
     const sorted = scored.sort((a, b) => b.score - a.score || a.model.priority - b.model.priority || a.model.provider.localeCompare(b.model.provider));
     if (policy.strategy !== "primary_first") return sorted;
-    const primary = sorted.filter((candidate) => candidate.model.roles.includes("primary"));
-    const rest = sorted.filter((candidate) => !candidate.model.roles.includes("primary"));
+    const primary = sorted.filter((candidate) => isTargetPrimary(candidate.model));
+    const rest = sorted.filter((candidate) => !isTargetPrimary(candidate.model));
     return [...primary, ...rest];
   }
 

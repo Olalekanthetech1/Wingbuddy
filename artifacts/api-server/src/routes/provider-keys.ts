@@ -7,8 +7,11 @@ import { apiKeyPoolService } from "../services/api-key-pool.service";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
-const PROVIDERS = new Set<AIProviderId>(["gemini", "groq", "mistral"]);
-function providerOf(value: unknown): AIProviderId { const normalized = String(value || "").trim().toLowerCase() as AIProviderId; if (!PROVIDERS.has(normalized)) throw new Error("Unsupported provider"); return normalized; }
+function providerOf(value: unknown): AIProviderId {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!aiProviderRegistryService.isKnownProvider(normalized)) throw new Error(`Unsupported provider: ${normalized}`);
+  return normalized;
+}
 
 async function hydrate(providerId: AIProviderId) {
   const provider = await aiProviderRegistryService.get(providerId);
@@ -27,17 +30,22 @@ router.post("/provider-keys", async (req: Request, res: Response) => {
     const providerId = providerOf(req.body?.provider || "gemini");
     const key = typeof req.body?.key === "string" ? req.body.key.trim() : "";
     const name = typeof req.body?.name === "string" ? req.body.name.trim() : undefined;
-    const model = typeof req.body?.model === "string" ? req.body.model.trim() : "";
+    let model = typeof req.body?.model === "string" ? req.body.model.trim() : "";
     if (!key) { res.status(400).json({ error: "Missing required field 'key'" }); return; }
-    if (!model) { res.status(400).json({ error: "Missing required field 'model' for key validation" }); return; }
-    const provider = await aiProviderRegistryService.get(providerId);
 
-    // A first valid key is the evidence needed to activate an otherwise unconfigured provider.
-    // Do not reject onboarding merely because the registry currently has enabled=false.
-    const catalog = await aiModelCatalogService.listWithKey(providerId, key);
-    if (!catalog.some((entry) => entry.modelId === model)) {
-      res.status(400).json({ error: `Model ${providerId}/${model} was not returned by the provider for this API key`, availableModels: catalog.map((entry) => ({ modelId: entry.modelId, name: entry.name })) });
-      return;
+    const provider = await aiProviderRegistryService.get(providerId);
+    const requiresModel = (provider.capabilities || []).includes("chat");
+
+    if (requiresModel) {
+      const catalog = await aiModelCatalogService.listWithKey(providerId, key).catch(() => []);
+      if (catalog.length) {
+        if (!model || !catalog.some((entry) => entry.modelId === model)) {
+          model = catalog[0].modelId;
+        }
+      } else if (!model) {
+        res.status(400).json({ error: "Missing required field 'model' for key validation" });
+        return;
+      }
     }
 
     const adapter = aiProviderRegistryService.getAdapter(provider.adapter);
@@ -91,7 +99,7 @@ router.post("/provider-keys/mode", async (req: Request, res: Response) => {
 router.get("/provider-keys/summary/all", async (_req: Request, res: Response) => {
   try {
     const result: Record<string, unknown> = {};
-    for (const providerId of ["gemini", "groq", "mistral"] as AIProviderId[]) {
+    for (const providerId of aiProviderRegistryService.getKnownProviderIds()) {
       await hydrate(providerId);
       result[providerId] = providerId === "gemini" ? apiKeyPoolService.getSummary() : aiProviderKeyPoolService.getSummary(providerId);
     }
