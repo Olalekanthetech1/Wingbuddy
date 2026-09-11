@@ -24,6 +24,10 @@ export interface TierConfig {
   label: string;
   description: string;
   dailyQuota: number; // -1 or >= 999999 means unlimited
+  dailyImageQuota?: number;
+  dailyVideoQuota?: number;
+  dailyDeepReasoningQuota?: number;
+  dailyResearchQuota?: number;
   preferredRole: string; // 'fast' | 'primary' | 'reasoning'
   priorityBonus: number;
   speed: string;
@@ -97,6 +101,10 @@ export const DEFAULT_TIER_CONFIGS: Record<UserTier, TierConfig> = {
     label: "Free Tier",
     description: "Standard access routed to fast, cost-effective models with daily quota limits",
     dailyQuota: 30,
+    dailyImageQuota: 3,
+    dailyVideoQuota: 0,
+    dailyDeepReasoningQuota: 0,
+    dailyResearchQuota: 30,
     preferredRole: "fast",
     priorityBonus: 0,
     speed: "Ultra-Fast (Budget optimized)",
@@ -127,6 +135,10 @@ export const DEFAULT_TIER_CONFIGS: Record<UserTier, TierConfig> = {
     label: "Pro Tier",
     description: "Generous daily quotas with balanced high-speed intelligence and image generation",
     dailyQuota: 150,
+    dailyImageQuota: 20,
+    dailyVideoQuota: 3,
+    dailyDeepReasoningQuota: 150,
+    dailyResearchQuota: 150,
     preferredRole: "primary",
     priorityBonus: 150,
     speed: "High Speed & Multimodal",
@@ -134,7 +146,7 @@ export const DEFAULT_TIER_CONFIGS: Record<UserTier, TierConfig> = {
     allowedFeatures: {
       webResearch: true,
       imageGen: true,
-      videoGen: false,
+      videoGen: true,
       autonomousExecution: true,
       deepReasoning: true,
     },
@@ -159,7 +171,11 @@ export const DEFAULT_TIER_CONFIGS: Record<UserTier, TierConfig> = {
     tier: "vip",
     label: "VIP Tier",
     description: "Unlimited unthrottled requests routed to heavy-duty reasoning & video generation models",
-    dailyQuota: -1, // Unlimited
+    dailyQuota: 500, // Hard ceiling instead of unlimited
+    dailyImageQuota: 60,
+    dailyVideoQuota: 10,
+    dailyDeepReasoningQuota: 500,
+    dailyResearchQuota: 500,
     preferredRole: "reasoning",
     priorityBonus: 500,
     speed: "Maximum Deep Reasoning",
@@ -303,6 +319,10 @@ export class UserTierService {
           tier: defaultTier,
           dailyQuota: defaultQuota,
           requestsToday: 1,
+          imagesToday: 0,
+          videosToday: 0,
+          deepReasoningToday: 0,
+          researchToday: 0,
           lastRequestDate: today,
           totalRequests: 1,
           status: "active",
@@ -382,18 +402,26 @@ export class UserTierService {
     }
 
     // Update usage in DB
+    const updatePayload: any = {
+      requestsToday,
+      lastRequestDate: today,
+      totalRequests,
+      lastActiveAt: new Date(),
+      updatedAt: new Date(),
+      username: profile?.username ?? user.username,
+      firstName: profile?.firstName ?? user.firstName,
+      lastName: profile?.lastName ?? user.lastName,
+    };
+    if (isNewDay) {
+      updatePayload.imagesToday = 0;
+      updatePayload.videosToday = 0;
+      updatePayload.deepReasoningToday = 0;
+      updatePayload.researchToday = 0;
+    }
+
     await db
       .update(usersTable)
-      .set({
-        requestsToday,
-        lastRequestDate: today,
-        totalRequests,
-        lastActiveAt: new Date(),
-        updatedAt: new Date(),
-        username: profile?.username ?? user.username,
-        firstName: profile?.firstName ?? user.firstName,
-        lastName: profile?.lastName ?? user.lastName,
-      })
+      .set(updatePayload)
       .where(eq(usersTable.telegramUserId, telegramUserId));
 
     const remainingToday = isUnlimited ? 999999 : Math.max(0, effectiveDailyQuota - requestsToday);
@@ -451,6 +479,116 @@ export class UserTierService {
       mode: u.mode || "general",
       customModelOverride: u.customModelOverride || null,
     };
+  }
+
+  async checkToolQuota(telegramUserId: number, tool: 'image' | 'video' | 'research' | 'deep_reasoning'): Promise<{ allowed: boolean, remaining: number, message?: string }> {
+    const today = getUtcTodayDate();
+    const policy = await this.getPolicy();
+    const userResult = await db.select().from(usersTable).where(eq(usersTable.telegramUserId, telegramUserId)).limit(1);
+    const user = userResult[0];
+
+    if (!user) return { allowed: false, remaining: 0, message: "User not found." };
+    
+    // Auto reset if new day
+    if (user.lastRequestDate !== today) {
+      user.imagesToday = 0;
+      user.videosToday = 0;
+      user.deepReasoningToday = 0;
+      user.researchToday = 0;
+    }
+
+    const currentTier = (user.tier === "vip" || user.tier === "pro" ? user.tier : "free") as UserTier;
+    const tierConfig = policy.tiers[currentTier] || DEFAULT_TIER_CONFIGS[currentTier];
+    
+    if (user.status === "suspended") {
+      return { allowed: false, remaining: 0, message: "Account suspended." };
+    }
+
+    let quota = 0;
+    let used = 0;
+    let label = tool;
+
+    switch (tool) {
+      case 'image':
+        quota = tierConfig.dailyImageQuota ?? DEFAULT_TIER_CONFIGS[currentTier].dailyImageQuota ?? 0;
+        used = user.imagesToday;
+        label = "Image Generation";
+        if (!tierConfig.allowedFeatures.imageGen) quota = 0;
+        break;
+      case 'video':
+        quota = tierConfig.dailyVideoQuota ?? DEFAULT_TIER_CONFIGS[currentTier].dailyVideoQuota ?? 0;
+        used = user.videosToday;
+        label = "Video Generation";
+        if (!tierConfig.allowedFeatures.videoGen) quota = 0;
+        break;
+      case 'deep_reasoning':
+        quota = tierConfig.dailyDeepReasoningQuota ?? DEFAULT_TIER_CONFIGS[currentTier].dailyDeepReasoningQuota ?? 0;
+        used = user.deepReasoningToday;
+        label = "Deep Reasoning";
+        if (!tierConfig.allowedFeatures.deepReasoning) quota = 0;
+        break;
+      case 'research':
+        quota = tierConfig.dailyResearchQuota ?? DEFAULT_TIER_CONFIGS[currentTier].dailyResearchQuota ?? 0;
+        used = user.researchToday;
+        label = "Web Research";
+        if (!tierConfig.allowedFeatures.webResearch) quota = 0;
+        break;
+    }
+
+    const isUnlimited = currentTier === "vip" || quota < 0 || quota >= 999999;
+    
+    if (!isUnlimited && used >= quota) {
+      return { 
+        allowed: false, 
+        remaining: 0,
+        message: `⏳ You have reached your daily limit of ${quota} for ${label}. Please upgrade your tier for higher limits.`
+      };
+    }
+
+    return { allowed: true, remaining: isUnlimited ? 999999 : Math.max(0, quota - used) };
+  }
+
+  async consumeToolQuota(telegramUserId: number, tool: 'image' | 'video' | 'research' | 'deep_reasoning'): Promise<void> {
+    const today = getUtcTodayDate();
+    let column: any = null;
+    
+    switch (tool) {
+      case 'image': column = usersTable.imagesToday; break;
+      case 'video': column = usersTable.videosToday; break;
+      case 'deep_reasoning': column = usersTable.deepReasoningToday; break;
+      case 'research': column = usersTable.researchToday; break;
+    }
+    
+    if (column) {
+      // First ensure the user is fetched to check the date
+      const userResult = await db.select().from(usersTable).where(eq(usersTable.telegramUserId, telegramUserId)).limit(1);
+      const user = userResult[0];
+      if (!user) return;
+      
+      const isNewDay = user.lastRequestDate !== today;
+      if (isNewDay) {
+        await db.update(usersTable)
+          .set({ 
+             imagesToday: tool === 'image' ? 1 : 0,
+             videosToday: tool === 'video' ? 1 : 0,
+             deepReasoningToday: tool === 'deep_reasoning' ? 1 : 0,
+             researchToday: tool === 'research' ? 1 : 0,
+             lastRequestDate: today 
+          })
+          .where(eq(usersTable.telegramUserId, telegramUserId));
+      } else {
+        let updateData: any = {};
+        switch (tool) {
+          case 'image': updateData.imagesToday = sql`${usersTable.imagesToday} + 1`; break;
+          case 'video': updateData.videosToday = sql`${usersTable.videosToday} + 1`; break;
+          case 'deep_reasoning': updateData.deepReasoningToday = sql`${usersTable.deepReasoningToday} + 1`; break;
+          case 'research': updateData.researchToday = sql`${usersTable.researchToday} + 1`; break;
+        }
+        await db.update(usersTable)
+          .set(updateData)
+          .where(eq(usersTable.telegramUserId, telegramUserId));
+      }
+    }
   }
 
   async getUserTier(telegramUserId: number): Promise<UserTier> {

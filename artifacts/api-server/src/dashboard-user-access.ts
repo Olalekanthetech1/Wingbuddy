@@ -74,10 +74,22 @@ export function renderDashboardUserAccess(): string {
     const whitelist = document.getElementById('uaPolicyWhitelist');
     const freeQuota = document.getElementById('uaPolicyFreeQuota');
     const proQuota = document.getElementById('uaPolicyProQuota');
+    const vipQuota = document.getElementById('uaPolicyVipQuota');
+    
     if (defTier) defTier.value = pol.defaultTier || 'free';
     if (whitelist) whitelist.value = pol.whitelistOnly ? 'true' : 'false';
     if (freeQuota) freeQuota.value = pol.tiers?.free?.dailyQuota ?? 30;
     if (proQuota) proQuota.value = pol.tiers?.pro?.dailyQuota ?? 150;
+    if (vipQuota) vipQuota.value = pol.tiers?.vip?.dailyQuota ?? 500;
+    
+    const fields = ['Free', 'Pro', 'Vip'];
+    fields.forEach(tier => {
+      const lower = tier.toLowerCase();
+      const img = document.getElementById('ua' + tier + 'ImageQuota');
+      if (img) img.value = pol.tiers?.[lower]?.dailyImageQuota ?? (lower==='free'?3:lower==='pro'?20:60);
+      const vid = document.getElementById('ua' + tier + 'VideoQuota');
+      if (vid) vid.value = pol.tiers?.[lower]?.dailyVideoQuota ?? (lower==='free'?0:lower==='pro'?3:10);
+    });
     
     if (document.getElementById('uaFreeContextLimit')) document.getElementById('uaFreeContextLimit').value = pol.tiers?.free?.contextHistoryLimit ?? 10;
     if (document.getElementById('uaProContextLimit')) document.getElementById('uaProContextLimit').value = pol.tiers?.pro?.contextHistoryLimit ?? 30;
@@ -294,6 +306,16 @@ export function renderDashboardUserAccess(): string {
     const whitelist = document.getElementById('uaPolicyWhitelist')?.value === 'true';
     const freeQuota = Number(document.getElementById('uaPolicyFreeQuota')?.value) || 30;
     const proQuota = Number(document.getElementById('uaPolicyProQuota')?.value) || 150;
+    const vipQuota = Number(document.getElementById('uaPolicyVipQuota')?.value) || 500;
+    
+    const fImg = Number(document.getElementById('uaFreeImageQuota')?.value) || 0;
+    const pImg = Number(document.getElementById('uaProImageQuota')?.value) || 0;
+    const vImg = Number(document.getElementById('uaVipImageQuota')?.value) || 0;
+    
+    const fVid = Number(document.getElementById('uaFreeVideoQuota')?.value) || 0;
+    const pVid = Number(document.getElementById('uaProVideoQuota')?.value) || 0;
+    const vVid = Number(document.getElementById('uaVipVideoQuota')?.value) || 0;
+    
     const freeContext = Number(document.getElementById('uaFreeContextLimit')?.value) || 10;
     const proContext = Number(document.getElementById('uaProContextLimit')?.value) || 30;
     const vipContext = Number(document.getElementById('uaVipContextLimit')?.value) || 60;
@@ -316,9 +338,9 @@ export function renderDashboardUserAccess(): string {
           whitelistOnly: whitelist,
           supportContact: supportContact,
           tiers: {
-            free: { dailyQuota: freeQuota, contextHistoryLimit: freeContext },
-            pro: { dailyQuota: proQuota, contextHistoryLimit: proContext, starsAmount: proStars, priceLabel: proPrice, checkoutUrl: proCheckout, cryptoCheckoutUrl: proCrypto },
-            vip: { contextHistoryLimit: vipContext, starsAmount: vipStars, priceLabel: vipPrice, checkoutUrl: vipCheckout, cryptoCheckoutUrl: vipCrypto }
+            free: { dailyQuota: freeQuota, dailyImageQuota: fImg, dailyVideoQuota: fVid, contextHistoryLimit: freeContext },
+            pro: { dailyQuota: proQuota, dailyImageQuota: pImg, dailyVideoQuota: pVid, contextHistoryLimit: proContext, starsAmount: proStars, priceLabel: proPrice, checkoutUrl: proCheckout, cryptoCheckoutUrl: proCrypto },
+            vip: { dailyQuota: vipQuota, dailyImageQuota: vImg, dailyVideoQuota: vVid, contextHistoryLimit: vipContext, starsAmount: vipStars, priceLabel: vipPrice, checkoutUrl: vipCheckout, cryptoCheckoutUrl: vipCrypto }
           }
         })
       });
@@ -437,6 +459,36 @@ export function renderDashboardUserAccess(): string {
               <div>
                 <div class="label">Pro Daily Quota</div>
                 <input id="uaPolicyProQuota" class="input" type="number" value="150" style="margin-top:4px" />
+              </div>
+              <div>
+                <div class="label">VIP Daily Quota</div>
+                <input id="uaPolicyVipQuota" class="input" type="number" value="500" style="margin-top:4px" />
+              </div>
+              
+              <div>
+                <div class="label">Free Image Quota</div>
+                <input id="uaFreeImageQuota" class="input" type="number" value="3" style="margin-top:4px" />
+              </div>
+              <div>
+                <div class="label">Pro Image Quota</div>
+                <input id="uaProImageQuota" class="input" type="number" value="20" style="margin-top:4px" />
+              </div>
+              <div>
+                <div class="label">VIP Image Quota</div>
+                <input id="uaVipImageQuota" class="input" type="number" value="60" style="margin-top:4px" />
+              </div>
+              
+              <div>
+                <div class="label">Free Video Quota</div>
+                <input id="uaFreeVideoQuota" class="input" type="number" value="0" style="margin-top:4px" />
+              </div>
+              <div>
+                <div class="label">Pro Video Quota</div>
+                <input id="uaProVideoQuota" class="input" type="number" value="3" style="margin-top:4px" />
+              </div>
+              <div>
+                <div class="label">VIP Video Quota</div>
+                <input id="uaVipVideoQuota" class="input" type="number" value="10" style="margin-top:4px" />
               </div>
               <div>
                 <div class="label">Free Context Retention (Messages)</div>

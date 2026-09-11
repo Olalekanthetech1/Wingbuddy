@@ -494,6 +494,11 @@ export function createTelegramBot(): TelegramBotRuntime {
       await ctx.reply("You’re sending requests a little too quickly. Please wait a moment and try again.");
       return;
     }
+    const quotaCheck = await userTierService.checkToolQuota(ctx.from.id, "image");
+    if (!quotaCheck.allowed) {
+      await ctx.reply(quotaCheck.message || "Image quota exceeded.");
+      return;
+    }
     const stopPresence = startTypingIndicator(ctx, { state: "generating", toolName: "image_generation", operationLabel: "image generation", chatAction: "upload_photo", userFacingProgress: false });
     try {
       const result = await ImageGenerationService.generate(rawPrompt, gemini);
@@ -506,6 +511,7 @@ export function createTelegramBot(): TelegramBotRuntime {
       const safeCaption = caption.length > 1000 ? caption.slice(0, 995) + "..." : caption;
       if (!result?.buffer || !Buffer.isBuffer(result.buffer) || result.buffer.length < 500) throw new Error("Image generation did not produce a valid image buffer");
       await ctx.replyWithPhoto(new InputFile(result.buffer, "image.jpg"), { caption: safeCaption, parse_mode: "HTML", reply_markup: feedbackKeyboard() });
+      await userTierService.consumeToolQuota(ctx.from.id, "image");
     } catch (error) {
       logger.error({ stage: "image_generation", error: safeErrorMetadata(error) }, "Image generation failed");
       await ctx.reply("Sorry, I encountered an issue generating that image. Please try again or rephrase your prompt.");
@@ -523,6 +529,11 @@ export function createTelegramBot(): TelegramBotRuntime {
     }
     if (!await rateLimiter.consumeAsync(ctx.from.id)) {
       await ctx.reply("You’re sending requests a little too quickly. Please wait a moment and try again.");
+      return;
+    }
+    const quotaCheck = await userTierService.checkToolQuota(ctx.from.id, "video");
+    if (!quotaCheck.allowed) {
+      await ctx.reply(quotaCheck.message || "Video quota exceeded.");
       return;
     }
     const stopPresence = startTypingIndicator(ctx, { state: "executing_tool", toolName: "video_generation", operationLabel: "video generation", chatAction: "upload_video", expectsLongRunning: true, userFacingProgress: false });
@@ -544,6 +555,7 @@ export function createTelegramBot(): TelegramBotRuntime {
       } else if (Buffer.isBuffer(result.buffer) && result.buffer.length > 500) {
         await ctx.replyWithPhoto(new InputFile(result.buffer, "storyboard.jpg"), { caption: `${safeCaption}\n\n<i>(Rendered as a cinematic storyboard concept frame)</i>`, parse_mode: "HTML", reply_markup: feedbackKeyboard() });
       } else throw new Error("Video service did not produce a valid visual buffer");
+      await userTierService.consumeToolQuota(ctx.from.id, "video");
       logger.info({ stage: "video_generation", elapsedMs: Date.now() - startedAt }, "Video generation completed");
     } catch (error) {
       logger.error({ stage: "video_generation", error: safeErrorMetadata(error) }, "Video generation failed");
@@ -966,6 +978,11 @@ export function createTelegramBot(): TelegramBotRuntime {
       }, "TELEGRAM_REQUEST_RESOLVED");
 
       if (!media && adaptivePlan.detectedIntent === "video_generation" && adaptivePlan.videoPrompt) {
+        const quotaCheck = await userTierService.checkToolQuota(ctx.from.id, "video");
+        if (!quotaCheck.allowed) {
+          await ctx.reply(quotaCheck.message || "Video quota exceeded.");
+          return;
+        }
         const stopVideoPresence = startTypingIndicator(ctx, { state: "executing_tool", toolName: "video_generation", operationLabel: "video generation", chatAction: "upload_video", expectsLongRunning: true, userFacingProgress: false });
         let progressMessageId: number | undefined;
         try {
@@ -982,6 +999,7 @@ export function createTelegramBot(): TelegramBotRuntime {
           if (videoResult.isVideo && Buffer.isBuffer(videoResult.buffer) && videoResult.buffer.length > 1000) await ctx.replyWithVideo(new InputFile(videoResult.buffer, "video.mp4"), { caption: safeCaption, parse_mode: "HTML", reply_markup: feedbackKeyboard() });
           else if (Buffer.isBuffer(videoResult.buffer) && videoResult.buffer.length > 500) await ctx.replyWithPhoto(new InputFile(videoResult.buffer, "concept_frame.jpg"), { caption: `${safeCaption}\n\n<i>(Rendered as a cinematic storyboard concept frame)</i>`, parse_mode: "HTML", reply_markup: feedbackKeyboard() });
           else throw new Error("Natural video generation did not produce a valid buffer");
+          await userTierService.consumeToolQuota(ctx.from.id, "video");
           logger.info({ stage: "video_generation", elapsedMs: Date.now() - startedAt }, "Natural video generation completed");
           if (registeredRequest) requestRegistryService.markCompleted(registeredRequest.requestId, { provider: videoResult.provider, mediaType: "video" });
           return;
@@ -993,6 +1011,11 @@ export function createTelegramBot(): TelegramBotRuntime {
       }
 
       if (!media && adaptivePlan.detectedIntent === "image_generation" && adaptivePlan.imagePrompt) {
+        const quotaCheck = await userTierService.checkToolQuota(ctx.from.id, "image");
+        if (!quotaCheck.allowed) {
+          await ctx.reply(quotaCheck.message || "Image quota exceeded.");
+          return;
+        }
         const stopImagePresence = startTypingIndicator(ctx, { state: "generating", toolName: "image_generation", operationLabel: "image generation", chatAction: "upload_photo", userFacingProgress: false });
         try {
           const imageResult = await ImageGenerationService.generate(adaptivePlan.imagePrompt, gemini);
@@ -1004,6 +1027,7 @@ export function createTelegramBot(): TelegramBotRuntime {
           const safeCaption = caption.length > 1000 ? caption.slice(0, 995) + "..." : caption;
           if (!Buffer.isBuffer(imageResult.buffer) || imageResult.buffer.length < 500) throw new Error("Natural image generation did not produce a valid image buffer");
           await ctx.replyWithPhoto(new InputFile(imageResult.buffer, "image.jpg"), { caption: safeCaption, parse_mode: "HTML", reply_markup: feedbackKeyboard() });
+          await userTierService.consumeToolQuota(ctx.from.id, "image");
           if (registeredRequest) requestRegistryService.markCompleted(registeredRequest.requestId, { provider: imageResult.provider, mediaType: "image" });
           return;
         } catch (imgError) { logger.warn({ imgError: safeErrorMetadata(imgError) }, "Natural image generation failed; falling back to conversational Gemini reply"); }
