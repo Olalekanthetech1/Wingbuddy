@@ -713,7 +713,7 @@ export function createTelegramBot(): TelegramBotRuntime {
       );
       await ctx.editMessageText(offerText, {
         parse_mode: "HTML",
-        reply_markup: upgradeKeyboard(requiredTier, policy, targetPersonaId),
+        reply_markup: upgradeKeyboard(requiredTier, policy, targetPersonaId, ctx.from.id),
       });
     }
   });
@@ -732,11 +732,11 @@ export function createTelegramBot(): TelegramBotRuntime {
     const text = formatUpgradeOfferText(targetTier, tierProfile.tier, undefined, policy);
     await ctx.editMessageText(text, {
       parse_mode: "HTML",
-      reply_markup: upgradeKeyboard(targetTier, policy),
+      reply_markup: upgradeKeyboard(targetTier, policy, undefined, ctx.from.id),
     }).catch(async () => {
       await ctx.reply(text, {
         parse_mode: "HTML",
-        reply_markup: upgradeKeyboard(targetTier, policy),
+        reply_markup: upgradeKeyboard(targetTier, policy, undefined, ctx.from.id),
       });
     });
   });
@@ -756,6 +756,101 @@ export function createTelegramBot(): TelegramBotRuntime {
   bot.callbackQuery("feedback:no-op", async (ctx) => { await ctx.answerCallbackQuery(); });
   bot.callbackQuery(/^exec_appr:(.+)$/, async (ctx) => { if (!ctx.from || !authorized(ctx.from.id)) { await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true }); return; } const approvalId = ctx.match[1]; await ctx.answerCallbackQuery({ text: "Processing approval..." }); try { const result = await executionEngine.submitApproval(approvalId, ctx.from.id, true); if (result.success) await ctx.editMessageText(`✅ <b>Approval Granted</b>\nExecution resumed for plan <code>${result.graphId}</code> (revision ${result.planRevision}).`, { parse_mode: "HTML" }); else await ctx.reply(`⚠️ Approval submission failed: ${result.error}`); } catch (err: any) { await ctx.reply(`⚠️ Approval failed: ${err.message}`); } });
   bot.callbackQuery(/^exec_rejc:(.+)$/, async (ctx) => { if (!ctx.from || !authorized(ctx.from.id)) { await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true }); return; } const approvalId = ctx.match[1]; await ctx.answerCallbackQuery({ text: "Processing rejection..." }); try { const result = await executionEngine.submitApproval(approvalId, ctx.from.id, false); if (result.success) await ctx.editMessageText(`❌ <b>Execution Rejected</b>\nPlan <code>${result.graphId}</code> has been cancelled.`, { parse_mode: "HTML" }); else await ctx.reply(`⚠️ Rejection submission failed: ${result.error}`); } catch (err: any) { await ctx.reply(`⚠️ Rejection failed: ${err.message}`); } });
+
+  bot.callbackQuery(/^upgrade:stars:(pro|vip)$/, async (ctx) => {
+    if (!ctx.from || !authorized(ctx.from.id)) {
+      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
+      return;
+    }
+    await ctx.answerCallbackQuery();
+    const targetTier = ctx.match[1] as "pro" | "vip";
+    const policy = await userTierService.getPolicy();
+    const tierConfig = policy.tiers?.[targetTier];
+    const starsAmount = tierConfig?.starsAmount || (targetTier === "vip" ? 1250 : 500);
+
+    const title = targetTier === "vip" ? "👑 Wingbuddy VIP Pass" : "⚡ Wingbuddy PRO Pass";
+    const description = targetTier === "vip"
+      ? "Unlock Unlimited Messages, DeepSeek-R1 reasoning, Crypto Strategist & FLUX Ultra generation."
+      : "Unlock 150 daily messages, Software Architect persona, priority processing & 30-message context retention.";
+
+    const payload = JSON.stringify({
+      type: "tier_upgrade",
+      tier: targetTier,
+      telegramUserId: ctx.from.id,
+      timestamp: Date.now(),
+    });
+
+    try {
+      await ctx.replyWithInvoice(
+        title,
+        description,
+        payload,
+        "XTR", // Official currency code for Telegram Stars
+        [
+          {
+            label: `${targetTier.toUpperCase()} Pass (Monthly)`,
+            amount: starsAmount,
+          },
+        ],
+        {
+          photo_url: targetTier === "vip"
+            ? "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=600&auto=format&fit=crop&q=80"
+            : "https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?w=600&auto=format&fit=crop&q=80",
+          photo_width: 600,
+          photo_height: 400,
+          protect_content: false,
+        },
+      );
+    } catch (err) {
+      logger.error({ error: safeErrorMetadata(err), userId: ctx.from.id, targetTier }, "Failed sending Telegram Stars invoice");
+      await ctx.reply("⚠️ Could not generate the Stars invoice. Please try again or contact support.");
+    }
+  });
+
+  bot.on("pre_checkout_query", async (ctx) => {
+    const query = ctx.preCheckoutQuery;
+    try {
+      const payload = JSON.parse(query.invoice_payload);
+      if (payload.type === "tier_upgrade" && (payload.tier === "pro" || payload.tier === "vip")) {
+        await ctx.answerPreCheckoutQuery(true);
+        logger.info({ userId: ctx.from.id, tier: payload.tier }, "Approved Telegram Stars pre-checkout query");
+        return;
+      }
+      await ctx.answerPreCheckoutQuery(false, { error_message: "Invalid upgrade payload." });
+    } catch (err) {
+      logger.error({ error: safeErrorMetadata(err), queryId: query.id }, "Error handling pre_checkout_query");
+      await ctx.answerPreCheckoutQuery(false, { error_message: "Checkout verification failed. Please try again." });
+    }
+  });
+
+  bot.on(":successful_payment", async (ctx) => {
+    const payment = ctx.message.successful_payment;
+    logger.info({ payment, userId: ctx.from?.id }, "Received successful Telegram Stars payment");
+    try {
+      const payload = JSON.parse(payment.invoice_payload);
+      if (payload.type === "tier_upgrade" && (payload.tier === "pro" || payload.tier === "vip")) {
+        const targetTier = payload.tier as "pro" | "vip";
+        await userTierService.updateUserAccess(ctx.from.id, {
+          tier: targetTier,
+          status: "active",
+        });
+
+        const tierName = targetTier === "vip" ? "👑 VIP Pass" : "⚡ PRO Pass";
+        const msg = [
+          `🎉 <b>Payment Successful!</b>`,
+          ``,
+          `Thank you for supporting Wingbuddy! Your account has been upgraded to <b>${tierName}</b> with immediate effect.`,
+          `⭐ Paid: <code>${payment.total_amount} Stars (XTR)</code>`,
+          `🆔 Telegram Payment ID: <code>${payment.telegram_payment_charge_id}</code>`,
+          ``,
+          `Use /persona to select unlocked specialist agents or /tier to view your renewed quotas!`,
+        ].join("\n");
+        await ctx.reply(msg, { parse_mode: "HTML" });
+      }
+    } catch (err) {
+      logger.error({ error: safeErrorMetadata(err), userId: ctx.from?.id }, "Error processing successful payment event");
+    }
+  });
 
   async function handleIncomingTelegramMessage(ctx: Context, payload: { rawText?: string; media?: { fileId: string; mediaType: "image" | "document" | "voice" | "audio"; reportedMime?: string; fileName?: string; fileSize?: number; }; }) {
     if (!(await requireAuthorized(ctx))) return;
@@ -795,7 +890,12 @@ export function createTelegramBot(): TelegramBotRuntime {
         catch (mediaErr) { logger.error({ error: safeErrorMetadata(mediaErr), mediaType: media.mediaType }, "Failed downloading Telegram media for multimodal processing"); await ctx.reply("⚠️ Sorry, I could not download the attached media from Telegram. Please try sending it again."); return; }
       }
 
-      const globalContextData = await runStage("global_context_retrieval", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => globalContext.getContextForCompletion({ telegramUserId: ctx.from!.id, chatId: ctx.chat!.id, userProfile: { id: ctx.from!.id, username: ctx.from!.username, firstName: ctx.from!.first_name, lastName: ctx.from!.last_name }, maxHistoryMessages: config.maxHistoryMessages, message: prompt, geminiService: gemini }));
+      const userTier = quotaCheck.tier;
+      const userTierPolicy = await userTierService.getPolicy();
+      const userTierConfig = userTierPolicy.tiers?.[userTier];
+      const tierMaxHistory = userTierConfig?.contextHistoryLimit || (userTier === "vip" ? 60 : userTier === "pro" ? 30 : 10);
+
+      const globalContextData = await runStage("global_context_retrieval", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => globalContext.getContextForCompletion({ telegramUserId: ctx.from!.id, chatId: ctx.chat!.id, userProfile: { id: ctx.from!.id, username: ctx.from!.username, firstName: ctx.from!.first_name, lastName: ctx.from!.last_name }, maxHistoryMessages: tierMaxHistory, userTier, message: prompt, geminiService: gemini }));
 
       let currentPrompt = prompt;
       const modeSwitchIntent = AdaptiveIntentService.detectModeSwitchIntent(currentPrompt, modeService);

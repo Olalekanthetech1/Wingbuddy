@@ -118,6 +118,61 @@ app.post("/api/telegram/webhook", handleTelegramWebhook);
 app.post("/telegram/webhook", handleTelegramWebhook);
 app.get("/api/telegram/queue-metrics", (_req: Request, res: Response) => res.json({ status: "ok", workerQueue: telegramWorkerQueue.getMetrics() }));
 
+app.post("/api/payments/webhook", async (req: Request, res: Response) => {
+  const payload = req.body;
+  logger.info({ payload }, "Received external payment webhook");
+  
+  try {
+    let userIdStr: string | undefined;
+    let amount = 0;
+
+    // Stripe & Coinbase Commerce
+    if (payload.type === "checkout.session.completed" || payload.event?.type === "charge:confirmed") {
+      const session = payload.data?.object || payload.event?.data;
+      userIdStr = session?.client_reference_id || session?.metadata?.client_reference_id;
+      amount = session?.amount_total || session?.pricing?.local?.amount || 0;
+    }
+    // Paystack & Flutterwave
+    else if (payload.event === "charge.success" || payload.event === "charge.completed") {
+      const reference = payload.data?.reference || payload.data?.tx_ref;
+      if (reference && reference.startsWith("tg_")) {
+        userIdStr = reference.split("_")[1];
+      }
+      amount = payload.data?.amount || 0;
+    }
+    // NOWPayments
+    else if (payload.payment_status === "finished" || payload.payment_status === "waiting") {
+      // NOWPayments sends the order_id which we can pass as the reference
+      const orderId = payload.order_id || payload.order_description;
+      if (orderId && orderId.startsWith("tg_")) {
+        userIdStr = orderId.split("_")[1];
+      }
+      amount = payload.price_amount || 0;
+    }
+
+    if (userIdStr) {
+      const userId = parseInt(userIdStr, 10);
+      // We look at amount or metadata to determine the tier.
+      // For simplicity, upgrade to VIP if amount is large, else PRO
+      const targetTier = amount > 15000 ? "vip" : "pro";
+      
+      await userTierService.updateUserAccess(userId, { tier: targetTier, status: "active" });
+      logger.info({ userId, targetTier }, "Upgraded user tier via external payment webhook");
+      
+      try {
+        const tierName = targetTier === "vip" ? "👑 VIP Pass" : "⚡ PRO Pass";
+        await telegramRuntime.bot?.api.sendMessage(userId, `🎉 <b>Payment Successful!</b>\n\nYour account has been upgraded to <b>${tierName}</b> with immediate effect.\n\nUse /persona to select unlocked specialist agents or /tier to view your renewed quotas!`, { parse_mode: "HTML" });
+      } catch (e) {
+        logger.warn({ error: safeErrorMetadata(e) }, "Failed to send confirmation message to user after webhook");
+      }
+    }
+  } catch (err) {
+    logger.error({ error: safeErrorMetadata(err) }, "Failed processing payment webhook");
+  }
+  
+  res.json({ received: true });
+});
+
 app.get("/api/dashboard/runtime", async (_req: Request, res: Response) => {
   const [models, providers, routingPolicy, routingHealth] = await Promise.all([
     unifiedModelRegistryService.list(),

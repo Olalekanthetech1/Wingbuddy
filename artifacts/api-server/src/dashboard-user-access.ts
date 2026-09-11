@@ -79,11 +79,20 @@ export function renderDashboardUserAccess(): string {
     if (freeQuota) freeQuota.value = pol.tiers?.free?.dailyQuota ?? 30;
     if (proQuota) proQuota.value = pol.tiers?.pro?.dailyQuota ?? 150;
     
+    if (document.getElementById('uaFreeContextLimit')) document.getElementById('uaFreeContextLimit').value = pol.tiers?.free?.contextHistoryLimit ?? 10;
+    if (document.getElementById('uaProContextLimit')) document.getElementById('uaProContextLimit').value = pol.tiers?.pro?.contextHistoryLimit ?? 30;
+    if (document.getElementById('uaVipContextLimit')) document.getElementById('uaVipContextLimit').value = pol.tiers?.vip?.contextHistoryLimit ?? 60;
+
+    if (document.getElementById('uaProStars')) document.getElementById('uaProStars').value = pol.tiers?.pro?.starsAmount ?? 500;
+    if (document.getElementById('uaVipStars')) document.getElementById('uaVipStars').value = pol.tiers?.vip?.starsAmount ?? 1250;
+
     if (document.getElementById('uaSupportContact')) document.getElementById('uaSupportContact').value = pol.supportContact || '@admin';
     if (document.getElementById('uaProPrice')) document.getElementById('uaProPrice').value = pol.tiers?.pro?.priceLabel || '$9.99 / month';
     if (document.getElementById('uaProCheckout')) document.getElementById('uaProCheckout').value = pol.tiers?.pro?.checkoutUrl || '';
+    if (document.getElementById('uaProCrypto')) document.getElementById('uaProCrypto').value = pol.tiers?.pro?.cryptoCheckoutUrl || '';
     if (document.getElementById('uaVipPrice')) document.getElementById('uaVipPrice').value = pol.tiers?.vip?.priceLabel || '$24.99 / month';
     if (document.getElementById('uaVipCheckout')) document.getElementById('uaVipCheckout').value = pol.tiers?.vip?.checkoutUrl || '';
+    if (document.getElementById('uaVipCrypto')) document.getElementById('uaVipCrypto').value = pol.tiers?.vip?.cryptoCheckoutUrl || '';
   }
 
   function getTierBadge(tier) {
@@ -285,11 +294,18 @@ export function renderDashboardUserAccess(): string {
     const whitelist = document.getElementById('uaPolicyWhitelist')?.value === 'true';
     const freeQuota = Number(document.getElementById('uaPolicyFreeQuota')?.value) || 30;
     const proQuota = Number(document.getElementById('uaPolicyProQuota')?.value) || 150;
+    const freeContext = Number(document.getElementById('uaFreeContextLimit')?.value) || 10;
+    const proContext = Number(document.getElementById('uaProContextLimit')?.value) || 30;
+    const vipContext = Number(document.getElementById('uaVipContextLimit')?.value) || 60;
+    const proStars = Number(document.getElementById('uaProStars')?.value) || 500;
+    const vipStars = Number(document.getElementById('uaVipStars')?.value) || 1250;
     const supportContact = document.getElementById('uaSupportContact')?.value || '@admin';
     const proPrice = document.getElementById('uaProPrice')?.value || '$9.99 / month';
     const proCheckout = document.getElementById('uaProCheckout')?.value || '';
+    const proCrypto = document.getElementById('uaProCrypto')?.value || '';
     const vipPrice = document.getElementById('uaVipPrice')?.value || '$24.99 / month';
     const vipCheckout = document.getElementById('uaVipCheckout')?.value || '';
+    const vipCrypto = document.getElementById('uaVipCrypto')?.value || '';
 
     try {
       const res = await fetch('/api/access/policy', {
@@ -300,9 +316,9 @@ export function renderDashboardUserAccess(): string {
           whitelistOnly: whitelist,
           supportContact: supportContact,
           tiers: {
-            free: { dailyQuota: freeQuota },
-            pro: { dailyQuota: proQuota, priceLabel: proPrice, checkoutUrl: proCheckout },
-            vip: { priceLabel: vipPrice, checkoutUrl: vipCheckout }
+            free: { dailyQuota: freeQuota, contextHistoryLimit: freeContext },
+            pro: { dailyQuota: proQuota, contextHistoryLimit: proContext, starsAmount: proStars, priceLabel: proPrice, checkoutUrl: proCheckout, cryptoCheckoutUrl: proCrypto },
+            vip: { contextHistoryLimit: vipContext, starsAmount: vipStars, priceLabel: vipPrice, checkoutUrl: vipCheckout, cryptoCheckoutUrl: vipCrypto }
           }
         })
       });
@@ -422,6 +438,18 @@ export function renderDashboardUserAccess(): string {
                 <div class="label">Pro Daily Quota</div>
                 <input id="uaPolicyProQuota" class="input" type="number" value="150" style="margin-top:4px" />
               </div>
+              <div>
+                <div class="label">Free Context Retention (Messages)</div>
+                <input id="uaFreeContextLimit" class="input" type="number" value="10" style="margin-top:4px" />
+              </div>
+              <div>
+                <div class="label">Pro Context Retention (Messages)</div>
+                <input id="uaProContextLimit" class="input" type="number" value="30" style="margin-top:4px" />
+              </div>
+              <div>
+                <div class="label">VIP Context Retention (Messages)</div>
+                <input id="uaVipContextLimit" class="input" type="number" value="60" style="margin-top:4px" />
+              </div>
             </div>
             
             <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px;">
@@ -435,14 +463,22 @@ export function renderDashboardUserAccess(): string {
                 <div class="field">
                   <label class="label">PRO Plan Price Label</label>
                   <input id="uaProPrice" class="input" placeholder="e.g. $9.99 / mo or 50 Stars" style="margin-top:4px;" />
-                  <label class="label" style="margin-top:8px">PRO Checkout URL (Optional)</label>
-                  <input id="uaProCheckout" class="input" placeholder="https://t.me/invoice/... or payment link" style="margin-top:4px;" />
+                  <label class="label" style="margin-top:8px">PRO Telegram Stars (⭐️)</label>
+                  <input id="uaProStars" class="input" type="number" value="500" style="margin-top:4px;" />
+                  <label class="label" style="margin-top:8px">PRO Card Checkout URL (Stripe)</label>
+                  <input id="uaProCheckout" class="input" placeholder="https://buy.stripe.com/..." style="margin-top:4px;" />
+                  <label class="label" style="margin-top:8px">PRO Crypto Checkout URL</label>
+                  <input id="uaProCrypto" class="input" placeholder="https://commerce.coinbase.com/..." style="margin-top:4px;" />
                 </div>
                 <div class="field">
                   <label class="label">VIP Plan Price Label</label>
                   <input id="uaVipPrice" class="input" placeholder="e.g. $24.99 / mo or 150 Stars" style="margin-top:4px;" />
-                  <label class="label" style="margin-top:8px">VIP Checkout URL (Optional)</label>
-                  <input id="uaVipCheckout" class="input" placeholder="https://t.me/invoice/... or payment link" style="margin-top:4px;" />
+                  <label class="label" style="margin-top:8px">VIP Telegram Stars (⭐️)</label>
+                  <input id="uaVipStars" class="input" type="number" value="1250" style="margin-top:4px;" />
+                  <label class="label" style="margin-top:8px">VIP Card Checkout URL (Stripe)</label>
+                  <input id="uaVipCheckout" class="input" placeholder="https://buy.stripe.com/..." style="margin-top:4px;" />
+                  <label class="label" style="margin-top:8px">VIP Crypto Checkout URL</label>
+                  <input id="uaVipCrypto" class="input" placeholder="https://commerce.coinbase.com/..." style="margin-top:4px;" />
                 </div>
               </div>
             </div>

@@ -46,6 +46,7 @@ export class GlobalContextService {
     chatId: number;
     userProfile?: TelegramUserProfile;
     maxHistoryMessages?: number;
+    userTier?: "free" | "pro" | "vip";
     message?: string;
     geminiService?: GeminiService;
   }): Promise<UserGlobalContext> {
@@ -54,6 +55,7 @@ export class GlobalContextService {
       chatId,
       userProfile,
       maxHistoryMessages,
+      userTier = "free",
       message,
       geminiService,
     } = params;
@@ -61,11 +63,12 @@ export class GlobalContextService {
     if (userProfile) await this.conversations.upsertUser(userProfile);
     const conversationId = await this.conversations.getOrCreateConversation(telegramUserId, chatId);
 
+    const summariesLimit = userTier === "vip" ? 5 : userTier === "pro" ? 3 : 1;
     const [personality, mode, allMemories, sessionSummaries, activePersonaRes] = await Promise.all([
       this.conversations.getUserPersonality(telegramUserId),
       this.conversations.getUserMode(telegramUserId),
       chatDatabaseService.getUserMemories(telegramUserId),
-      chatDatabaseService.getRecentSessionSummaries(telegramUserId, 3),
+      chatDatabaseService.getRecentSessionSummaries(telegramUserId, summariesLimit),
       personaService.getUserActivePersona(telegramUserId),
     ]);
 
@@ -112,9 +115,10 @@ export class GlobalContextService {
     void allMemories;
     void memoryRecallSource;
 
+    const tierHistoryBaseline = userTier === "vip" ? 60 : userTier === "pro" ? 30 : 10;
     const adaptiveLimit = maxHistoryMessages !== undefined
       ? maxHistoryMessages
-      : AdaptiveEngineService.computeAdaptiveHistoryLimit({ mode, currentMessage: message, memoriesCount: memories.length });
+      : Math.min(tierHistoryBaseline, AdaptiveEngineService.computeAdaptiveHistoryLimit({ mode, currentMessage: message, memoriesCount: memories.length }));
     const recentMessages = await this.conversations.getRecentMessages(conversationId, adaptiveLimit);
     const recentHistory = recentMessages.map((item) => ({
       role: (item.role === "model" ? "model" : "user") as "user" | "model",

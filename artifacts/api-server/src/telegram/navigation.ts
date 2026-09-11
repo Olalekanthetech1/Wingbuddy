@@ -1,3 +1,4 @@
+import { InlineKeyboard } from "grammy";
 import { MODES, type ModeKey } from "../config/mode";
 import {
   PERSONALITIES,
@@ -284,17 +285,41 @@ export function upgradeKeyboard(
   targetTier: "pro" | "vip",
   policy?: any,
   fromPersonaId?: string,
+  telegramUserId?: number,
 ): InlineKeyboard {
+  const targetUpper = targetTier.toUpperCase();
   const kb = new InlineKeyboard();
   const tierConfig = policy?.tiers?.[targetTier] || {};
-  const adminContact = tierConfig.adminContactHandle || policy?.supportContact || "@admin";
-  const checkoutUrl = tierConfig.checkoutUrl;
+  const starsAmount = tierConfig.starsAmount || (targetTier === "vip" ? 1250 : 500);
 
+  // Primary action: 1-Tap Telegram Stars Invoice
+  kb.text(`⭐ Pay with Stars (${starsAmount} ⭐️)`, `upgrade:stars:${targetTier}`).row();
+
+  const checkoutUrl = tierConfig.checkoutUrl;
+  const cryptoUrl = tierConfig.cryptoCheckoutUrl;
+  const adminContact = tierConfig.adminContactHandle || policy?.supportContact || "@admin";
+
+  const buildUrl = (baseUrl: string) => {
+    if (!telegramUserId) return baseUrl;
+    const separator = baseUrl.includes('?') ? '&' : '?';
+    return `${baseUrl}${separator}client_reference_id=${telegramUserId}&reference=tg_${telegramUserId}_${Date.now()}&order_id=tg_${telegramUserId}_${Date.now()}`;
+  };
+
+  let hasExternal = false;
+  
   if (checkoutUrl && checkoutUrl.startsWith("http")) {
-    kb.url(`💎 Activate ${targetTier.toUpperCase()} Pass`, checkoutUrl).row();
-  } else {
+    kb.url(`💳 Card Checkout (${tierConfig.priceLabel || (targetTier === "vip" ? "$24.99" : "$9.99")})`, buildUrl(checkoutUrl)).row();
+    hasExternal = true;
+  }
+  
+  if (cryptoUrl && cryptoUrl.startsWith("http")) {
+    kb.url(`🪙 Crypto Checkout`, buildUrl(cryptoUrl)).row();
+    hasExternal = true;
+  }
+  
+  if (!hasExternal) {
     const cleanHandle = adminContact.replace(/^@/, "");
-    kb.url(`💬 Contact Admin (${adminContact})`, `https://t.me/${cleanHandle}`).row();
+    kb.url(`💬 Contact Admin for Card/Crypto`, `https://t.me/${cleanHandle}`).row();
   }
 
   if (targetTier === "pro") {

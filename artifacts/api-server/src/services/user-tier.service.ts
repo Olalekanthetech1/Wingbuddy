@@ -35,10 +35,13 @@ export interface TierConfig {
     autonomousExecution: boolean;
     deepReasoning: boolean;
   };
+  contextHistoryLimit?: number;
+  starsAmount?: number;
   priceLabel?: string;
   upgradeDescription?: string;
   perks?: string[];
   checkoutUrl?: string;
+  cryptoCheckoutUrl?: string;
   adminContactHandle?: string;
   upgradeEnabled?: boolean;
   buttonLabel?: string;
@@ -105,11 +108,14 @@ export const DEFAULT_TIER_CONFIGS: Record<UserTier, TierConfig> = {
       autonomousExecution: false,
       deepReasoning: false,
     },
+    contextHistoryLimit: 10,
+    starsAmount: 0,
     priceLabel: "Free Forever",
     upgradeDescription: "Essential AI assistant tools with daily usage allowances.",
     perks: [
       "30 daily messages (auto-resets at midnight UTC)",
       "High-efficiency models (Ministral 3B, Gemini Flash)",
+      "10-message conversation context window",
       "Standard response speed",
       "Basic personas & reminder tasks",
     ],
@@ -132,15 +138,18 @@ export const DEFAULT_TIER_CONFIGS: Record<UserTier, TierConfig> = {
       autonomousExecution: true,
       deepReasoning: true,
     },
+    contextHistoryLimit: 30,
+    starsAmount: 500,
     priceLabel: "$9.99 / month",
     upgradeDescription: "Elevate your productivity with high-capacity limits & expert agents.",
     perks: [
       "150 daily messages (5x Free allowance)",
       "Unlock Software Architect & Creative Storyteller personas",
       "Priority queue processing & zero throttling",
-      "Extended context memory retention",
+      "Extended context memory retention (30 messages)",
     ],
     checkoutUrl: "",
+    cryptoCheckoutUrl: "",
     adminContactHandle: "@admin",
     upgradeEnabled: true,
     buttonLabel: "⚡ Upgrade to PRO",
@@ -162,10 +171,13 @@ export const DEFAULT_TIER_CONFIGS: Record<UserTier, TierConfig> = {
       autonomousExecution: true,
       deepReasoning: true,
     },
+    contextHistoryLimit: 60,
+    starsAmount: 1250,
     priceLabel: "$24.99 / month",
     upgradeDescription: "Unlimited power, deep reasoning models, and exclusive market intelligence.",
     perks: [
       "Unlimited daily requests (no quota limits)",
+      "Maximum context memory retention (60 messages + deep session recall)",
       "Exclusive access to Deep Researcher (DeepSeek R1 / Gemini Thinking)",
       "Crypto & Market Strategist algorithmic framing",
       "FLUX Ultra image & Wan hybrid video generation",
@@ -173,6 +185,7 @@ export const DEFAULT_TIER_CONFIGS: Record<UserTier, TierConfig> = {
       "Direct VIP priority concierge support",
     ],
     checkoutUrl: "",
+    cryptoCheckoutUrl: "",
     adminContactHandle: "@admin",
     upgradeEnabled: true,
     buttonLabel: "👑 Upgrade to VIP Pass",
