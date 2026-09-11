@@ -125,6 +125,7 @@ function jsonOnlyPrompt(
     "Durability evidence semantics: durabilityEvidence MUST be empty unless the user explicitly requests persistence, scheduling, recurrence, background execution, continuation of an existing tracked task, multi-turn workflow state, or explicit task tracking. Prompt complexity, ZERO_SHOT, CONSTRAINT_DRIVEN, MULTI_STEP, file generation, media generation, dimensions, style, quality, or output count are NOT durability evidence by themselves.",
     "For image_generation and video_generation specifically, an immediate generation request is one_shot by default. Use durable only when concrete durability evidence is present in the user's request or an actual continuation/scheduling context exists.",
     "When an active task exists, CONTINUE_TASK is valid only when the current request is actually about that tracked task. Do not inherit unrelated active work.",
+    "Conversational Continuity Rule: Evaluate the immediate preceding turn in the conversation history. If the assistant prompted the user for clarification, selection, or an answer, the user's subsequent response MUST be classified as a conversational follow-up (NO_TASK). Do not classify such responses as task management intents (like CONTINUE_TASK) unless the user explicitly references a background task by name, ID, or explicit action.",
     `Persistent mode: ${persistentMode}`,
     `Recent conversation:\n${recent || "(none)"}`,
     `Current request:\n${request}`,
