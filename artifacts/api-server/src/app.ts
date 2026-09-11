@@ -11,7 +11,6 @@ import { renderDashboardHtml } from "./dashboard-ui";
 import { renderDashboardModelControls } from "./dashboard-model-controls";
 import { renderDashboardControlPlane } from "./dashboard-control-plane";
 import { renderDashboardBotSimulator } from "./dashboard-bot-simulator";
-import { renderDashboardBehaviorControls } from "./dashboard-behavior-controls";
 import { renderDashboardResponsiveLayer } from "./dashboard-responsive";
 import { renderDashboardThemeLayer } from "./dashboard-theme";
 import { renderDashboardAIRoutingControls } from "./dashboard-ai-routing-controls";
@@ -19,6 +18,8 @@ import { renderDashboardProviderKeyControls } from "./dashboard-provider-key-con
 import { renderDashboardProactiveAssistant } from "./dashboard-proactive-assistant";
 import { renderDashboardMediaStorage } from "./dashboard-media-storage";
 import { renderDashboardKnowledgeBase } from "./dashboard-knowledge-base";
+import { renderDashboardUserAccess } from "./dashboard-user-access";
+import { renderDashboardPersonas } from "./dashboard-personas";
 import { apiKeyPoolService } from "./services/api-key-pool.service";
 import { aiProviderRegistryService } from "./services/ai-provider-registry.service";
 import { unifiedModelRegistryService } from "./services/unified-model-registry.service";
@@ -38,12 +39,33 @@ let runtimeHydrationReady = false;
 export function setRuntimeHydrationReady(ready: boolean): void { runtimeHydrationReady = ready; }
 export function isRuntimeHydrationReady(): boolean { return runtimeHydrationReady; }
 
+export async function initOrReloadTelegramBotAsync() {
+  if (!runtimeHydrationReady) return realTelegramRuntime;
+  try {
+    if (process.env.TELEGRAM_BOT_TOKEN?.trim() && (process.env.GEMINI_API_KEY?.trim() || apiKeyPoolService.getSummary().totalKeys > 0)) {
+      if (realTelegramRuntime) {
+        proactiveAssistantService.detachBot(realTelegramRuntime.bot);
+        await realTelegramRuntime.stop().catch(() => {});
+      }
+      realTelegramRuntime = createTelegramBot();
+      proactiveAssistantService.attachBot(realTelegramRuntime.bot);
+      await realTelegramRuntime.start();
+      logger.info("Telegram bot runtime initialized/reloaded successfully");
+      return realTelegramRuntime;
+    }
+  } catch (error) {
+    logger.warn({ error: error instanceof Error ? error.message : String(error) }, "Telegram bot deferred initialization failed");
+  }
+  return realTelegramRuntime;
+}
+
 export function initOrReloadTelegramBot(): ReturnType<typeof createTelegramBot> | null {
   if (!runtimeHydrationReady) return realTelegramRuntime;
   try {
     if (process.env.TELEGRAM_BOT_TOKEN?.trim() && (process.env.GEMINI_API_KEY?.trim() || apiKeyPoolService.getSummary().totalKeys > 0)) {
       if (realTelegramRuntime) {
         proactiveAssistantService.detachBot(realTelegramRuntime.bot);
+        // synchronous stop attempt; handled properly by async init
         realTelegramRuntime.stop().catch(() => {});
       }
       realTelegramRuntime = createTelegramBot();
@@ -104,7 +126,14 @@ app.get("/api/dashboard/runtime", async (_req: Request, res: Response) => {
     adaptiveAIRouterService.healthSnapshot(),
   ]);
   await aiObservabilityService.initialize();
-  const primary = models.find((model) => model.enabled && model.roles.includes("primary"));
+  const primary = models.find((m) => m.enabled && (m.roles.includes("primary") || m.roles.includes("primary_chat")));
+  const embedding = models.find((m) => m.enabled && m.roles.includes("primary_embedding"))
+    || models.find((m) => m.enabled && (m.roles.includes("embedding") || m.capabilities.includes("embedding") || m.modelId.toLowerCase().includes("embed")));
+  const fast = models.find((m) => m.enabled && m.roles.includes("fast"));
+  const reasoning = models.find((m) => m.enabled && m.roles.includes("reasoning"));
+  const extraction = models.find((m) => m.enabled && m.roles.includes("extraction"));
+  const modelPool = models.filter((m) => m.enabled && !m.capabilities.includes("embedding")).map((m) => m.modelId);
+
   res.json({
     controlPlane: "postgresql-authoritative",
     timestamp: new Date().toISOString(),
@@ -113,6 +142,13 @@ app.get("/api/dashboard/runtime", async (_req: Request, res: Response) => {
     primaryModel: primary?.modelId || "",
     primaryProvider: primary?.provider || "",
     primaryModelId: primary?.id || "",
+    embeddingModel: embedding?.modelId || "",
+    embeddingProvider: embedding?.provider || "",
+    embeddingModelId: embedding?.id || "",
+    fastModel: fast?.modelId || "",
+    reasoningModel: reasoning?.modelId || "",
+    extractionModel: extraction?.modelId || "",
+    modelPool,
     modelRegistryCount: models.length,
     models,
     routingPolicy,
@@ -131,7 +167,7 @@ app.use("/api", router);
 
 const serveDashboard = (_req: Request, res: Response): void => {
   const html = renderDashboardHtml();
-  const enhanced = html.replace("</body>", `${renderDashboardModelControls()}${renderDashboardControlPlane()}${renderDashboardBotSimulator()}${renderDashboardBehaviorControls()}${renderDashboardResponsiveLayer()}${renderDashboardAIRoutingControls()}${renderDashboardProviderKeyControls()}${renderDashboardProactiveAssistant()}${renderDashboardKnowledgeBase()}${renderDashboardMediaStorage()}${renderDashboardThemeLayer()}</body>`);
+  const enhanced = html.replace("</body>", `${renderDashboardModelControls()}${renderDashboardControlPlane()}${renderDashboardBotSimulator()}${renderDashboardResponsiveLayer()}${renderDashboardAIRoutingControls()}${renderDashboardProviderKeyControls()}${renderDashboardProactiveAssistant()}${renderDashboardKnowledgeBase()}${renderDashboardMediaStorage()}${renderDashboardUserAccess()}${renderDashboardPersonas()}${renderDashboardThemeLayer()}</body>`);
   res.type("html").send(enhanced);
 };
 

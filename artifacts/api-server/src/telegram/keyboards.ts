@@ -5,10 +5,13 @@ import {
   PERSONALITY_KEYS,
   type PersonalityKey,
 } from "../config/personality";
+import type { AIPersona } from "../services/persona.service";
+import type { UserTier } from "../services/user-tier.service";
 
 export function mainMenuKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
     .text("💬 Chat", "menu:chat")
+    .text("🎭 Personas", "menu:personas")
     .row()
     .text("🧠 Memory", "menu:memory")
     .text("🎯 Modes", "menu:modes")
@@ -18,6 +21,30 @@ export function mainMenuKeyboard(): InlineKeyboard {
     .row()
     .text("⚙️ Settings", "menu:settings")
     .text("❓ Help", "menu:help");
+}
+
+export function personaKeyboard(
+  personas: AIPersona[],
+  activeId: string,
+  userTier: UserTier = "free",
+  backCallback = "menu:main",
+): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+  let col = 0;
+  for (const p of personas) {
+    const isCurrent = p.id === activeId;
+    const isGated = p.requiredTier === "vip" && userTier !== "vip"
+      ? " 🔒"
+      : p.requiredTier === "pro" && userTier === "free"
+      ? " 🔒"
+      : "";
+    const label = `${isCurrent ? "✓ " : ""}${p.emoji} ${p.name}${isGated}`;
+    keyboard.text(label, `persona:select:${p.id}`);
+    col++;
+    if (col % 2 === 0) keyboard.row();
+  }
+  if (col % 2 !== 0) keyboard.row();
+  return keyboard.text("◀️ Back", backCallback);
 }
 
 export function personalityKeyboard(current: PersonalityKey): InlineKeyboard {
@@ -49,8 +76,10 @@ export function modeKeyboard(
 
 export function settingsKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
-    .text("🎭 Personality", "settings:personality")
-    .text("🎯 Assistant Mode", "settings:mode")
+    .text("🎭 Switch Persona", "menu:personas")
+    .row()
+    .text("🎨 Personality", "settings:personality")
+    .text("🎯 Mode", "settings:mode")
     .row()
     .text("◀️ Back", "menu:main");
 }

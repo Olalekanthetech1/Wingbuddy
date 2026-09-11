@@ -4,6 +4,37 @@ import {
   PERSONALITY_KEYS,
   type PersonalityKey,
 } from "../config/personality";
+import type { AIPersona } from "../services/persona.service";
+import type { UserTier } from "../services/user-tier.service";
+
+export function formatPersonasMenuText(
+  personas: AIPersona[],
+  current: AIPersona,
+  userTier: UserTier = "free",
+): string {
+  const lines = [
+    `🎭 <b>AI Personas & Specialized Agents</b>`,
+    "",
+    `Current Active Persona: <b>${current.emoji} ${current.name}</b>`,
+    `<i>${current.tagline}</i>`,
+    "",
+    "<b>Available Personas:</b>",
+  ];
+
+  for (const p of personas) {
+    const isCurrent = p.id === current.id;
+    const tierBadge = p.requiredTier === "vip" ? " [👑 VIP]" : p.requiredTier === "pro" ? " [⚡ PRO]" : "";
+    lines.push(
+      `${isCurrent ? "👉 " : "• "}<b>${p.emoji} ${p.name}</b>${tierBadge}\n   <i>${p.tagline}</i>`
+    );
+  }
+
+  lines.push("");
+  lines.push("Tap any button below to immediately change the bot's behavior, tone, and underlying model routing.");
+  lines.push("Shortcut: Use <code>/persona &lt;name&gt;</code> (e.g. <code>/persona architect</code>).");
+
+  return lines.join("\n");
+}
 
 export const MAIN_MENU_TEXT = [
   "🤖 AI Assistant",
@@ -180,6 +211,8 @@ export const HELP_TEXT = [
   "",
   "Available shortcuts:",
   "/start — open the main menu",
+  "/persona — switch specialized AI Persona & agent brain",
+  "/tier — view your account tier and daily quota",
   "/image <prompt> — generate free high-res art with Gemini enhancement",
   "/video <prompt> — generate animated/cinematic video clip",
   "/search <query> — explicitly force live web search",

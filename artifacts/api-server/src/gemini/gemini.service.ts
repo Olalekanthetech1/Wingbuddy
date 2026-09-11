@@ -9,9 +9,30 @@ import { adaptiveAIRouterService } from "../services/adaptive-ai-router.service"
 import type { AIChatRequest } from "../services/ai-provider.types";
 
 export interface GeminiMessage { role: "user" | "model"; content: string; }
-export interface AssistantGuidance { personalityInstruction?: string; modeInstruction?: string; memoryInstruction?: string; }
+export interface AssistantGuidance {
+  personalityInstruction?: string;
+  modeInstruction?: string;
+  memoryInstruction?: string;
+  personaInstruction?: string;
+  personaName?: string;
+  personaEmoji?: string;
+}
 export interface MultimodalAttachment { mimeType: string; data: string; fileName?: string; }
-export interface GenerateReplyOptions { enableSearch?: boolean; thinkingLevel?: string; attachments?: MultimodalAttachment[]; hasAudio?: boolean; hasVisionOrDocument?: boolean; mediaSizeBytes?: number; mode?: string; isDeepReasoning?: boolean; isExtraction?: boolean; }
+export interface GenerateReplyOptions {
+  enableSearch?: boolean;
+  thinkingLevel?: string;
+  attachments?: MultimodalAttachment[];
+  hasAudio?: boolean;
+  hasVisionOrDocument?: boolean;
+  mediaSizeBytes?: number;
+  mode?: string;
+  isDeepReasoning?: boolean;
+  isExtraction?: boolean;
+  userTier?: "free" | "pro" | "vip";
+  userCustomModelOverride?: string | null;
+  personaPreferredModel?: string | null;
+  temperature?: number;
+}
 export interface ExtractedFact { key: string; content: string; category: "preference" | "fact" | "instruction"; }
 
 export function cosineSimilarity(vecA: number[], vecB: number[]): number {
@@ -84,7 +105,7 @@ export class GeminiService {
         ...history.map((item) => ({ role: item.role === "model" ? "assistant" as const : "user" as const, content: item.content })),
         { role: "user", content: message },
       ],
-      temperature: undefined,
+      temperature: options?.temperature,
       maxOutputTokens: undefined,
       topP: undefined,
       thinkingLevel: options?.thinkingLevel,
@@ -98,6 +119,9 @@ export class GeminiService {
         mode: options?.mode,
         isDeepReasoning: options?.isDeepReasoning,
         isExtraction: options?.isExtraction,
+        userTier: options?.userTier,
+        userCustomModelOverride: options?.userCustomModelOverride,
+        personaPreferredModel: options?.personaPreferredModel,
       });
       return routed.response.text.trim();
     }
@@ -134,7 +158,14 @@ export class GeminiService {
       const request = this.adaptiveRequest(history, message, guidance, options);
       let accumulated = "";
       try {
-        for await (const chunk of adaptiveAIRouterService.routeStream(request, { mode: options?.mode, isDeepReasoning: options?.isDeepReasoning, isExtraction: options?.isExtraction })) {
+        for await (const chunk of adaptiveAIRouterService.routeStream(request, {
+          mode: options?.mode,
+          isDeepReasoning: options?.isDeepReasoning,
+          isExtraction: options?.isExtraction,
+          userTier: options?.userTier,
+          userCustomModelOverride: options?.userCustomModelOverride,
+          personaPreferredModel: options?.personaPreferredModel,
+        })) {
           if (chunk.delta) {
             accumulated += chunk.delta;
             if (onChunk) await onChunk(accumulated);
@@ -251,7 +282,18 @@ function buildSystemInstruction(baseInstruction: string, guidance?: AssistantGui
   const personality = typeof guidance === "string" ? guidance : guidance.personalityInstruction;
   const mode = typeof guidance === "string" ? undefined : guidance.modeInstruction;
   const memory = typeof guidance === "string" ? undefined : guidance.memoryInstruction;
-  return [baseInstruction, personality ? `Personality guidance:\n${personality}` : "", mode ? `Assistant mode guidance:\n${mode}` : "", memory || ""].filter(Boolean).join("\n\n");
+  const persona = typeof guidance === "string" ? undefined : guidance.personaInstruction;
+  const personaHeader = typeof guidance !== "string" && guidance.personaName
+    ? `Active Persona: ${guidance.personaEmoji || "🎭"} ${guidance.personaName}`
+    : undefined;
+
+  return [
+    baseInstruction,
+    personaHeader && persona ? `### ${personaHeader}\n${persona}` : persona || "",
+    personality ? `Personality guidance:\n${personality}` : "",
+    mode ? `Assistant mode guidance:\n${mode}` : "",
+    memory || "",
+  ].filter(Boolean).join("\n\n");
 }
 
 function isModelFailoverError(error: unknown): boolean {

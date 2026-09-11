@@ -13,6 +13,8 @@ import behaviorConfigRouter from "./behavior-config";
 import proactiveAssistantRouter from "./proactive-assistant";
 import mediaStorageRouter from "./media-storage";
 import knowledgeRouter from "./knowledge";
+import userAccessRouter from "./user-access";
+import personasRouter from "./personas";
 
 const router: IRouter = Router();
 
@@ -30,5 +32,7 @@ router.use(behaviorConfigRouter);
 router.use(proactiveAssistantRouter);
 router.use(mediaStorageRouter);
 router.use(knowledgeRouter);
+router.use(userAccessRouter);
+router.use(personasRouter);
 
 export default router;

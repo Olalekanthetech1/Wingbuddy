@@ -66,6 +66,17 @@ export async function ensureDatabaseSchema(pgPool?: pg.Pool): Promise<void> {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS users_telegram_user_id_idx ON users(telegram_user_id);
 
+    -- Ensure upgraded tier and quota columns exist on users
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS tier TEXT NOT NULL DEFAULT 'free';
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_quota INTEGER NOT NULL DEFAULT 30;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS requests_today INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS last_request_date TEXT NOT NULL DEFAULT '';
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS total_requests INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS custom_model_override TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS active_persona_id TEXT NOT NULL DEFAULT 'default_assistant';
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
     CREATE TABLE IF NOT EXISTS conversations (
       id SERIAL PRIMARY KEY,
       telegram_user_id BIGINT NOT NULL,

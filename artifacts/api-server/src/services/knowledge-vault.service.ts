@@ -59,6 +59,26 @@ export class KnowledgeVaultService {
 
   async initialize() {
     await this.initTables();
+    void this.reindexUnprocessedDocuments();
+  }
+
+  async reindexUnprocessedDocuments() {
+    try {
+      const unindexed = await db.execute(sql`
+        SELECT d.id, d.telegram_user_id as "telegramUserId", d.content
+        FROM knowledge_documents d
+        LEFT JOIN knowledge_chunks c ON d.id = c.document_id
+        WHERE c.id IS NULL
+      `);
+      const rows = (unindexed.rows || []) as any[];
+      if (!rows.length) return;
+      logger.info({ count: rows.length }, "Knowledge Vault: re-indexing documents missing vector embeddings");
+      for (const row of rows) {
+        await this.indexDocumentChunks(row.id, row.telegramUserId, row.content);
+      }
+    } catch (e) {
+      logger.warn({ error: String(e) }, "Knowledge Vault: re-indexing failed");
+    }
   }
 
   // Basic chunking (overlapping)
@@ -72,6 +92,45 @@ export class KnowledgeVaultService {
     return chunks;
   }
 
+  async indexDocumentChunks(docId: string, telegramUserId: string, content: string): Promise<void> {
+    const chunks = this.chunkText(content);
+    const models = await unifiedModelRegistryService.list();
+    const embedModel = models.find(m => m.enabled && (m.roles.includes("primary_embedding" as any) || m.roles.includes("embedding"))) || models.find(m => m.enabled && m.capabilities.includes("embedding"));
+    if (!embedModel) {
+      throw new Error("No embedding model configured. Please set a primary embedding model in the dashboard.");
+    }
+
+    for (let i = 0; i < chunks.length; i++) {
+      const chunkText = chunks[i];
+      try {
+        const execution = await aiProviderGatewayService.generateEmbeddings(embedModel.provider, {
+          model: embedModel.modelId,
+          input: chunkText,
+          dimensions: 768
+        });
+
+        let embedding = execution.result.embeddings[0];
+        if (!embedding || !embedding.length) {
+          throw new Error("Empty embedding returned");
+        }
+        if (embedding.length > 768) {
+          embedding = embedding.slice(0, 768);
+        } else if (embedding.length < 768) {
+          embedding = embedding.concat(new Array(768 - embedding.length).fill(0));
+        }
+        const chunkId = randomBytes(16).toString("hex");
+        const vectorStr = '[' + embedding.join(',') + ']';
+
+        await db.execute(sql`
+          INSERT INTO knowledge_chunks (id, document_id, telegram_user_id, content, embedding, chunk_index)
+          VALUES (${chunkId}, ${docId}, ${telegramUserId}, ${chunkText}, ${vectorStr}::vector, ${i})
+        `);
+      } catch (e) {
+        logger.error({ error: String(e), chunkIndex: i, docId }, "Failed to embed chunk");
+      }
+    }
+  }
+
   async uploadDocument(telegramUserId: string, filename: string, mimeType: string, content: string) {
     const docId = randomBytes(16).toString("hex");
     
@@ -81,47 +140,15 @@ export class KnowledgeVaultService {
       VALUES (${docId}, ${telegramUserId}, ${filename}, ${mimeType}, ${content})
     `);
 
-    // 2. Chunk text
-    const chunks = this.chunkText(content);
-    
-    // 3. Get primary embedding model
-    const models = await unifiedModelRegistryService.list();
-    const embedModel = models.find(m => m.enabled && m.roles.includes("primary_embedding")) || models.find(m => m.enabled && m.capabilities.includes("embedding"));
-    
-    if (!embedModel) {
-      throw new Error("No embedding model configured. Please set a primary embedding model in the dashboard.");
-    }
-
-    // 4. Generate and save embeddings
-    for (let i = 0; i < chunks.length; i++) {
-      const chunkText = chunks[i];
-      try {
-        const execution = await aiProviderGatewayService.generateEmbeddings(embedModel.provider, {
-          model: embedModel.modelId,
-          input: chunkText
-        });
-        
-        const embedding = execution.result.embeddings[0]; // array of floats
-        const chunkId = randomBytes(16).toString("hex");
-        
-        // pgvector format string: [0.1, 0.2, ...]
-        const vectorStr = '[' + embedding.join(',') + ']';
-        
-        await db.execute(sql`
-          INSERT INTO knowledge_chunks (id, document_id, telegram_user_id, content, embedding, chunk_index)
-          VALUES (${chunkId}, ${docId}, ${telegramUserId}, ${chunkText}, ${vectorStr}::vector, ${i})
-        `);
-      } catch (e) {
-        logger.error({ error: String(e), chunkIndex: i }, "Failed to embed chunk");
-      }
-    }
+    // 2. Chunk and embed
+    await this.indexDocumentChunks(docId, telegramUserId, content);
     
     return docId;
   }
 
   async listDocuments(telegramUserId: string): Promise<KnowledgeDocument[]> {
     const res = await db.execute(sql`
-      SELECT id, telegram_user_id as "telegramUserId", filename, mime_type as "mimeType", created_at as "createdAt"
+      SELECT id, telegram_user_id as "telegramUserId", filename, content, mime_type as "mimeType", created_at as "createdAt"
       FROM knowledge_documents
       WHERE telegram_user_id = ${telegramUserId}
       ORDER BY created_at DESC
@@ -137,16 +164,23 @@ export class KnowledgeVaultService {
 
   async searchSimilar(telegramUserId: string, query: string, limit: number = 3): Promise<KnowledgeSearchResult[]> {
     const models = await unifiedModelRegistryService.list();
-    const embedModel = models.find(m => m.enabled && m.roles.includes("primary_embedding")) || models.find(m => m.enabled && m.capabilities.includes("embedding"));
+    const embedModel = models.find(m => m.enabled && (m.roles.includes("primary_embedding" as any) || m.roles.includes("embedding"))) || models.find(m => m.enabled && m.capabilities.includes("embedding"));
     
     if (!embedModel) return [];
 
     try {
       const execution = await aiProviderGatewayService.generateEmbeddings(embedModel.provider, {
         model: embedModel.modelId,
-        input: query
+        input: query,
+        dimensions: 768
       });
-      const queryEmbedding = execution.result.embeddings[0];
+      let queryEmbedding = execution.result.embeddings[0];
+      if (!queryEmbedding || !queryEmbedding.length) return [];
+      if (queryEmbedding.length > 768) {
+        queryEmbedding = queryEmbedding.slice(0, 768);
+      } else if (queryEmbedding.length < 768) {
+        queryEmbedding = queryEmbedding.concat(new Array(768 - queryEmbedding.length).fill(0));
+      }
       const vectorStr = '[' + queryEmbedding.join(',') + ']';
 
       // Cosine distance operator is <=>

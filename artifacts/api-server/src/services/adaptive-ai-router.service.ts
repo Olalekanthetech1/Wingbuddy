@@ -9,7 +9,19 @@ import type { AIChatRequest, AIChatResponse, AIProviderId, AIStreamChunk } from 
 
 export type AIRoutingStrategy = "adaptive" | "primary_first" | "priority_only";
 export interface AIRoutingPolicy { strategy: AIRoutingStrategy; capabilityWeight: number; healthWeight: number; latencyWeight: number; priorityWeight: number; maxAttempts: number; updatedAt: string; }
-export interface AIRoutingContext { mode?: string; isDeepReasoning?: boolean; isExtraction?: boolean; enableSearch?: boolean; requiresVision?: boolean; requiresTools?: boolean; preferredProvider?: AIProviderId; preferredModelId?: string; }
+export interface AIRoutingContext {
+  mode?: string;
+  isDeepReasoning?: boolean;
+  isExtraction?: boolean;
+  enableSearch?: boolean;
+  requiresVision?: boolean;
+  requiresTools?: boolean;
+  preferredProvider?: AIProviderId;
+  preferredModelId?: string;
+  userTier?: "free" | "pro" | "vip";
+  userCustomModelOverride?: string | null;
+  personaPreferredModel?: string | null;
+}
 export interface AIRoutingCandidate { model: UnifiedModelRecord; score: number; reasons: string[]; healthScore: number; latencyMs: number; }
 
 const POLICY_KEY = "AI_ROUTING_POLICY";
@@ -133,10 +145,11 @@ export class AdaptiveAIRouterService {
       else if (context.mode === "embedding") preferredCapability = "embedding";
     }
 
+    const reqCapabilities = (context as any).capabilities || [];
     const targetPrimaryRole: UnifiedModelRole = 
-      context.capabilities.includes("image_generation") ? "primary_image" :
-      context.capabilities.includes("video_generation") ? "primary_video" :
-      context.capabilities.includes("embedding") ? "primary_embedding" : "primary_chat";
+      reqCapabilities.includes("image_generation") ? "primary_image" :
+      reqCapabilities.includes("video_generation") ? "primary_video" :
+      reqCapabilities.includes("embedding") ? "primary_embedding" : "primary_chat";
       
     const isTargetPrimary = (m: UnifiedModelRecord) => m.roles.includes(targetPrimaryRole) || (targetPrimaryRole === "primary_chat" && m.roles.includes("primary"));
 
@@ -171,6 +184,37 @@ export class AdaptiveAIRouterService {
       if (preferredCapability && model.capabilities.includes(preferredCapability)) reasons.push(`capability affinity: ${preferredCapability}`);
       if (healthScore >= 85) reasons.push("healthy");
       if (latencyScore >= 85) reasons.push("low latency");
+
+      // Adaptive User Tier & Model Override routing
+      const override = context.userCustomModelOverride?.trim().toLowerCase();
+      const personaPref = context.personaPreferredModel?.trim().toLowerCase();
+      if (override && (model.id.toLowerCase() === override || model.modelId.toLowerCase() === override)) {
+        score += 2500;
+        reasons.push("user-assigned model override");
+      } else if (personaPref && (model.id.toLowerCase() === personaPref || model.modelId.toLowerCase() === personaPref || model.id.toLowerCase().includes(personaPref))) {
+        score += 1800;
+        reasons.push("persona preferred model");
+      } else if (context.userTier === "free") {
+        // Free tier routes toward ultra-fast, cost-effective models
+        if (model.capabilities.includes("fast") || model.roles.includes("fast")) {
+          score += 200;
+          reasons.push("free-tier fast routing");
+        }
+        if ((model.capabilities.includes("reasoning") || model.roles.includes("reasoning")) && !context.isDeepReasoning) {
+          score -= 80;
+        }
+      } else if (context.userTier === "vip") {
+        // VIP tier boosts heavy reasoning models and primary models
+        if (model.capabilities.includes("reasoning") || model.roles.includes("reasoning") || isTargetPrimary(model)) {
+          score += 300;
+          reasons.push("vip priority reasoning");
+        }
+      } else if (context.userTier === "pro") {
+        if (isTargetPrimary(model) || model.capabilities.includes("vision")) {
+          score += 100;
+          reasons.push("pro tier priority");
+        }
+      }
       
       return { model, score, reasons, healthScore, latencyMs: this.getHealth(model).ewmaLatencyMs };
     });

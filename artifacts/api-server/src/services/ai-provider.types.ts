@@ -119,6 +119,21 @@ export interface AIVideoGenerationResponse {
   raw?: unknown;
 }
 
+export interface AIEmbeddingRequest {
+  model: string;
+  input: string | string[];
+  dimensions?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AIEmbeddingResponse {
+  provider: AIProviderId;
+  model: string;
+  embeddings: number[][];
+  usage?: AIUsage;
+  raw?: unknown;
+}
+
 export interface AIProviderAdapter {
   readonly providerId: AIProviderId;
   chat(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIChatResponse>;
@@ -127,4 +142,5 @@ export interface AIProviderAdapter {
   listModels(provider: AIProviderRecord, apiKey?: string): Promise<AIModelCatalogEntry[]>;
   generateImage?(request: AIImageGenerationRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIImageGenerationResponse>;
   generateVideo?(request: AIVideoGenerationRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIVideoGenerationResponse>;
+  generateEmbeddings?(request: AIEmbeddingRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIEmbeddingResponse>;
 }

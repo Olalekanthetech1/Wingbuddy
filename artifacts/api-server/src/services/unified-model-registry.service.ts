@@ -4,11 +4,11 @@ import { logger } from "../lib/logger";
 import { aiProviderRegistryService } from "./ai-provider-registry.service";
 import type { AIProviderId } from "./ai-provider.types";
 
-export type UnifiedModelRole = "primary" | "primary_chat" | "primary_image" | "primary_video" | "fast" | "reasoning" | "extraction" | "embedding";
+export type UnifiedModelRole = "primary" | "primary_chat" | "primary_image" | "primary_video" | "primary_embedding" | "fast" | "reasoning" | "extraction" | "embedding";
 export interface UnifiedModelRecord { id: string; provider: AIProviderId; modelId: string; name: string; roles: UnifiedModelRole[]; enabled: boolean; priority: number; capabilities: string[]; createdAt: string; updatedAt: string; }
 const REGISTRY_KEY = "AI_MODEL_REGISTRY";
 const LEGACY_GEMINI_KEY = "GEMINI_MODEL_REGISTRY";
-const ROLES: UnifiedModelRole[] = ["primary", "primary_chat", "primary_image", "primary_video", "fast", "reasoning", "extraction", "embedding"];
+const ROLES: UnifiedModelRole[] = ["primary", "primary_chat", "primary_image", "primary_video", "primary_embedding", "fast", "reasoning", "extraction", "embedding"];
 const SUPPORTED_PROVIDERS: AIProviderId[] = ["gemini", "groq", "mistral", "huggingface"];
 const makeId = (provider: AIProviderId, modelId: string): string => `${provider}:${modelId}`.replace(/[^a-zA-Z0-9:_-]/g, "_");
 function unique<T>(items: T[]): T[] { return [...new Set(items)]; }
@@ -30,7 +30,7 @@ function normalize(value: unknown): UnifiedModelRecord[] {
       provider,
       modelId: candidate.modelId!.trim(),
       name: typeof candidate.name === "string" && candidate.name.trim() ? candidate.name.trim() : candidate.modelId!,
-      roles: embedding ? roles.filter((role) => role !== "primary") : roles,
+      roles: embedding ? roles.filter((role) => role !== "primary" && role !== "primary_chat") : roles,
       enabled: candidate.enabled !== false,
       priority: Number.isFinite(candidate.priority) ? Number(candidate.priority) : 0,
       capabilities: unique(Array.isArray(candidate.capabilities) && candidate.capabilities.length ? candidate.capabilities.filter((v): v is string => typeof v === "string") : (embedding ? ["embedding"] : ["generate"])),
@@ -123,13 +123,13 @@ export class UnifiedModelRegistryService {
     const modelId = input.modelId.trim(); if (!modelId) throw new Error("modelId is required");
     const provider = await aiProviderRegistryService.get(input.provider); if (!provider.enabled) throw new Error(`Provider ${provider.id} is disabled`);
     const models = await this.list(); if (models.some((model) => model.provider === input.provider && model.modelId === modelId)) throw new Error(`Model ${input.provider}/${modelId} is already registered.`);
-    const roles = unique((input.roles || []).filter((role): role is UnifiedModelRole => ROLES.includes(role))); if (roles.includes("primary") && roles.includes("embedding")) throw new Error("Embedding models cannot be primary.");
+    const roles = unique((input.roles || []).filter((role): role is UnifiedModelRole => ROLES.includes(role))); if ((roles.includes("primary") || roles.includes("primary_chat")) && roles.includes("embedding")) throw new Error("Embedding models cannot be primary chat models.");
     const now = new Date().toISOString(); const model: UnifiedModelRecord = { id: makeId(input.provider, modelId), provider: input.provider, modelId, name: input.name?.trim() || modelId, roles, enabled: true, priority: Number.isFinite(input.priority) ? Number(input.priority) : models.length, capabilities: unique(input.capabilities?.length ? input.capabilities : (roles.includes("embedding") ? ["embedding"] : ["generate"])), createdAt: now, updatedAt: now };
     const next = roles.includes("primary") ? models.map((item) => ({ ...item, roles: item.roles.filter((role) => role !== "primary") })).concat(model) : models.concat(model); await this.persist(next); return model;
   }
 
   async update(id: string, patch: Partial<Pick<UnifiedModelRecord, "provider" | "modelId" | "name" | "roles" | "enabled" | "priority" | "capabilities">>): Promise<UnifiedModelRecord> {
-    const models = await this.list(); const index = models.findIndex((model) => model.id === id); if (index < 0) throw new Error("Model not found"); const current = models[index]; const provider = patch.provider || current.provider; const modelId = patch.modelId?.trim() || current.modelId; const providerRecord = await aiProviderRegistryService.get(provider); if (!providerRecord.enabled && provider !== current.provider) throw new Error(`Provider ${provider} is disabled`); if (models.some((model, i) => i !== index && model.provider === provider && model.modelId === modelId)) throw new Error(`Model ${provider}/${modelId} is already registered.`); const roles = patch.roles ? unique(patch.roles.filter((role): role is UnifiedModelRole => ROLES.includes(role))) : current.roles; if (roles.includes("primary") && roles.includes("embedding")) throw new Error("Embedding models cannot be primary."); if (roles.includes("primary") && patch.enabled === false) throw new Error("A preferred model must remain enabled."); const updated: UnifiedModelRecord = { ...current, ...patch, provider, modelId, id: makeId(provider, modelId), name: patch.name?.trim() || current.name, roles, enabled: patch.enabled ?? current.enabled, priority: patch.priority ?? current.priority, capabilities: patch.capabilities ? unique(patch.capabilities) : current.capabilities, updatedAt: new Date().toISOString() }; const base = models.map((model, i) => i === index ? updated : model); const normalized = roles.includes("primary") ? base.map((model, i) => i === index ? model : ({ ...model, roles: model.roles.filter((role) => role !== "primary") })) : base; await this.persist(normalized); return updated;
+    const models = await this.list(); const index = models.findIndex((model) => model.id === id); if (index < 0) throw new Error("Model not found"); const current = models[index]; const provider = patch.provider || current.provider; const modelId = patch.modelId?.trim() || current.modelId; const providerRecord = await aiProviderRegistryService.get(provider); if (!providerRecord.enabled && provider !== current.provider) throw new Error(`Provider ${provider} is disabled`); if (models.some((model, i) => i !== index && model.provider === provider && model.modelId === modelId)) throw new Error(`Model ${provider}/${modelId} is already registered.`); const roles = patch.roles ? unique(patch.roles.filter((role): role is UnifiedModelRole => ROLES.includes(role))) : current.roles; if ((roles.includes("primary") || roles.includes("primary_chat")) && roles.includes("embedding")) throw new Error("Embedding models cannot be primary chat models."); if (roles.includes("primary") && patch.enabled === false) throw new Error("A preferred model must remain enabled."); const updated: UnifiedModelRecord = { ...current, ...patch, provider, modelId, id: makeId(provider, modelId), name: patch.name?.trim() || current.name, roles, enabled: patch.enabled ?? current.enabled, priority: patch.priority ?? current.priority, capabilities: patch.capabilities ? unique(patch.capabilities) : current.capabilities, updatedAt: new Date().toISOString() }; const base = models.map((model, i) => i === index ? updated : model); const normalized = roles.includes("primary") ? base.map((model, i) => i === index ? model : ({ ...model, roles: model.roles.filter((role) => role !== "primary") })) : base; await this.persist(normalized); return updated;
   }
 
   async setPrimary(id: string): Promise<UnifiedModelRecord> {
@@ -139,11 +139,12 @@ export class UnifiedModelRegistryService {
     const provider = await aiProviderRegistryService.get(target.provider);
     if (!provider.enabled) throw new Error(`Provider ${provider.id} is disabled`);
     if (!target.enabled) throw new Error("Enable the model before making it preferred.");
-    if (target.roles.includes("embedding")) throw new Error("Embedding models cannot be primary.");
 
     let primaryRole: UnifiedModelRole = "primary";
-    if (target.capabilities.includes("image_generation")) primaryRole = "primary_image";
-    else if (target.capabilities.includes("video_generation")) primaryRole = "primary_video";
+    const lowerId = target.modelId.toLowerCase();
+    if (target.capabilities.includes("image_generation") || lowerId.includes("flux") || lowerId.includes("image") || lowerId.includes("stable-diffusion") || lowerId.includes("sdxl")) primaryRole = "primary_image";
+    else if (target.capabilities.includes("video_generation") || lowerId.includes("wan") || lowerId.includes("video") || lowerId.includes("sora") || lowerId.includes("kling")) primaryRole = "primary_video";
+    else if (target.capabilities.includes("embedding") || target.roles.includes("embedding") || lowerId.includes("embed")) primaryRole = "primary_embedding";
     else primaryRole = "primary_chat";
 
     const next = models.map((model) => {

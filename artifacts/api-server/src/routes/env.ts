@@ -295,11 +295,11 @@ router.post("/env", async (req: Request, res: Response) => {
       updatedKeys.push(trimmedKey);
       if (trimmedKey === "GEMINI_API_KEY") {
         apiKeyPoolService.reloadFromEnv(trimmedVal);
-        import("../app").then((m) => m.initOrReloadTelegramBot?.()).catch(() => {});
+        import("../app").then((m) => m.initOrReloadTelegramBotAsync?.()).catch(() => {});
       } else if (trimmedKey === "KEY_ROTATION_MODE") {
         if (trimmedVal === "round_robin" || trimmedVal === "failover") apiKeyPoolService.setRotationMode(trimmedVal);
       } else if (trimmedKey === "TELEGRAM_BOT_TOKEN" || trimmedKey === "TELEGRAM_WEBHOOK_URL" || trimmedKey === "TELEGRAM_WEBHOOK_SECRET") {
-        import("../app").then((m) => m.initOrReloadTelegramBot?.()).catch(() => {});
+        import("../app").then((m) => m.initOrReloadTelegramBotAsync?.()).catch(() => {});
       }
     }
     res.json({ message: "Environment variables saved to database and runtime successfully", updatedKeys, timestamp: new Date().toISOString() });

@@ -63,6 +63,7 @@ async function snoozeReminder(id){try{await api('/api/dashboard/reminders/'+id+'
 async function deleteReminder(id){if(!confirm('Delete this reminder?'))return;try{await api('/api/dashboard/reminders/'+id,{method:'DELETE'});loadReminders();toast('Reminder deleted')}catch(e){toast(e.message,true)}}
 async function showEnvVars(){try{var d=await api('/api/env');$('envTable').innerHTML=(d.variables||[]).map(function(v){return '<tr><td class="mono">'+esc(v.key)+'</td><td>'+esc(v.category)+'</td><td>'+ (v.isSet?'<span class="pill good">configured</span>':'<span class="pill warn">unset</span>')+'</td><td>'+ (v.isSensitive?'••••••••':esc(v.value||''))+'</td></tr>'}).join('')||'<tr><td colspan="4" class="empty">No environment variables reported.</td></tr>'}catch(e){toast('Environment manager unavailable: '+e.message,true)}}
 async function refreshAll(){await Promise.allSettled([loadRuntimeConfig(),loadTelemetry(),loadExecutions(),loadKeys(),loadUsers()]);toast('Dashboard refreshed')}
+window.loadRuntimeConfig = loadRuntimeConfig;
 buildNav();refreshAll();setInterval(loadTelemetry,5000);setInterval(loadExecutions,5000);setInterval(loadRuntimeConfig,10000);setInterval(function(){if(state.userId){loadMemories();loadReminders()}},12000);
 </script>
 </body>

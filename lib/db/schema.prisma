@@ -9,15 +9,23 @@ generator client {
 
 /// Registered Telegram users interacting with the assistant
 model User {
-  id             Int            @id @default(autoincrement())
-  telegramUserId BigInt         @unique @map("telegram_user_id")
-  username       String?
-  firstName      String?        @map("first_name")
-  lastName       String?        @map("last_name")
-  personality    String         @default("playful")
-  mode           String         @default("general")
-  createdAt      DateTime       @default(now()) @map("created_at")
-  updatedAt      DateTime       @default(now()) @updatedAt @map("updated_at")
+  id                  Int            @id @default(autoincrement())
+  telegramUserId      BigInt         @unique @map("telegram_user_id")
+  username            String?
+  firstName           String?        @map("first_name")
+  lastName            String?        @map("last_name")
+  personality         String         @default("playful")
+  mode                String         @default("general")
+  tier                String         @default("free")
+  dailyQuota          Int            @default(30) @map("daily_quota")
+  requestsToday       Int            @default(0) @map("requests_today")
+  lastRequestDate     String         @default("") @map("last_request_date")
+  totalRequests       Int            @default(0) @map("total_requests")
+  customModelOverride String?        @map("custom_model_override")
+  status              String         @default("active")
+  lastActiveAt        DateTime       @default(now()) @map("last_active_at")
+  createdAt           DateTime       @default(now()) @map("created_at")
+  updatedAt           DateTime       @default(now()) @updatedAt @map("updated_at")
 
   // Relationships
   conversations  Conversation[]

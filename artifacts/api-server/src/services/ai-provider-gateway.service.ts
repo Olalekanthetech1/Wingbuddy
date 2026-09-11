@@ -1,7 +1,7 @@
 import { aiProviderRegistryService } from "./ai-provider-registry.service";
 import { aiProviderKeyPoolService, type ProviderManagedKey } from "./ai-provider-key-pool.service";
 import { apiKeyPoolService, type ManagedKey } from "./api-key-pool.service";
-import type { AIChatRequest, AIChatResponse, AIProviderId, AIProviderRecord, AIStreamChunk, AIImageGenerationRequest, AIImageGenerationResponse, AIVideoGenerationRequest, AIVideoGenerationResponse } from "./ai-provider.types";
+import type { AIChatRequest, AIChatResponse, AIProviderId, AIProviderRecord, AIStreamChunk, AIImageGenerationRequest, AIImageGenerationResponse, AIVideoGenerationRequest, AIVideoGenerationResponse, AIEmbeddingRequest, AIEmbeddingResponse } from "./ai-provider.types";
 
 export interface AIProviderExecutionResult<T> { provider: AIProviderId; model: string; result: T; }
 
@@ -113,6 +113,28 @@ export class AIProviderGatewayService {
       }
     }
     throw new Error(`Hugging Face video generation failed. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+  }
+
+  async generateEmbeddings(providerId: AIProviderId, request: AIEmbeddingRequest): Promise<AIProviderExecutionResult<AIEmbeddingResponse>> {
+    const provider = await aiProviderRegistryService.get(providerId);
+    if (!provider.enabled) throw new Error(`Provider ${providerId} is disabled`);
+    const adapter = aiProviderRegistryService.getAdapter(provider.adapter);
+    if (!adapter.generateEmbeddings) throw new Error(`Provider ${providerId} does not support embedding generation`);
+    const keys = await orderedKeys(provider);
+    if (!keys.length) throw new Error(`No API key is configured for provider ${providerId}`);
+    let lastError: unknown;
+    for (const key of keys) {
+      const started = Date.now();
+      try {
+        const result = await adapter.generateEmbeddings(request, provider, keyValue(key));
+        recordSuccess(provider, keyId(key), Date.now() - started);
+        return { provider: providerId, model: request.model, result };
+      } catch (error) {
+        lastError = error;
+        recordFailure(provider, keyId(key), error);
+      }
+    }
+    throw new Error(`All configured ${providerId} API keys failed for embeddings. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
   }
 }
 

@@ -66,7 +66,7 @@ export function renderDashboardKnowledgeBase(): string {
             <button class="btn" onclick="window.__wbLoadDocs()">Refresh</button>
           </div>
           
-          <input type="file" id="wbKbFileInput" style="display: none;" accept=".txt,.md,.csv" />
+          <input type="file" id="wbKbFileInput" style="display: none;" accept=".txt,.md,.csv" multiple />
           <div id="wbKbUploadArea" style="border:2px dashed var(--line);border-radius:8px;padding:32px;text-align:center;cursor:pointer;color:var(--muted);margin-bottom:24px;" onclick="document.getElementById('wbKbFileInput').click()">
             <strong style="font-size:14px;color:var(--text);">Click to Upload Document</strong>
             <div style="font-size:12px;margin-top:6px;">Supports .txt, .md, .csv (Raw Text)</div>
@@ -86,31 +86,50 @@ export function renderDashboardKnowledgeBase(): string {
       const fileInput = section.querySelector('#wbKbFileInput');
       if (fileInput) {
         fileInput.addEventListener('change', async function(e) {
-          const file = e.target.files[0];
-          if (!file) return;
+          const files = Array.from(e.target.files);
+          if (files.length === 0) return;
           
           const btn = document.getElementById('wbKbUploadArea');
           const origContent = btn.innerHTML;
-          btn.innerHTML = '<strong style="color:var(--text)">Uploading & Embedding...</strong><div style="font-size: 12px; margin-top: 6px;">Chunking text and generating vectors via Primary Embedding Model...</div>';
           
-          try {
-            const text = await file.text();
-            const res = await fetch('/api/knowledge', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                filename: file.name,
-                mimeType: file.type || "text/plain",
-                content: text
-              })
-            });
+          let successCount = 0;
+          let failCount = 0;
+          
+          for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            btn.innerHTML = '';
+            const statusTitle = document.createElement('strong');
+            statusTitle.style.color = 'var(--text)';
+            statusTitle.textContent = 'Uploading (' + (i + 1) + ' of ' + files.length + ')...';
+            const statusDetail = document.createElement('div');
+            statusDetail.style.fontSize = '12px';
+            statusDetail.style.marginTop = '6px';
+            statusDetail.textContent = 'Embedding: ' + file.name;
+            btn.appendChild(statusTitle);
+            btn.appendChild(statusDetail);
             
-            const data = await res.json();
-            if (!data.success) {
-              alert("Upload failed: " + (data.error || "Unknown error"));
+            try {
+              const text = await file.text();
+              const res = await fetch('/api/knowledge', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  filename: file.name,
+                  mimeType: file.type || "text/plain",
+                  content: text
+                })
+              });
+              
+              const data = await res.json();
+              if (data.success) successCount++;
+              else failCount++;
+            } catch (err) {
+              failCount++;
             }
-          } catch (err) {
-            alert("Error reading file: " + err.message);
+          }
+          
+          if (failCount > 0) {
+            alert("Finished uploading. " + successCount + " succeeded, " + failCount + " failed.");
           }
           
           btn.innerHTML = origContent;

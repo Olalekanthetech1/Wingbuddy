@@ -62,17 +62,17 @@ export function renderDashboardModelControls(): string {
         
         if (isImage) imageModels.push(m);
         else if (isVideo) videoModels.push(m);
-        else if (caps.includes("embedding")) embedModels.push(m);
+        else if (caps.includes("embedding") || (m.roles || []).includes("embedding") || (m.roles || []).includes("primary_embedding") || id.includes("embed")) embedModels.push(m);
         else chatModels.push(m);
       });
 
-      const renderCard = (m, categoryPrimaryRole) => {
+      const renderCard = (m, categoryPrimaryRole, activePrimaryId) => {
         const roles = (m.roles || []).filter(r => !r.startsWith('primary')).map(r => '<span class="pill">' + esc(r) + '</span>').join('');
         const enabled = m.enabled !== false;
-        const isPrimary = (m.roles || []).includes(categoryPrimaryRole) || (categoryPrimaryRole === 'primary_chat' && (m.roles || []).includes('primary'));
+        const isPrimary = activePrimaryId ? (m.id === activePrimaryId) : ((m.roles || []).includes(categoryPrimaryRole) || (categoryPrimaryRole === 'primary_chat' && (m.roles || []).includes('primary')));
         const caps = (m.capabilities || []).map(c => '<span class="pill">' + esc(c) + '</span>').join('');
         
-        return '<div class="wb-model-card ' + (isPrimary ? 'preferred-legacy' : '') + '"><div><strong>' + esc(m.name) + '</strong>' + (isPrimary ? ' <span class="pill good">Primary</span>' : '') + '<div class="mono" style="font-size:12px;color:var(--blue);margin-top:3px">' + esc(m.provider) + ' / ' + esc(m.modelId) + '</div><div class="wb-model-meta">' + roles + '<span class="pill ' + (enabled ? 'good' : 'bad') + '">' + (enabled ? 'Enabled' : 'Disabled') + '</span><span class="pill">Priority ' + esc(m.priority) + '</span>' + caps + '</div></div><div class="wb-model-actions">' + (!isPrimary && enabled && categoryPrimaryRole !== 'primary_embedding' ? '<button class="btn primary" data-model-primary="' + esc(m.id) + '">Set as Primary</button>' : '') + '<button class="btn" data-model-edit="' + esc(m.id) + '">Edit</button><button class="btn" data-model-test="' + esc(m.id) + '">Test</button><button class="btn" data-model-toggle="' + esc(m.id) + '" data-enabled="' + enabled + '">' + (enabled ? 'Disable' : 'Enable') + '</button><button class="btn danger" data-model-delete="' + esc(m.id) + '">Delete</button></div></div>';
+        return '<div class="wb-model-card ' + (isPrimary ? 'preferred-legacy' : '') + '"><div><strong>' + esc(m.name) + '</strong>' + (isPrimary ? ' <span class="pill good">Primary</span>' : '') + '<div class="mono" style="font-size:12px;color:var(--blue);margin-top:3px">' + esc(m.provider) + ' / ' + esc(m.modelId) + '</div><div class="wb-model-meta">' + roles + '<span class="pill ' + (enabled ? 'good' : 'bad') + '">' + (enabled ? 'Enabled' : 'Disabled') + '</span><span class="pill">Priority ' + esc(m.priority) + '</span>' + caps + '</div></div><div class="wb-model-actions">' + (!isPrimary && enabled ? '<button class="btn primary" data-model-primary="' + esc(m.id) + '">Set as Primary</button>' : '') + '<button class="btn" data-model-edit="' + esc(m.id) + '">Edit</button><button class="btn" data-model-test="' + esc(m.id) + '">Test</button><button class="btn" data-model-toggle="' + esc(m.id) + '" data-enabled="' + enabled + '">' + (enabled ? 'Disable' : 'Enable') + '</button><button class="btn danger" data-model-delete="' + esc(m.id) + '">Delete</button></div></div>';
       };
 
       
@@ -84,7 +84,15 @@ export function renderDashboardModelControls(): string {
 
       const renderTabContent = (models, primaryRole) => {
         if (!models.length) return '<div class="empty" style="margin-top:16px;">No models registered in this category.</div>';
-        return '<div class="stack" style="margin-top:16px">' + models.map(m => renderCard(m, primaryRole)).join('') + '</div>';
+        let primaryId = null;
+        const explicitPrimary = models.find(m => m.enabled !== false && ((m.roles || []).includes(primaryRole) || (primaryRole === 'primary_chat' && (m.roles || []).includes('primary'))));
+        if (explicitPrimary) {
+          primaryId = explicitPrimary.id;
+        } else {
+          const firstEnabled = models.find(m => m.enabled !== false);
+          if (firstEnabled) primaryId = firstEnabled.id;
+        }
+        return '<div class="stack" style="margin-top:16px">' + models.map(m => renderCard(m, primaryRole, primaryId)).join('') + '</div>';
       };
 
       
@@ -113,12 +121,26 @@ export function renderDashboardModelControls(): string {
       root.querySelector('[data-model-loading]').textContent = 'Unable to load model registry: ' + e.message;
     }
   }
-  async function setPrimary(id){
+  async function setPrimary(id, btn){
     const model=cachedModels.find(m=>m.id===id);if(!model)return;
-    if(model.enabled===false){toast('Enable the model before making it primary');return}
-    if((model.roles||[]).includes('embedding')){toast('Embedding models cannot be primary');return}
-    if(!confirm('Make '+(model.name||model.modelId)+' the primary model?'))return;
-    try{const d=await api('/api/models/'+encodeURIComponent(id)+'/primary',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});toast('✓ '+(d.message||'Primary model updated'));await loadModelRegistry()}catch(e){toast('Primary model update failed: '+e.message)}
+    if(model.enabled===false){toast('Enable the model before making it primary',true);return}
+    if(btn){
+      btn.disabled=true;
+      btn.textContent='Setting…';
+    }
+    toast('Setting '+(model.name||model.modelId)+' as primary…');
+    try{
+      const d=await api('/api/models/'+encodeURIComponent(id)+'/primary',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+      toast('✓ '+(d.message||'Primary model updated'));
+      await loadModelRegistry();
+      if(typeof window.loadRuntimeConfig==='function') await window.loadRuntimeConfig();
+    }catch(e){
+      toast('Primary model update failed: '+e.message,true);
+      if(btn){
+        btn.disabled=false;
+        btn.textContent='Set as Primary';
+      }
+    }
   }
   async function saveModel(){
     const provider=currentProvider();const modelId=document.getElementById('wbNewModelId').value.trim();const name=document.getElementById('wbNewModelName').value.trim();const priority=Number(document.getElementById('wbNewModelPriority').value);
@@ -129,8 +151,73 @@ export function renderDashboardModelControls(): string {
   }
   async function beginEdit(id){const model=cachedModels.find(m=>m.id===id);if(!model)return;editingId=id;setForm(model);document.getElementById('wbModelEditor').scrollIntoView({behavior:'smooth',block:'nearest'});await loadCatalog(model.provider,false)}
   function cancelEdit(){editingId=null;setForm(null)}
-  document.addEventListener('click',async e=>{const t=e.target;if(!(t instanceof Element))return;if(t.matches('[data-model-primary]')){await setPrimary(t.dataset.modelPrimary);return}if(t.matches('[data-model-edit]'))beginEdit(t.dataset.modelEdit);if(t.matches('[data-model-test]')){try{const d=await api('/api/models/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:t.dataset.modelTest})});toast(d.ok?'✓ Model responded in '+d.latencyMs+'ms':'✕ '+(d.error||'Model test failed'))}catch(err){toast('Model test failed: '+err.message)}}if(t.matches('[data-model-toggle]')){try{await api('/api/models/'+encodeURIComponent(t.dataset.modelToggle),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:t.dataset.enabled!=='true'})});await loadModelRegistry();toast('Model state updated')}catch(err){toast('Update failed: '+err.message)}}if(t.matches('[data-model-delete]')){if(!confirm('Remove this model from the registry?'))return;try{await api('/api/models/'+encodeURIComponent(t.dataset.modelDelete),{method:'DELETE'});await loadModelRegistry();toast('Model removed')}catch(err){toast('Delete failed: '+err.message)}}if(t.matches('[data-model-refresh]'))loadCatalog(currentProvider(),true)});
-  document.addEventListener('DOMContentLoaded',async()=>{
+  document.addEventListener('click',async e=>{
+    const t=e.target;if(!(t instanceof Element))return;
+    const primaryBtn = t.closest('[data-model-primary]');
+    if(primaryBtn){
+      const id = primaryBtn.getAttribute('data-model-primary');
+      if(id) await setPrimary(id, primaryBtn);
+      return;
+    }
+    const editBtn = t.closest('[data-model-edit]');
+    if(editBtn){
+      beginEdit(editBtn.getAttribute('data-model-edit'));
+      return;
+    }
+    const testBtn = t.closest('[data-model-test]');
+    if(testBtn){
+      const id = testBtn.getAttribute('data-model-test');
+      testBtn.disabled = true;
+      testBtn.textContent = 'Testing…';
+      try{
+        const d=await api('/api/models/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
+        toast(d.ok?'✓ Model responded in '+d.latencyMs+'ms':'✕ '+(d.error||'Model test failed'), !d.ok);
+      }catch(err){
+        toast('Model test failed: '+err.message, true);
+      }finally{
+        testBtn.disabled = false;
+        testBtn.textContent = 'Test';
+      }
+      return;
+    }
+    const toggleBtn = t.closest('[data-model-toggle]');
+    if(toggleBtn){
+      const id = toggleBtn.getAttribute('data-model-toggle');
+      const isEnabled = toggleBtn.getAttribute('data-enabled')==='true';
+      toggleBtn.disabled = true;
+      try{
+        await api('/api/models/'+encodeURIComponent(id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!isEnabled})});
+        await loadModelRegistry();
+        if(typeof window.loadRuntimeConfig==='function') await window.loadRuntimeConfig();
+        toast('Model state updated');
+      }catch(err){
+        toast('Update failed: '+err.message, true);
+      }finally{
+        toggleBtn.disabled = false;
+      }
+      return;
+    }
+    const deleteBtn = t.closest('[data-model-delete]');
+    if(deleteBtn){
+      const id = deleteBtn.getAttribute('data-model-delete');
+      deleteBtn.disabled = true;
+      try{
+        await api('/api/models/'+encodeURIComponent(id),{method:'DELETE'});
+        await loadModelRegistry();
+        if(typeof window.loadRuntimeConfig==='function') await window.loadRuntimeConfig();
+        toast('Model removed');
+      }catch(err){
+        toast('Delete failed: '+err.message, true);
+        deleteBtn.disabled = false;
+      }
+      return;
+    }
+    if(t.closest('[data-model-refresh]')){
+      await loadCatalog(currentProvider(),true);
+      return;
+    }
+  });
+  function initModelManager(){
     const view=document.getElementById('view-models');if(!view||document.getElementById('wbModelManager'))return;const wrap=document.createElement('div');wrap.className='card wb-model-manager';wrap.id='wbModelManager';
     wrap.innerHTML='<div class="wb-model-toolbar"><div><div class="section-title">Adaptive Model Registry <span class="pill" id="wbModelCount">0</span></div><div class="section-note" data-model-loading>Loading PostgreSQL registry…</div></div><div class="wb-refresh-row"><button class="btn" onclick="window.__wbLoadModels()">Refresh registry</button></div></div><div class="notice">Live provider catalogs supply model IDs and capability metadata. Routing choices are autonomous.</div><div id="wbModelList" class="stack" style="margin-top:10px"></div><div id="wbModelEditor" style="border-top:1px solid var(--line);margin-top:13px;padding-top:13px"><div class="section-title" id="wbModelFormTitle">Register model</div><div class="wb-model-form"><select id="wbNewModelProvider" class="input"></select><select id="wbNewModelId" class="input"></select><input id="wbNewModelName" class="input" placeholder="Display name (optional)"/><input id="wbNewModelPriority" class="input" type="number" min="0" placeholder="Priority"/><div class="wb-model-actions"><button id="wbAddModelBtn" class="btn primary">Register & Save</button><button id="wbCancelEditBtn" class="btn" style="display:none">Cancel</button></div></div><div class="wb-provider-note" id="wbProviderNote" style="margin-top:6px"></div><div class="wb-catalog-meta" id="wbCatalogMeta"></div><div style="display:flex;gap:8px;align-items:center;margin-top:5px"><span class="wb-provider-note" id="wbCatalogStatus">Select a provider to load its live model catalog.</span><button class="btn" data-model-refresh="true" type="button">Refresh catalog</button></div></div>';
     view.appendChild(wrap);
@@ -139,8 +226,13 @@ export function renderDashboardModelControls(): string {
     document.getElementById('wbAddModelBtn').onclick=saveModel;
     document.getElementById('wbCancelEditBtn').onclick=cancelEdit;
     window.__wbLoadModels=async()=>{await loadProviders();await loadModelRegistry();const p=currentProvider();if(p)await loadCatalog(p,false)};
-    try{await loadProviders();await loadModelRegistry();if(currentProvider())await loadCatalog(currentProvider(),false)}catch(e){const status=document.querySelector('[data-model-loading]');if(status)status.textContent='Unable to initialize model controls: '+e.message}
-  });
+    window.__wbLoadModels();
+  }
+  if(document.readyState==='loading'){
+    document.addEventListener('DOMContentLoaded',initModelManager);
+  }else{
+    initModelManager();
+  }
 })();
 </script>`;
 }

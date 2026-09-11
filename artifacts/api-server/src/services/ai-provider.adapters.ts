@@ -1,6 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { InferenceClient } from "@huggingface/inference";
-import type { AIChatRequest, AIChatResponse, AIMessage, AIModelCatalogEntry, AIProviderAdapter, AIProviderRecord, AIStreamChunk, AIUsage, AIImageGenerationRequest, AIImageGenerationResponse, AIVideoGenerationRequest, AIVideoGenerationResponse } from "./ai-provider.types";
+import type { AIChatRequest, AIChatResponse, AIMessage, AIModelCatalogEntry, AIProviderAdapter, AIProviderRecord, AIStreamChunk, AIUsage, AIImageGenerationRequest, AIImageGenerationResponse, AIVideoGenerationRequest, AIVideoGenerationResponse, AIEmbeddingRequest, AIEmbeddingResponse } from "./ai-provider.types";
 import type { AIProviderId } from "./ai-provider.types";
 import { logger } from "../lib/logger";
 
@@ -116,16 +116,81 @@ class GeminiAdapter implements AIProviderAdapter {
   private systemInstruction(messages: AIMessage[]): string | undefined { return messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n") || undefined; }
   async chat(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIChatResponse> { const client = new GoogleGenAI({ apiKey: requireApiKey(provider, apiKey) }); const response: any = await client.models.generateContent({ model: request.model, contents: this.toContents(request.messages), config: { ...(this.systemInstruction(request.messages) ? { systemInstruction: this.systemInstruction(request.messages) } : {}), ...(request.temperature !== undefined ? { temperature: request.temperature } : {}), ...(request.topP !== undefined ? { topP: request.topP } : {}), ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}) } }); return { provider: this.providerId, model: request.model, text: response.text || "", finishReason: response.candidates?.[0]?.finishReason, usage: normalizeUsage(response.usageMetadata), raw: response }; }
   async *stream(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): AsyncGenerator<AIStreamChunk> { const client = new GoogleGenAI({ apiKey: requireApiKey(provider, apiKey) }); const result: any = await client.models.generateContentStream({ model: request.model, contents: this.toContents(request.messages), config: { ...(this.systemInstruction(request.messages) ? { systemInstruction: this.systemInstruction(request.messages) } : {}), ...(request.temperature !== undefined ? { temperature: request.temperature } : {}), ...(request.topP !== undefined ? { topP: request.topP } : {}), ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}) } }); for await (const chunk of result) { const text = typeof chunk?.text === "string" ? chunk.text : ""; const candidate = chunk?.candidates?.[0]; yield { provider: this.providerId, model: request.model, delta: text, done: Boolean(candidate?.finishReason), finishReason: candidate?.finishReason, usage: normalizeUsage(chunk?.usageMetadata) }; } }
-  async test(model: string, provider: AIProviderRecord, apiKey?: string) { const started = Date.now(); try { await this.chat({ model, messages: [{ role: "user", content: "ping" }], maxOutputTokens: 4 }, provider, apiKey); return { ok: true, latencyMs: Date.now() - started }; } catch (error) { return { ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) }; } }
+  async test(model: string, provider: AIProviderRecord, apiKey?: string) {
+    const started = Date.now();
+    try {
+      if (model.toLowerCase().includes("embed")) {
+        await this.generateEmbeddings({ model, input: "ping", dimensions: 768 }, provider, apiKey);
+        return { ok: true, latencyMs: Date.now() - started };
+      }
+      await this.chat({ model, messages: [{ role: "user", content: "ping" }], maxOutputTokens: 4 }, provider, apiKey);
+      return { ok: true, latencyMs: Date.now() - started };
+    } catch (error) {
+      return { ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
   async listModels(provider: AIProviderRecord, apiKey?: string): Promise<AIModelCatalogEntry[]> { const client = new GoogleGenAI({ apiKey: requireApiKey(provider, apiKey) }); const results: AIModelCatalogEntry[] = []; const pager = await client.models.list(); for await (const item of pager) { const raw: any = item; const modelName = typeof raw?.name === "string" ? raw.name.replace(/^models\//, "") : ""; if (!modelName) continue; results.push(catalogEntry(this.providerId, modelName, raw?.displayName || raw?.name, "active", normalizeCatalogCapabilities(raw), Number(raw?.inputTokenLimit || NaN))); } return results; }
+  async generateEmbeddings(request: AIEmbeddingRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIEmbeddingResponse> {
+    const client = new GoogleGenAI({ apiKey: requireApiKey(provider, apiKey) });
+    const inputs = Array.isArray(request.input) ? request.input : [request.input];
+    const embeddings: number[][] = [];
+    const model = request.model?.trim() || "gemini-embedding-2";
+    for (const text of inputs) {
+      const config = request.dimensions ? { outputDimensionality: request.dimensions } : { outputDimensionality: 768 };
+      const response: any = await client.models.embedContent({
+        model,
+        contents: text,
+        config
+      });
+      const vals = response.embedding?.values || response.embeddings?.[0]?.values || [];
+      embeddings.push(vals);
+    }
+    return { provider: this.providerId, model, embeddings };
+  }
 }
 
 abstract class OpenAICompatibleAdapter implements AIProviderAdapter {
-  abstract readonly providerId: AIProviderId; protected abstract completionPath: string; protected modelPath = "/models";
+  abstract readonly providerId: AIProviderId; protected abstract completionPath: string; protected modelPath = "/models"; protected embeddingPath = "/embeddings";
   async chat(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIChatResponse> { const response = await fetch(`${normalizeBaseUrl(provider.baseUrl)}${this.completionPath}`, { method: "POST", headers: { Authorization: `Bearer ${requireApiKey(provider, apiKey)}`, "Content-Type": "application/json" }, body: JSON.stringify({ model: request.model, messages: request.messages.map(asOpenAIMessage), stream: false, ...(request.temperature !== undefined ? { temperature: request.temperature } : {}), ...(request.topP !== undefined ? { top_p: request.topP } : {}), ...(request.maxOutputTokens !== undefined ? { max_tokens: request.maxOutputTokens } : {}) }) }); await requireOk(response, this.providerId); const payload: any = await response.json(); return { provider: this.providerId, model: request.model, text: payload.choices?.[0]?.message?.content || "", finishReason: payload.choices?.[0]?.finish_reason, usage: normalizeUsage(payload.usage), raw: payload }; }
   async *stream(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): AsyncGenerator<AIStreamChunk> { const response = await fetch(`${normalizeBaseUrl(provider.baseUrl)}${this.completionPath}`, { method: "POST", headers: { Authorization: `Bearer ${requireApiKey(provider, apiKey)}`, "Content-Type": "application/json", Accept: "text/event-stream" }, body: JSON.stringify({ model: request.model, messages: request.messages.map(asOpenAIMessage), stream: true, ...(request.temperature !== undefined ? { temperature: request.temperature } : {}), ...(request.topP !== undefined ? { top_p: request.topP } : {}), ...(request.maxOutputTokens !== undefined ? { max_tokens: request.maxOutputTokens } : {}) }) }); await requireOk(response, this.providerId); yield* parseSSE(response, (payload) => { const choice = payload.choices?.[0]; const delta = choice?.delta?.content; const finishReason = choice?.finish_reason; if (!delta && !finishReason && !payload.usage) return null; return { provider: this.providerId, model: request.model, delta: typeof delta === "string" ? delta : "", done: Boolean(finishReason), finishReason, usage: normalizeUsage(payload.usage) }; }); }
-  async test(model: string, provider: AIProviderRecord, apiKey?: string) { const started = Date.now(); try { await this.chat({ model, messages: [{ role: "user", content: "ping" }], maxOutputTokens: 4 }, provider, apiKey); return { ok: true, latencyMs: Date.now() - started }; } catch (error) { return { ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) }; } }
+  async test(model: string, provider: AIProviderRecord, apiKey?: string) {
+    const started = Date.now();
+    try {
+      if (model.toLowerCase().includes("embed")) {
+        await this.generateEmbeddings({ model, input: "ping" }, provider, apiKey);
+        return { ok: true, latencyMs: Date.now() - started };
+      }
+      await this.chat({ model, messages: [{ role: "user", content: "ping" }], maxOutputTokens: 4 }, provider, apiKey);
+      return { ok: true, latencyMs: Date.now() - started };
+    } catch (error) {
+      return { ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
   async listModels(provider: AIProviderRecord, apiKey?: string): Promise<AIModelCatalogEntry[]> { const response = await fetch(`${normalizeBaseUrl(provider.baseUrl)}${this.modelPath}`, { headers: { Authorization: `Bearer ${requireApiKey(provider, apiKey)}`, Accept: "application/json" } }); await requireOk(response, this.providerId); const payload: any = await response.json(); const rows = Array.isArray(payload?.data) ? payload.data : []; return rows.map((raw: any) => { const modelId = typeof raw?.id === "string" ? raw.id.trim() : ""; if (!modelId) return null; return catalogEntry(this.providerId, modelId, raw?.name || raw?.id, raw?.active === false || raw?.archived === true ? "inactive" : "active", normalizeCatalogCapabilities(raw), Number(raw?.context_window ?? raw?.max_context_length ?? NaN)); }).filter((item: AIModelCatalogEntry | null): item is AIModelCatalogEntry => Boolean(item)); }
+  async generateEmbeddings(request: AIEmbeddingRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIEmbeddingResponse> {
+    const response = await fetch(`${normalizeBaseUrl(provider.baseUrl)}${this.embeddingPath}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${requireApiKey(provider, apiKey)}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: request.model,
+        input: request.input,
+        ...(request.dimensions ? { dimensions: request.dimensions } : {})
+      })
+    });
+    await requireOk(response, this.providerId);
+    const payload: any = await response.json();
+    const rows = Array.isArray(payload?.data) ? payload.data : [];
+    const embeddings: number[][] = rows.map((r: any) => r?.embedding || []);
+    return {
+      provider: this.providerId,
+      model: request.model,
+      embeddings,
+      usage: normalizeUsage(payload.usage)
+    };
+  }
 }
 
 class HuggingFaceAdapter implements AIProviderAdapter {
@@ -325,10 +390,31 @@ class HuggingFaceAdapter implements AIProviderAdapter {
       return unique.map((modelId) => catalogEntry(this.providerId, modelId, modelId, "unknown", []));
     }
   }
+
+  async generateEmbeddings(request: AIEmbeddingRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIEmbeddingResponse> {
+    const token = apiKey?.trim() || process.env.HF_TOKEN?.trim();
+    const client = new InferenceClient(token);
+    const inputs = Array.isArray(request.input) ? request.input : [request.input];
+    const embeddings: number[][] = [];
+    for (const text of inputs) {
+      const res: any = await withTimeout(client.featureExtraction({
+        model: request.model,
+        inputs: text
+      }), 60_000, "Hugging Face embedding");
+      if (Array.isArray(res)) {
+        embeddings.push(res as number[]);
+      }
+    }
+    return {
+      provider: this.providerId,
+      model: request.model,
+      embeddings
+    };
+  }
 }
 
 class GroqAdapter extends OpenAICompatibleAdapter { readonly providerId = "groq" as const; protected completionPath = "/chat/completions"; }
-class MistralAdapter extends OpenAICompatibleAdapter { readonly providerId = "mistral" as const; protected completionPath = "/v1/chat/completions"; protected modelPath = "/v1/models"; }
+class MistralAdapter extends OpenAICompatibleAdapter { readonly providerId = "mistral" as const; protected completionPath = "/v1/chat/completions"; protected modelPath = "/v1/models"; protected embeddingPath = "/v1/embeddings"; }
 
 class ElevenLabsAdapter implements AIProviderAdapter {
   readonly providerId = "elevenlabs" as const;

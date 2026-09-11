@@ -11,11 +11,13 @@ import { TemporalContextService } from "./temporal-context.service";
 import { SemanticInteractionResolverService } from "./semantic-interaction-resolver.service";
 import type { SemanticInteractionDecision } from "./semantic-interaction-cache.service";
 import { knowledgeVaultService, type KnowledgeSearchResult } from "./knowledge-vault.service";
+import { personaService, type AIPersona } from "./persona.service";
 
 export interface UserGlobalContext {
   telegramUserId: number;
   chatId: number;
   conversationId: number;
+  activePersona?: AIPersona;
   userProfile: {
     name?: string;
     username?: string;
@@ -59,11 +61,12 @@ export class GlobalContextService {
     if (userProfile) await this.conversations.upsertUser(userProfile);
     const conversationId = await this.conversations.getOrCreateConversation(telegramUserId, chatId);
 
-    const [personality, mode, allMemories, sessionSummaries] = await Promise.all([
+    const [personality, mode, allMemories, sessionSummaries, activePersonaRes] = await Promise.all([
       this.conversations.getUserPersonality(telegramUserId),
       this.conversations.getUserMode(telegramUserId),
       chatDatabaseService.getUserMemories(telegramUserId),
       chatDatabaseService.getRecentSessionSummaries(telegramUserId, 3),
+      personaService.getUserActivePersona(telegramUserId),
     ]);
 
     const query = message?.trim() ?? "";
@@ -180,6 +183,7 @@ export class GlobalContextService {
       telegramUserId,
       chatId,
       conversationId,
+      activePersona: activePersonaRes?.persona,
       userProfile: {
         name: displayName,
         username: userProfile?.username,
