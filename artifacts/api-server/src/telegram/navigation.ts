@@ -229,3 +229,84 @@ export const HELP_TEXT = [
   "Personality controls communication style. Assistant modes adapt dynamically to your intent.",
   "Conversation history and long-term memories are persistent in PostgreSQL and isolated by user.",
 ].join("\n");
+export function formatUpgradeOfferText(
+  targetTier: "pro" | "vip",
+  currentTier: "free" | "pro" | "vip",
+  personaPrompted?: { name: string; emoji: string },
+  tierPolicy?: any,
+): string {
+  const targetUpper = targetTier.toUpperCase();
+  const currentUpper = currentTier.toUpperCase();
+  const tierConfig = tierPolicy?.tiers?.[targetTier] || {};
+  const price = tierConfig.priceLabel || (targetTier === "vip" ? "$24.99 / mo" : "$9.99 / mo");
+  const perks: string[] = tierConfig.perks || (targetTier === "vip"
+    ? [
+        "Unlimited daily messages with highest priority queue",
+        "Unlock 🧠 Deep Researcher (DeepSeek R1 reasoning)",
+        "Unlock 📊 Crypto & Market Strategist",
+        "FLUX Ultra images & Wan hybrid video generation",
+        "Dedicated highest-speed worker processing",
+      ]
+    : [
+        "150 daily messages (5x Free allowance)",
+        "Unlock 💻 Software Architect & ✍️ Creative Storyteller",
+        "Custom model overrides (Qwen 72B, Mixtral)",
+        "High-priority queue & extended context",
+      ]);
+
+  const lines: string[] = [
+    targetTier === "vip" ? "👑 <b>WINGBUDDY VIP PASS</b>" : "⚡ <b>WINGBUDDY PRO PASS</b>",
+    "",
+  ];
+
+  if (personaPrompted) {
+    lines.push(
+      `🔒 <b>Specialist Agent Gated:</b> ${personaPrompted.emoji} <b>${personaPrompted.name}</b>`,
+      `<i>This agent is exclusively powered for ${targetUpper} members.</i>`,
+      "",
+    );
+  }
+
+  lines.push(
+    `💳 <b>Investment:</b> <code>${price}</code>`,
+    `📊 <b>Your Current Tier:</b> <code>${currentUpper}</code>`,
+    "",
+    "🌟 <b>Included Privileges:</b>",
+    ...perks.map((p: string) => `• ${p}`),
+    "",
+    tierConfig.paymentInstructions || "Contact the admin or tap below to activate your pass instantly.",
+  );
+
+  return lines.join("\n");
+}
+
+export function upgradeKeyboard(
+  targetTier: "pro" | "vip",
+  policy?: any,
+  fromPersonaId?: string,
+): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  const tierConfig = policy?.tiers?.[targetTier] || {};
+  const adminContact = tierConfig.adminContactHandle || policy?.supportContact || "@admin";
+  const checkoutUrl = tierConfig.checkoutUrl;
+
+  if (checkoutUrl && checkoutUrl.startsWith("http")) {
+    kb.url(`💎 Activate ${targetTier.toUpperCase()} Pass`, checkoutUrl).row();
+  } else {
+    const cleanHandle = adminContact.replace(/^@/, "");
+    kb.url(`💬 Contact Admin (${adminContact})`, `https://t.me/${cleanHandle}`).row();
+  }
+
+  if (targetTier === "pro") {
+    kb.text("👑 View VIP Pass Instead", "upgrade:view:vip").row();
+  } else {
+    kb.text("⚡ View PRO Pass Instead", "upgrade:view:pro").row();
+  }
+
+  if (fromPersonaId) {
+    kb.text("🎭 Back to Personas", "menu:personas").text("◀️ Main Menu", "menu:main");
+  } else {
+    kb.text("◀️ Back to Account", "menu:main");
+  }
+  return kb;
+}

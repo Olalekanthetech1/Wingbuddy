@@ -35,6 +35,14 @@ export interface TierConfig {
     autonomousExecution: boolean;
     deepReasoning: boolean;
   };
+  priceLabel?: string;
+  upgradeDescription?: string;
+  perks?: string[];
+  checkoutUrl?: string;
+  adminContactHandle?: string;
+  upgradeEnabled?: boolean;
+  buttonLabel?: string;
+  paymentInstructions?: string;
 }
 
 export interface UserAccessPolicy {
@@ -42,6 +50,7 @@ export interface UserAccessPolicy {
   whitelistOnly: boolean;
   tiers: Record<UserTier, TierConfig>;
   updatedAt: string;
+  supportContact?: string;
 }
 
 export interface QuotaCheckResult {
@@ -96,6 +105,16 @@ export const DEFAULT_TIER_CONFIGS: Record<UserTier, TierConfig> = {
       autonomousExecution: false,
       deepReasoning: false,
     },
+    priceLabel: "Free Forever",
+    upgradeDescription: "Essential AI assistant tools with daily usage allowances.",
+    perks: [
+      "30 daily messages (auto-resets at midnight UTC)",
+      "High-efficiency models (Ministral 3B, Gemini Flash)",
+      "Standard response speed",
+      "Basic personas & reminder tasks",
+    ],
+    upgradeEnabled: false,
+    buttonLabel: "🌱 Current Plan",
   },
   pro: {
     tier: "pro",
@@ -113,6 +132,19 @@ export const DEFAULT_TIER_CONFIGS: Record<UserTier, TierConfig> = {
       autonomousExecution: true,
       deepReasoning: true,
     },
+    priceLabel: "$9.99 / month",
+    upgradeDescription: "Elevate your productivity with high-capacity limits & expert agents.",
+    perks: [
+      "150 daily messages (5x Free allowance)",
+      "Unlock Software Architect & Creative Storyteller personas",
+      "Priority queue processing & zero throttling",
+      "Extended context memory retention",
+    ],
+    checkoutUrl: "",
+    adminContactHandle: "@admin",
+    upgradeEnabled: true,
+    buttonLabel: "⚡ Upgrade to PRO",
+    paymentInstructions: "Contact admin or use invoice link for instant activation.",
   },
   vip: {
     tier: "vip",
@@ -130,6 +162,21 @@ export const DEFAULT_TIER_CONFIGS: Record<UserTier, TierConfig> = {
       autonomousExecution: true,
       deepReasoning: true,
     },
+    priceLabel: "$24.99 / month",
+    upgradeDescription: "Unlimited power, deep reasoning models, and exclusive market intelligence.",
+    perks: [
+      "Unlimited daily requests (no quota limits)",
+      "Exclusive access to Deep Researcher (DeepSeek R1 / Gemini Thinking)",
+      "Crypto & Market Strategist algorithmic framing",
+      "FLUX Ultra image & Wan hybrid video generation",
+      "Dedicated highest-priority compute worker",
+      "Direct VIP priority concierge support",
+    ],
+    checkoutUrl: "",
+    adminContactHandle: "@admin",
+    upgradeEnabled: true,
+    buttonLabel: "👑 Upgrade to VIP Pass",
+    paymentInstructions: "Contact admin or use invoice link for instant VIP VIP activation.",
   },
 };
 
@@ -138,6 +185,7 @@ export const DEFAULT_ACCESS_POLICY: UserAccessPolicy = {
   whitelistOnly: false,
   tiers: DEFAULT_TIER_CONFIGS,
   updatedAt: new Date().toISOString(),
+  supportContact: "@WingbuddyAdmin",
 };
 
 function getUtcTodayDate(): string {
@@ -190,6 +238,7 @@ export class UserTierService {
     const next: UserAccessPolicy = {
       defaultTier: patch.defaultTier || current.defaultTier,
       whitelistOnly: patch.whitelistOnly !== undefined ? patch.whitelistOnly : current.whitelistOnly,
+      supportContact: patch.supportContact !== undefined ? patch.supportContact : current.supportContact,
       tiers: {
         free: { ...current.tiers.free, ...(patch.tiers?.free || {}) },
         pro: { ...current.tiers.pro, ...(patch.tiers?.pro || {}) },
@@ -350,6 +399,71 @@ export class UserTierService {
       status: userStatus,
       customModelOverride: user.customModelOverride,
       warning,
+    };
+  }
+
+  async getUser(telegramUserId: number): Promise<{
+    id: number;
+    telegramUserId: number;
+    username: string | null;
+    firstName: string | null;
+    lastName: string | null;
+    tier: UserTier;
+    status: UserStatus;
+    dailyQuota: number;
+    activePersonaId: string;
+    personality: string;
+    mode: string;
+    customModelOverride: string | null;
+  } | null> {
+    const rows = await db
+      .select()
+      .from(usersTable)
+      .where(eq(usersTable.telegramUserId, telegramUserId))
+      .limit(1);
+    if (!rows.length) return null;
+    const u = rows[0];
+    const tier = (u.tier === "vip" || u.tier === "pro" ? u.tier : "free") as UserTier;
+    return {
+      id: u.id,
+      telegramUserId: Number(u.telegramUserId),
+      username: u.username,
+      firstName: u.firstName,
+      lastName: u.lastName,
+      tier,
+      status: (u.status || "active") as UserStatus,
+      dailyQuota: u.dailyQuota,
+      activePersonaId: u.activePersonaId || "default_assistant",
+      personality: u.personality || "playful",
+      mode: u.mode || "general",
+      customModelOverride: u.customModelOverride || null,
+    };
+  }
+
+  async getUserTier(telegramUserId: number): Promise<UserTier> {
+    const user = await this.getUser(telegramUserId);
+    if (!user) {
+      const policy = await this.getPolicy();
+      return (policy.defaultTier || "free") as UserTier;
+    }
+    return user.tier;
+  }
+
+  async getUserTierProfile(telegramUserId: number): Promise<{
+    tier: UserTier;
+    config: TierConfig;
+    status: UserStatus;
+    customModelOverride: string | null;
+  }> {
+    const policy = await this.getPolicy();
+    const user = await this.getUser(telegramUserId);
+    const tier = (user?.tier || policy.defaultTier || "free") as UserTier;
+    const config = policy.tiers[tier] || DEFAULT_TIER_CONFIGS[tier];
+    return {
+      tier,
+      config,
+      status: (user?.status || "active") as UserStatus,
+      customModelOverride: user?.customModelOverride || null,
     };
   }
 

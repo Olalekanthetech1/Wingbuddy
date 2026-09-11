@@ -64,6 +64,8 @@ import {
   formatMemoriesMenuText,
   formatRemindersMenuText,
   formatPersonasMenuText,
+  formatUpgradeOfferText,
+  upgradeKeyboard,
   modeText,
   personalityText,
 } from "./navigation";
@@ -394,10 +396,17 @@ export function createTelegramBot(): TelegramBotRuntime {
         `• <b>Status:</b> ${stats.status === "active" ? "Active ✅" : stats.status}`,
         stats.customModelOverride ? `• <b>Assigned Model Override:</b> <code>${escapeHtml(stats.customModelOverride)}</code>` : null,
         ``,
-        `<i>Daily quotas automatically reset at midnight UTC. Contact your administrator to adjust tiers or models.</i>`,
+        stats.tier === "vip"
+          ? "✨ <i>You are on the highest VIP tier with full access to all models and expert personas.</i>"
+          : "<i>Upgrade to PRO or VIP to unlock deep reasoning personas, higher limits, and priority processing.</i>",
       ].filter(Boolean);
 
-      await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+      const kb = new InlineKeyboard();
+      if (stats.tier === "free") kb.text("⚡ Upgrade to PRO", "upgrade:view:pro").text("👑 Upgrade to VIP", "upgrade:view:vip").row();
+      else if (stats.tier === "pro") kb.text("👑 Upgrade to VIP Pass", "upgrade:view:vip").row();
+      kb.text("🎭 Browse Personas", "menu:personas").text("◀️ Main Menu", "menu:main");
+
+      await ctx.reply(lines.join("\n"), { parse_mode: "HTML", reply_markup: kb });
     } catch (err) {
       logger.error({ error: safeErrorMetadata(err) }, "Failed to fetch user tier status in Telegram command");
       await ctx.reply("⚠️ Could not retrieve account tier details right now. Please try again later.");
@@ -568,13 +577,29 @@ export function createTelegramBot(): TelegramBotRuntime {
         const tier = await userTierService.getUserTier(ctx.from.id);
         await ctx.reply(msg, { parse_mode: "HTML", reply_markup: personaKeyboard(personas, p.id, tier) });
       } else {
-        const errorMsg = switchRes.error || "Persona not found.";
-        const personas = await personaService.getAllPersonas();
-        const current = (await personaService.getUserActivePersona(ctx.from.id)).persona;
-        const tier = await userTierService.getUserTier(ctx.from.id);
-        await ctx.reply(`⚠️ ${errorMsg}\n\nSelect an available persona below:`, {
+        const [personas, currentRes, tierProfile, policy] = await Promise.all([
+          personaService.getAllPersonas(),
+          personaService.getUserActivePersona(ctx.from.id),
+          userTierService.getUserTierProfile(ctx.from.id),
+          userTierService.getPolicy(),
+        ]);
+
+        const requiredTier = switchRes.requiresTier as "pro" | "vip" | undefined;
+        const kb = new InlineKeyboard();
+        if (requiredTier && (requiredTier === "pro" || requiredTier === "vip")) {
+          const badge = requiredTier === "vip" ? "👑 VIP Pass" : "⚡ PRO Pass";
+          kb.text(`💎 Upgrade to ${badge}`, `upgrade:view:${requiredTier}`).row();
+        }
+        personas.filter((p) => p.enabled).forEach((p) => {
+          const isLocked = (p.requiredTier === "vip" && tierProfile.tier !== "vip") ||
+            (p.requiredTier === "pro" && tierProfile.tier === "free");
+          const label = `${p.emoji} ${p.name}${isLocked ? " 🔒" : ""}`;
+          kb.text(label, `persona:select:${p.id}`).row();
+        });
+        kb.text("◀️ Back", "menu:personas");
+        await ctx.reply(`⚠️ ${switchRes.error || "Persona not accessible."}`, {
           parse_mode: "HTML",
-          reply_markup: personaKeyboard(personas, current.id, tier),
+          reply_markup: kb,
         });
       }
       return;
@@ -673,11 +698,47 @@ export function createTelegramBot(): TelegramBotRuntime {
         reply_markup: personaKeyboard(personas, switchRes.persona.id, tierProfile.tier),
       });
     } else {
-      await ctx.answerCallbackQuery({
-        text: switchRes.error?.replace(/<[^>]+>/g, "") || "Could not switch persona",
-        show_alert: true,
+      await ctx.answerCallbackQuery();
+      const requiredTier = (switchRes.requiresTier as "pro" | "vip") || "pro";
+      const [policy, tierProfile, personaTarget] = await Promise.all([
+        userTierService.getPolicy(),
+        userTierService.getUserTierProfile(ctx.from.id),
+        personaService.getPersonaById(targetPersonaId),
+      ]);
+      const offerText = formatUpgradeOfferText(
+        requiredTier,
+        tierProfile.tier,
+        personaTarget ? { name: personaTarget.name, emoji: personaTarget.emoji } : undefined,
+        policy,
+      );
+      await ctx.editMessageText(offerText, {
+        parse_mode: "HTML",
+        reply_markup: upgradeKeyboard(requiredTier, policy, targetPersonaId),
       });
     }
+  });
+
+  bot.callbackQuery(/^upgrade:view:(pro|vip)$/, async (ctx) => {
+    if (!ctx.from || !authorized(ctx.from.id)) {
+      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
+      return;
+    }
+    await ctx.answerCallbackQuery();
+    const targetTier = ctx.match[1] as "pro" | "vip";
+    const [policy, tierProfile] = await Promise.all([
+      userTierService.getPolicy(),
+      userTierService.getUserTierProfile(ctx.from.id),
+    ]);
+    const text = formatUpgradeOfferText(targetTier, tierProfile.tier, undefined, policy);
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      reply_markup: upgradeKeyboard(targetTier, policy),
+    }).catch(async () => {
+      await ctx.reply(text, {
+        parse_mode: "HTML",
+        reply_markup: upgradeKeyboard(targetTier, policy),
+      });
+    });
   });
   bot.callbackQuery(/^rem_done:(\d+)$/, async (ctx) => { if (!ctx.from || !authorized(ctx.from.id)) { await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true }); return; } const reminderId = parseInt(ctx.match[1], 10); await reminderService.completeReminder(reminderId, ctx.from.id); await ctx.answerCallbackQuery({ text: "✅ Marked reminder as done!" }); await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard().text("✅ Completed", "feedback:no-op") }); });
   bot.callbackQuery(/^rem_snooze:(\d+):(\d+)$/, async (ctx) => { if (!ctx.from || !authorized(ctx.from.id)) { await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true }); return; } const reminderId = parseInt(ctx.match[1], 10); const minutes = parseInt(ctx.match[2], 10) || 10; const updated = await reminderService.snoozeReminder(reminderId, minutes, ctx.from.id); if (updated) { const timeStr = updated.dueAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); await ctx.answerCallbackQuery({ text: `⏰ Snoozed for ${minutes}m (until ${timeStr})` }); await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard().text(`⏰ Snoozed until ${timeStr}`, "feedback:no-op") }); } else await ctx.answerCallbackQuery({ text: "Reminder not found or already completed." }); });

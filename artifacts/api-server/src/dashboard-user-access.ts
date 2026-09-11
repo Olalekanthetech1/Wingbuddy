@@ -78,6 +78,12 @@ export function renderDashboardUserAccess(): string {
     if (whitelist) whitelist.value = pol.whitelistOnly ? 'true' : 'false';
     if (freeQuota) freeQuota.value = pol.tiers?.free?.dailyQuota ?? 30;
     if (proQuota) proQuota.value = pol.tiers?.pro?.dailyQuota ?? 150;
+    
+    if (document.getElementById('uaSupportContact')) document.getElementById('uaSupportContact').value = pol.supportContact || '@admin';
+    if (document.getElementById('uaProPrice')) document.getElementById('uaProPrice').value = pol.tiers?.pro?.priceLabel || '$9.99 / month';
+    if (document.getElementById('uaProCheckout')) document.getElementById('uaProCheckout').value = pol.tiers?.pro?.checkoutUrl || '';
+    if (document.getElementById('uaVipPrice')) document.getElementById('uaVipPrice').value = pol.tiers?.vip?.priceLabel || '$24.99 / month';
+    if (document.getElementById('uaVipCheckout')) document.getElementById('uaVipCheckout').value = pol.tiers?.vip?.checkoutUrl || '';
   }
 
   function getTierBadge(tier) {
@@ -279,6 +285,11 @@ export function renderDashboardUserAccess(): string {
     const whitelist = document.getElementById('uaPolicyWhitelist')?.value === 'true';
     const freeQuota = Number(document.getElementById('uaPolicyFreeQuota')?.value) || 30;
     const proQuota = Number(document.getElementById('uaPolicyProQuota')?.value) || 150;
+    const supportContact = document.getElementById('uaSupportContact')?.value || '@admin';
+    const proPrice = document.getElementById('uaProPrice')?.value || '$9.99 / month';
+    const proCheckout = document.getElementById('uaProCheckout')?.value || '';
+    const vipPrice = document.getElementById('uaVipPrice')?.value || '$24.99 / month';
+    const vipCheckout = document.getElementById('uaVipCheckout')?.value || '';
 
     try {
       const res = await fetch('/api/access/policy', {
@@ -287,9 +298,11 @@ export function renderDashboardUserAccess(): string {
         body: JSON.stringify({
           defaultTier: defTier,
           whitelistOnly: whitelist,
+          supportContact: supportContact,
           tiers: {
             free: { dailyQuota: freeQuota },
-            pro: { dailyQuota: proQuota }
+            pro: { dailyQuota: proQuota, priceLabel: proPrice, checkoutUrl: proCheckout },
+            vip: { priceLabel: vipPrice, checkoutUrl: vipCheckout }
           }
         })
       });
@@ -410,7 +423,31 @@ export function renderDashboardUserAccess(): string {
                 <input id="uaPolicyProQuota" class="input" type="number" value="150" style="margin-top:4px" />
               </div>
             </div>
-            <div style="font-size:12px;color:var(--muted);background:#091524;padding:8px 12px;border-radius:8px">
+            
+            <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px;">
+              <div class="section-title" style="margin-bottom:8px;">💎 Upgrade & Monetization</div>
+              <div class="field" style="margin-bottom:12px;">
+                <label class="label">Admin Support Telegram Handle</label>
+                <input id="uaSupportContact" class="input" placeholder="@admin or @YourSupportHandle" style="margin-top:4px;" />
+                <div class="sub">Used on upgrade offer cards in Telegram when users tap locked personas.</div>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div class="field">
+                  <label class="label">PRO Plan Price Label</label>
+                  <input id="uaProPrice" class="input" placeholder="e.g. $9.99 / mo or 50 Stars" style="margin-top:4px;" />
+                  <label class="label" style="margin-top:8px">PRO Checkout URL (Optional)</label>
+                  <input id="uaProCheckout" class="input" placeholder="https://t.me/invoice/... or payment link" style="margin-top:4px;" />
+                </div>
+                <div class="field">
+                  <label class="label">VIP Plan Price Label</label>
+                  <input id="uaVipPrice" class="input" placeholder="e.g. $24.99 / mo or 150 Stars" style="margin-top:4px;" />
+                  <label class="label" style="margin-top:8px">VIP Checkout URL (Optional)</label>
+                  <input id="uaVipCheckout" class="input" placeholder="https://t.me/invoice/... or payment link" style="margin-top:4px;" />
+                </div>
+              </div>
+            </div>
+
+            <div style="font-size:12px;color:var(--muted);background:#091524;padding:8px 12px;border-radius:8px;margin-top:12px;">
               💡 <strong>How Routing Works:</strong> Free users route to ultra-fast, budget-optimized models (e.g. Qwen, Ministral 3B, Gemini Flash). VIP users automatically route to heavy-duty reasoning models (e.g. DeepSeek-R1, GPT-OSS 120B) with unlimited quotas.
             </div>
           </div>
