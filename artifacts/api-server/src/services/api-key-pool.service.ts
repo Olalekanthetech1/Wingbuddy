@@ -249,6 +249,14 @@ export class ApiKeyPoolService {
     await this.insertPersistedKey(managed); this.keys.set(id, managed); process.env.GEMINI_API_KEY = this.getJoinedRawKeys(); return this.toPublic(managed);
   }
 
+  public async purgeInvalidKeys(): Promise<number> {
+    if (!this.initialized) await this.initializeDb();
+    const result = await db.execute(sql`UPDATE ${sql.raw(TABLE)} SET enabled = FALSE, deleted_at = NOW(), updated_at = NOW() WHERE status = 'invalid' AND deleted_at IS NULL`);
+    const count = Number(result.rowCount || result.rows?.length || 0);
+    await this.hydrateFromDatabase();
+    return count;
+  }
+
   public async removeKey(id: string): Promise<{ removed: boolean; source?: KeySource }> {
     const item = this.keys.get(id);
     if (!item) {
@@ -283,7 +291,7 @@ export class ApiKeyPoolService {
       const model = process.env.GEMINI_MODEL?.trim() || process.env.GEMINI_MODEL_FAST?.trim() || process.env.GEMINI_MODEL_REASONING?.trim() || process.env.GEMINI_MODEL_POOL?.split(",").map((item) => item.trim()).find(Boolean);
       if (!model) return { valid: false, latencyMs: Date.now() - start, error: "No configured generative Gemini model is available for key validation" };
       const client = new GoogleGenAI({ apiKey: rawKey.trim() });
-      const response = await client.models.generateContent({ model, contents: [{ role: "user", parts: [{ text: "ping" }] }], config: { maxOutputTokens: 5 } });
+      const response = await client.models.generateContent({ model, contents: [{ role: "user", parts: [{ text: "hi" }] }], config: { maxOutputTokens: 1, temperature: 0 } });
       return { valid: Boolean(response), latencyMs: Date.now() - start };
     } catch (error) {
       const latencyMs = Date.now() - start; const errorMsg = error instanceof Error ? error.message : String(error);

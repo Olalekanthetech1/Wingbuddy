@@ -123,7 +123,7 @@ class GeminiAdapter implements AIProviderAdapter {
         await this.generateEmbeddings({ model, input: "ping", dimensions: 768 }, provider, apiKey);
         return { ok: true, latencyMs: Date.now() - started };
       }
-      await this.chat({ model, messages: [{ role: "user", content: "ping" }], maxOutputTokens: 4 }, provider, apiKey);
+      await this.chat({ model, messages: [{ role: "user", content: "hi" }], maxOutputTokens: 1, temperature: 0 }, provider, apiKey);
       return { ok: true, latencyMs: Date.now() - started };
     } catch (error) {
       return { ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) };
@@ -161,7 +161,7 @@ abstract class OpenAICompatibleAdapter implements AIProviderAdapter {
         await this.generateEmbeddings({ model, input: "ping" }, provider, apiKey);
         return { ok: true, latencyMs: Date.now() - started };
       }
-      await this.chat({ model, messages: [{ role: "user", content: "ping" }], maxOutputTokens: 4 }, provider, apiKey);
+      await this.chat({ model, messages: [{ role: "user", content: "hi" }], maxOutputTokens: 1, temperature: 0 }, provider, apiKey);
       return { ok: true, latencyMs: Date.now() - started };
     } catch (error) {
       return { ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) };
@@ -364,7 +364,7 @@ class HuggingFaceAdapter implements AIProviderAdapter {
         return { ok: true, latencyMs: Date.now() - started };
       }
 
-      await this.chat({ model, messages: [{ role: "user", content: "ping" }], maxOutputTokens: 4 }, provider, apiKey);
+      await this.chat({ model, messages: [{ role: "user", content: "hi" }], maxOutputTokens: 1, temperature: 0 }, provider, apiKey);
       return { ok: true, latencyMs: Date.now() - started };
     } catch (error) {
       return { ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) };

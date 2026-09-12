@@ -30,6 +30,7 @@ export function renderDashboardProviderKeyControls(): string {
           '<option value="failover">Failover</option>' +
         '</select>' +
         '<button id="pk-mode-save" class="btn">Save Rotation</button>' +
+        '<button id="pk-purge" class="btn danger">Purge Invalid Keys</button>' +
         '<button id="pk-refresh" class="btn">Refresh</button>' +
       '</div>' +
     '</div>' +
@@ -218,6 +219,21 @@ export function renderDashboardProviderKeyControls(): string {
   function wireProviderKeyEvents() {
     const refreshBtn = $('pk-refresh');
     if (refreshBtn) refreshBtn.onclick = loadProviderKeys;
+
+    const purgeBtn = $('pk-purge');
+    if (purgeBtn) {
+      purgeBtn.onclick = async () => {
+        if (!confirm('Purge all invalid keys from database across all providers?')) return;
+        try {
+          const res = await json('/api/provider-keys/purge-invalid', { method: 'POST', body: '{}' });
+          if (window.toast) window.toast(res.message || 'Invalid keys purged');
+          loadProviderKeys();
+        } catch(e) {
+          if (window.toast) window.toast('Purge failed: ' + e.message, true);
+          else alert(e.message);
+        }
+      };
+    }
 
     const modeSaveBtn = $('pk-mode-save');
     if (modeSaveBtn) {

@@ -104,6 +104,16 @@ router.post("/provider-keys", async (req: Request, res: Response) => {
   } catch (error) { logger.warn({ error: error instanceof Error ? error.message : String(error) }, "Provider API key add failed"); res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
 });
 
+router.post("/provider-keys/purge-invalid", async (_req: Request, res: Response) => {
+  try {
+    const p1 = await apiKeyPoolService.purgeInvalidKeys();
+    const p2 = await aiProviderKeyPoolService.purgeInvalidKeys();
+    res.json({ message: `Purged ${p1 + p2} invalid API keys from database.`, purgedCount: p1 + p2 });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
 router.delete("/provider-keys/:id", async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id);

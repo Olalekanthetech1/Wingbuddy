@@ -32,6 +32,16 @@ router.post("/keys", async (req: Request, res: Response) => {
   }
 });
 
+router.post("/keys/purge-invalid", async (_req: Request, res: Response) => {
+  try {
+    const p1 = await apiKeyPoolService.purgeInvalidKeys();
+    res.json({ message: `Purged ${p1} invalid Gemini API keys from database.`, purgedCount: p1, poolSummary: apiKeyPoolService.getSummary() });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
+});
+
 router.delete("/keys/:id", async (req: Request, res: Response) => {
   const rawId = req.params.id;
   const id = Array.isArray(rawId) ? rawId[0] : rawId;
