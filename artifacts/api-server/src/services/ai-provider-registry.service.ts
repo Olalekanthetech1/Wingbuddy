@@ -37,7 +37,7 @@ function normalize(value: unknown): AIProviderRecord[] {
       capabilities,
       baseUrl: typeof item.baseUrl === "string" && item.baseUrl.trim() ? item.baseUrl.trim().replace(/\/+$/, "") : defaults.baseUrl,
       name: typeof item.name === "string" && item.name.trim() ? item.name.trim() : defaults.name,
-      enabled: item.id === "huggingface" ? item.enabled !== false : item.enabled === true,
+      enabled: item.enabled !== false,
       createdAt: item.createdAt || new Date().toISOString(),
       updatedAt: item.updatedAt || new Date().toISOString(),
     };
@@ -66,12 +66,19 @@ export class AIProviderRegistryService {
       if (rows[0]?.value) {
         const stored = normalize(JSON.parse(rows[0].value));
         const byId = new Map(stored.map((provider) => [provider.id, provider]));
-        const merged = Object.values(BUILT_IN_PROVIDERS).map((defaults) => byId.get(defaults.id) || {
+      return Object.values(BUILT_IN_PROVIDERS).map((defaults) => {
+        const storedItem = byId.get(defaults.id);
+        const hasEnv = Boolean(process.env[defaults.apiKeyEnv]?.trim());
+        // Default enabled to true if stored as enabled, or if environment/key pool has configured keys
+        const enabled = storedItem ? storedItem.enabled : (defaults.id === "huggingface" ? true : hasEnv);
+        return {
           ...defaults,
-          enabled: defaults.id === "huggingface" ? true : false,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        });
+          ...(storedItem || {}),
+          enabled,
+          createdAt: storedItem?.createdAt || new Date().toISOString(),
+          updatedAt: storedItem?.updatedAt || new Date().toISOString(),
+        };
+      });
         this.cache = merged;
         this.cacheAt = Date.now();
         return merged;

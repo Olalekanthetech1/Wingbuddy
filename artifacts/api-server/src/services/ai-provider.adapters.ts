@@ -134,7 +134,8 @@ class GeminiAdapter implements AIProviderAdapter {
     const client = new GoogleGenAI({ apiKey: requireApiKey(provider, apiKey) });
     const inputs = Array.isArray(request.input) ? request.input : [request.input];
     const embeddings: number[][] = [];
-    const model = request.model?.trim() || "gemini-embedding-2";
+    const rawModel = request.model?.trim() || "text-embedding-004";
+    const model = rawModel === "text-embedding-004" || rawModel === "gemini-embedding-2" ? "text-embedding-004" : rawModel;
     for (const text of inputs) {
       const config = request.dimensions ? { outputDimensionality: request.dimensions } : { outputDimensionality: 768 };
       const response: any = await client.models.embedContent({
