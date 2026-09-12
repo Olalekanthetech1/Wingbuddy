@@ -58,6 +58,9 @@ export class ToolNodeExecutor implements INodeExecutor {
 
     if (policy.destructive || policy.confirmationRequired || (node.approval && node.approval.status !== "not_required")) {
       const storedApproval = await executionPersistence.getApproval(graphId, planRevision, node.id);
+      
+      const crypto = await import("crypto");
+      const parameterHash = crypto.createHash("sha256").update(JSON.stringify(resolvedInputs || {})).digest("hex");
 
       if (!storedApproval || storedApproval.status === "pending") {
         if (!storedApproval) {
@@ -70,6 +73,7 @@ export class ToolNodeExecutor implements INodeExecutor {
             status: "pending",
             reason: node.approval?.reason || `User confirmation required for tool: ${toolName}`,
             requestedAt: new Date().toISOString(),
+            parameterHash,
           });
         }
 
@@ -104,6 +108,19 @@ export class ToolNodeExecutor implements INodeExecutor {
           error: {
             code: "UNAPPROVED_DESTRUCTIVE_OPERATION",
             message: `Tool "${toolName}" on node "${node.id}" requires user approval before execution. Current status: "${storedApproval.status}".`,
+            retryable: false,
+            category: "authorization",
+          },
+          metadata: { durationMs: Date.now() - startTime },
+        };
+      }
+
+      if (storedApproval.parameterHash && storedApproval.parameterHash !== parameterHash) {
+        return {
+          success: false,
+          error: {
+            code: "APPROVAL_PARAMETER_MISMATCH",
+            message: `Cryptographic binding mismatch: Parameters for tool "${toolName}" on node "${node.id}" were mutated after approval.`,
             retryable: false,
             category: "authorization",
           },

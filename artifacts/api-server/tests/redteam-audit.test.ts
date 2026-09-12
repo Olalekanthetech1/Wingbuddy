@@ -32,7 +32,7 @@ describe("Production Red-Team Audit & Architectural Verification Suite", () => {
       const userId = 101;
       expect(await mockConversations.getUserMode(userId)).toBe("general");
 
-      const rawInput = "Switch to study mode and explain calculus derivatives";
+      const rawInput = "Switch to study mode and explain calculus derivatives"; 
       const intent = AdaptiveIntentService.detectModeSwitchIntent(rawInput, modeService);
 
       expect(intent.isModeSwitch).toBe(true);

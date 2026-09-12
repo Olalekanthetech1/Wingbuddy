@@ -1,4 +1,6 @@
 import { logger } from "../lib/logger";
+import { aiProviderKeyPoolService } from "./ai-provider-key-pool.service";
+import { researchObservabilityService } from "./research-observability.service";
 
 const TAVILY_API_URL = "https://api.tavily.com";
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -55,15 +57,19 @@ export interface TavilyExtractResponse {
 }
 
 export class TavilyService {
-  private readonly apiKey?: string;
+  private readonly fallbackApiKey?: string;
   private readonly timeoutMs: number;
 
-  constructor(apiKey = process.env.TAVILY_API_KEY?.trim() || undefined) {
-    this.apiKey = apiKey;
+  constructor(fallbackApiKey = process.env.TAVILY_API_KEY?.trim() || undefined) {
+    this.fallbackApiKey = fallbackApiKey;
     this.timeoutMs = Number(process.env.TAVILY_TIMEOUT_MS) > 0 ? Number(process.env.TAVILY_TIMEOUT_MS) : DEFAULT_TIMEOUT_MS;
   }
 
-  isConfigured(): boolean { return Boolean(this.apiKey); }
+  isConfigured(): boolean {
+    const summary = aiProviderKeyPoolService.getSummary("tavily");
+    if (summary.healthyKeys > 0 || summary.totalKeys > 0) return true;
+    return Boolean(this.fallbackApiKey);
+  }
 
   async search(options: TavilySearchOptions): Promise<TavilySearchResponse> {
     const query = options.query.trim();
@@ -82,27 +88,54 @@ export class TavilyService {
     if (options.includeDomains?.length) payload.include_domains = options.includeDomains;
     if (options.excludeDomains?.length) payload.exclude_domains = options.excludeDomains;
     if (options.country) payload.country = options.country;
-    const data = await this.request("/search", payload);
-    return {
-      query,
-      results: Array.isArray(data.results) ? data.results.map((item: any) => ({
-        title: String(item?.title || "Untitled source"), url: String(item?.url || ""), content: String(item?.content || ""),
+
+    const start = Date.now();
+    try {
+      const data = await this.requestWithPool("/search", payload);
+      const latencyMs = Date.now() - start;
+      const results: TavilySearchResult[] = Array.isArray(data.results) ? data.results.map((item: any) => ({
+        title: String(item?.title || "Untitled source"),
+        url: String(item?.url || ""),
+        content: String(item?.content || ""),
         score: typeof item?.score === "number" ? item.score : undefined,
         publishedDate: item?.published_date ? String(item.published_date) : undefined,
         rawContent: item?.raw_content ? String(item.raw_content) : undefined,
-      })).filter((item: TavilySearchResult) => item.url) : [],
-      answer: typeof data.answer === "string" ? data.answer : undefined,
-      responseTime: typeof data.response_time === "number" ? data.response_time : undefined,
-      requestId: typeof data.request_id === "string" ? data.request_id : undefined,
-      provider: "tavily",
-      retrievedAt: new Date().toISOString(),
-    };
+      })).filter((item: TavilySearchResult) => item.url) : [];
+
+      researchObservabilityService.recordExecution({
+        query,
+        depth: options.searchDepth || "basic",
+        resultsCount: results.length,
+        latencyMs,
+        success: true,
+      });
+
+      return {
+        query,
+        results,
+        answer: typeof data.answer === "string" ? data.answer : undefined,
+        responseTime: typeof data.response_time === "number" ? data.response_time : latencyMs,
+        requestId: typeof data.request_id === "string" ? data.request_id : undefined,
+        provider: "tavily",
+        retrievedAt: new Date().toISOString(),
+      };
+    } catch (error) {
+      const latencyMs = Date.now() - start;
+      researchObservabilityService.recordExecution({
+        query,
+        depth: options.searchDepth || "basic",
+        resultsCount: 0,
+        latencyMs,
+        success: false,
+      });
+      throw error;
+    }
   }
 
   async extract(urls: string[], extractDepth: "basic" | "advanced" = "basic"): Promise<TavilyExtractResponse> {
     const normalized = [...new Set(urls.map((url) => url.trim()).filter(Boolean))].slice(0, 20);
     if (!normalized.length) throw new Error("Tavily extract requires at least one URL.");
-    const data = await this.request("/extract", { urls: normalized, extract_depth: extractDepth });
+    const data = await this.requestWithPool("/extract", { urls: normalized, extract_depth: extractDepth });
     return {
       results: Array.isArray(data.results) ? data.results.map((item: any) => ({
         url: String(item?.url || ""), rawContent: String(item?.raw_content || ""), provider: "tavily" as const, retrievedAt: new Date().toISOString(),
@@ -113,8 +146,35 @@ export class TavilyService {
     };
   }
 
-  private async request(path: string, payload: Record<string, unknown>): Promise<any> {
-    if (!this.apiKey) throw new Error("Tavily web research is not configured. Set TAVILY_API_KEY on the server.");
+  private async requestWithPool(path: string, payload: Record<string, unknown>): Promise<any> {
+    await aiProviderKeyPoolService.hydrateProvider("tavily", "TAVILY_API_KEY");
+    const orderedKeys = aiProviderKeyPoolService.getOrderedKeys("tavily");
+
+    if (orderedKeys.length > 0) {
+      let lastPoolError: unknown;
+      for (const managedKey of orderedKeys) {
+        const start = Date.now();
+        try {
+          const result = await this.executeRawRequest(path, payload, managedKey.key);
+          aiProviderKeyPoolService.recordSuccess(managedKey.id, Date.now() - start);
+          return result;
+        } catch (error) {
+          aiProviderKeyPoolService.recordFailure(managedKey.id, error);
+          lastPoolError = error;
+          logger.warn({ keyId: managedKey.id, provider: "tavily", error: String(error) }, "Tavily key pool attempt failed; rotating/failing over");
+        }
+      }
+      throw lastPoolError instanceof Error ? lastPoolError : new Error("All managed Tavily keys in the pool failed.");
+    }
+
+    if (this.fallbackApiKey) {
+      return this.executeRawRequest(path, payload, this.fallbackApiKey);
+    }
+
+    throw new Error("Tavily web research is not configured. Add a Tavily API key in the dashboard or set TAVILY_API_KEY.");
+  }
+
+  private async executeRawRequest(path: string, payload: Record<string, unknown>, apiKey: string): Promise<any> {
     let lastError: unknown;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
       const controller = new AbortController();
@@ -122,7 +182,7 @@ export class TavilyService {
       try {
         const response = await fetch(`${TAVILY_API_URL}${path}`, {
           method: "POST",
-          headers: { Authorization: `Bearer ${this.apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
+          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
           body: JSON.stringify(payload), signal: controller.signal,
         });
         const text = await response.text();

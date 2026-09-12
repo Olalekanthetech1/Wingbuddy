@@ -12,6 +12,7 @@ import { GeminiService, type GeminiMessage } from "../gemini/gemini.service";
 import { AdaptiveIntentService } from "../services/adaptive-intent.service";
 import { ImageGenerationService } from "../services/image-generation.service";
 import { VideoGenerationService } from "../services/video-generation.service";
+import { UnifiedMediaEngine } from "../services/media/unified-media-engine.service";
 import { MediaProcessorService, type ProcessedMedia } from "../services/media-processor.service";
 import { RateLimitService } from "../services/rate-limit.service";
 import { isAuthorizedTelegramUser } from "../services/authorization.service";
@@ -29,6 +30,7 @@ import {
 } from "../config/personality";
 import { memoryService } from "../services/memory.service";
 import { taskService } from "../services/task.service";
+import { cronTaskService } from "../services/cron-task.service";
 import { userTierService } from "../services/user-tier.service";
 import { personaService } from "../services/persona.service";
 import { contextManagerService } from "../services/context-manager.service";
@@ -369,7 +371,7 @@ export function createTelegramBot(): TelegramBotRuntime {
     });
   });
 
-  bot.command(["tier", "quota", "account", "plan"], async (ctx) => {
+  bot.command(["tier", "quota", "account", "plan", "upgrade", "premium"], async (ctx) => {
     if (!(await requireAuthorized(ctx))) return;
     if (!ctx.from || !ctx.chat) return;
     await upsertUser(ctx);
@@ -501,17 +503,32 @@ export function createTelegramBot(): TelegramBotRuntime {
     }
     const stopPresence = startTypingIndicator(ctx, { state: "generating", toolName: "image_generation", operationLabel: "image generation", chatAction: "upload_photo", userFacingProgress: false });
     try {
-      const result = await ImageGenerationService.generate(rawPrompt, gemini);
+      const mediaResult = await UnifiedMediaEngine.execute({
+        modality: "image",
+        prompt: rawPrompt,
+        executionMode: "live",
+        userId: ctx.from.id,
+        sourceInterface: "telegram",
+      });
+
+      if (!mediaResult.success || !mediaResult.artifact?.buffer) {
+        throw new Error(mediaResult.job.errorMessage || "Image generation did not produce a valid image buffer");
+      }
+
       const conversationId = await conversations.getOrCreateConversation(ctx.from.id, ctx.chat.id);
       await conversations.addMessage(conversationId, "user", `/image ${rawPrompt}`);
-      await conversations.addMessage(conversationId, "model", `[Generated Image for: "${rawPrompt}"] Enhanced: "${result.enhancedPrompt}"`);
-      const imageBadge = result.provider === "huggingface" ? "<i>Engine: 🤗 Hugging Face (FLUX.1)</i>" : "<i>Engine: 🌐 Free Community (FLUX.1)</i>";
-      const enhancerTag = result.enhancerName ? `<i>✨ Enhanced (${escapeHtml(result.enhancerName)}):</i>` : `<i>✨ AI Enhanced:</i>`;
-      const caption = [`<b>🎨 Prompt:</b> ${escapeHtml(result.originalPrompt)}`, result.enhancedPrompt.toLowerCase() !== result.originalPrompt.toLowerCase() ? `${enhancerTag} ${escapeHtml(result.enhancedPrompt)}` : null, imageBadge].filter(Boolean).join("\n\n");
+      await conversations.addMessage(conversationId, "model", `[Generated Image for: "${rawPrompt}"] Enhanced: "${mediaResult.job.enhancedPrompt}"`);
+      
+      const imageBadge = `<i>Engine: ${escapeHtml(mediaResult.job.actualProvider)} (${escapeHtml(mediaResult.job.actualModel)})</i>`;
+      const enhancerTag = `<i>✨ AI Enhanced:</i>`;
+      const caption = [
+        `<b>🎨 Prompt:</b> ${escapeHtml(rawPrompt)}`,
+        mediaResult.job.enhancedPrompt.toLowerCase() !== rawPrompt.toLowerCase() ? `${enhancerTag} ${escapeHtml(mediaResult.job.enhancedPrompt)}` : null,
+        imageBadge
+      ].filter(Boolean).join("\n\n");
       const safeCaption = caption.length > 1000 ? caption.slice(0, 995) + "..." : caption;
-      if (!result?.buffer || !Buffer.isBuffer(result.buffer) || result.buffer.length < 500) throw new Error("Image generation did not produce a valid image buffer");
-      await ctx.replyWithPhoto(new InputFile(result.buffer, "image.jpg"), { caption: safeCaption, parse_mode: "HTML", reply_markup: feedbackKeyboard() });
-      await userTierService.consumeToolQuota(ctx.from.id, "image");
+
+      await ctx.replyWithPhoto(new InputFile(mediaResult.artifact.buffer, "image.png"), { caption: safeCaption, parse_mode: "HTML", reply_markup: feedbackKeyboard() });
     } catch (error) {
       logger.error({ stage: "image_generation", error: safeErrorMetadata(error) }, "Image generation failed");
       await ctx.reply("Sorry, I encountered an issue generating that image. Please try again or rephrase your prompt.");
@@ -541,22 +558,39 @@ export function createTelegramBot(): TelegramBotRuntime {
     try {
       progressMsg = await interactionPresentationService.renderProgress(ctx, { state: "executing_tool", toolName: "video_generation", operationLabel: "video generation", chatAction: "upload_video", expectsLongRunning: true, elapsedMs: 0 });
       const startedAt = Date.now();
-      const result = await VideoGenerationService.generate(rawPrompt, gemini);
+      const mediaResult = await UnifiedMediaEngine.execute({
+        modality: "video",
+        prompt: rawPrompt,
+        executionMode: "live",
+        userId: ctx.from.id,
+        sourceInterface: "telegram",
+      });
+
+      if (!mediaResult.success || !mediaResult.artifact?.buffer) {
+        throw new Error(mediaResult.job.errorMessage || "Video generation did not produce a valid video buffer");
+      }
+
       const conversationId = await conversations.getOrCreateConversation(ctx.from.id, ctx.chat.id);
       await conversations.addMessage(conversationId, "user", `/video ${rawPrompt}`);
-      await conversations.addMessage(conversationId, "model", `[Generated Visual (${result.provider}) for: "${rawPrompt}"] Enhanced: "${result.enhancedPrompt}"`);
-      const providerBadge = result.provider === "huggingface" ? "🤗 Hugging Face" : "🌐 Free Community";
-      const enhancerTag = result.enhancerName ? `<i>✨ Enhanced (${escapeHtml(result.enhancerName)}):</i>` : `<i>✨ AI Enhanced:</i>`;
-      const caption = [`<b>🎬 Prompt:</b> ${escapeHtml(result.originalPrompt)}`, result.enhancedPrompt.toLowerCase() !== result.originalPrompt.toLowerCase() ? `${enhancerTag} ${escapeHtml(result.enhancedPrompt)}` : null, `<i>Engine: ${providerBadge}</i>`].filter(Boolean).join("\n\n");
+      await conversations.addMessage(conversationId, "model", `[Generated Visual (${mediaResult.job.actualProvider}) for: "${rawPrompt}"] Enhanced: "${mediaResult.job.enhancedPrompt}"`);
+      
+      const providerBadge = `${escapeHtml(mediaResult.job.actualProvider)} (${escapeHtml(mediaResult.job.videoTechnique || "video_diffusion")})`;
+      const enhancerTag = `<i>✨ AI Director:</i>`;
+      const caption = [
+        `<b>🎬 Prompt:</b> ${escapeHtml(rawPrompt)}`,
+        mediaResult.job.enhancedPrompt.toLowerCase() !== rawPrompt.toLowerCase() ? `${enhancerTag} ${escapeHtml(mediaResult.job.enhancedPrompt)}` : null,
+        `<i>Engine: ${providerBadge}</i>`
+      ].filter(Boolean).join("\n\n");
       const safeCaption = caption.length > 1000 ? caption.slice(0, 995) + "..." : caption;
+      
       if (progressMsg) await ctx.api.deleteMessage(ctx.chat.id, progressMsg).catch(() => {});
-      if (result.isVideo && Buffer.isBuffer(result.buffer) && result.buffer.length > 1000) {
-        await ctx.replyWithVideo(new InputFile(result.buffer, "video.mp4"), { caption: safeCaption, parse_mode: "HTML", reply_markup: feedbackKeyboard() });
-      } else if (Buffer.isBuffer(result.buffer) && result.buffer.length > 500) {
-        await ctx.replyWithPhoto(new InputFile(result.buffer, "storyboard.jpg"), { caption: `${safeCaption}\n\n<i>(Rendered as a cinematic storyboard concept frame)</i>`, parse_mode: "HTML", reply_markup: feedbackKeyboard() });
-      } else throw new Error("Video service did not produce a valid visual buffer");
-      await userTierService.consumeToolQuota(ctx.from.id, "video");
-      logger.info({ stage: "video_generation", elapsedMs: Date.now() - startedAt }, "Video generation completed");
+      
+      if (mediaResult.artifact.mimeType?.includes("video") || mediaResult.job.videoTechnique !== "fallback") {
+        await ctx.replyWithVideo(new InputFile(mediaResult.artifact.buffer, "video.mp4"), { caption: safeCaption, parse_mode: "HTML", reply_markup: feedbackKeyboard() });
+      } else {
+        await ctx.replyWithPhoto(new InputFile(mediaResult.artifact.buffer, "storyboard.jpg"), { caption: `${safeCaption}\n\n<i>(Rendered as a cinematic storyboard concept frame)</i>`, parse_mode: "HTML", reply_markup: feedbackKeyboard() });
+      }
+      logger.info({ stage: "video_generation", elapsedMs: Date.now() - startedAt }, "Video generation completed via UnifiedMediaEngine");
     } catch (error) {
       logger.error({ stage: "video_generation", error: safeErrorMetadata(error) }, "Video generation failed");
       if (progressMsg) await ctx.api.deleteMessage(ctx.chat.id, progressMsg).catch(() => {});
@@ -953,6 +987,16 @@ export function createTelegramBot(): TelegramBotRuntime {
         activeTaskContext = created;
         if (registeredRequest) requestRegistryService.markExecuting(registeredRequest.requestId, { taskId: created.task.id });
         await ctx.reply(`🎯 <b>New Task Created (#${created.task.id})</b>\n<b>Title:</b> ${escapeHtml(created.task.title)}\n<b>Goal:</b> ${escapeHtml(created.task.goal)}`, { parse_mode: "HTML", reply_markup: tasksKeyboard([created.task]) });
+      } else if (taskIntent.intent === "SCHEDULE_TASK" && taskIntent.taskTitle && taskIntent.cronExpression) {
+        try {
+            const created = await cronTaskService.scheduleRecurringTask({ telegramUserId: ctx.from.id, conversationId: globalContextData.conversationId, title: taskIntent.taskTitle, goal: taskIntent.taskGoal || taskIntent.taskTitle, cronExpression: taskIntent.cronExpression });
+            activeTaskContext = { task: created, steps: [] };
+            if (registeredRequest) requestRegistryService.markExecuting(registeredRequest.requestId, { taskId: created.id });
+            await ctx.reply(`⏰ <b>Scheduled Task Created (#${created.id})</b>\n<b>Title:</b> ${escapeHtml(created.title)}\n<b>Schedule:</b> <code>${escapeHtml(taskIntent.cronExpression)}</code>\n\nI will handle this in the background!`, { parse_mode: "HTML", reply_markup: tasksKeyboard([created]) });
+        } catch (e) {
+            await ctx.reply(`❌ Failed to schedule task: ${e instanceof Error ? e.message : "Invalid cron expression"}.`);
+            return;
+        }
       } else if (taskIntent.intent === "CANCEL_TASK") {
         const resolved = await taskService.resolveTargetTask(ctx.from.id, taskIntent.taskIdHint);
         if (resolved.task) { await taskService.updateTaskStatus(resolved.task.id, "cancelled"); await ctx.reply(`❌ Task #${resolved.task.id} (${escapeHtml(resolved.task.title)}) cancelled.`); return; }

@@ -4,6 +4,7 @@ import { taskService } from "../services/task.service";
 import { reminderService, reminderScheduler } from "../services/reminder.service";
 import { installDurableReminderDelivery } from "../services/reliable-reminder-delivery";
 import { tavilyService } from "../services/tavily.service";
+import { UnifiedMediaEngine } from "../services/media/unified-media-engine.service";
 
 function asRecord(input: unknown): Record<string, unknown> {
   if (!input || typeof input !== "object" || Array.isArray(input)) return {};
@@ -156,6 +157,61 @@ export const createReminderTool: AssistantTool = {
   },
 };
 
+export const generateImageTool: AssistantTool = {
+  name: "generate_image",
+  description: "Generates a high-quality visual image from a descriptive prompt using the authoritative UnifiedMediaEngine.",
+  policy: { sideEffect: true, destructive: false, confirmationRequired: false, idempotent: false, requiredCapabilities: ["media_generation"], timeoutMs: 90000 },
+  execute: async (input: unknown, context) => {
+    const record = asRecord(input);
+    const prompt = requireNonEmptyString(record.prompt ?? input, "prompt");
+    const result = await UnifiedMediaEngine.execute({
+      modality: "image",
+      prompt,
+      executionMode: "live",
+      userId: context.telegramUserId,
+      sourceInterface: "dag_engine",
+    });
+    if (!result.success) throw new Error(result.job.errorMessage || "Image generation tool failed");
+    return {
+      success: true,
+      jobId: result.job.jobId,
+      url: result.artifact?.url,
+      provider: result.job.actualProvider,
+      model: result.job.actualModel,
+      enhancedPrompt: result.job.enhancedPrompt,
+      latencyMs: result.transparency.latencyMs,
+    };
+  },
+};
+
+export const generateVideoTool: AssistantTool = {
+  name: "generate_video",
+  description: "Generates or synthesizes a cinematic video from a prompt using the authoritative UnifiedMediaEngine.",
+  policy: { sideEffect: true, destructive: false, confirmationRequired: false, idempotent: false, requiredCapabilities: ["media_generation"], timeoutMs: 180000 },
+  execute: async (input: unknown, context) => {
+    const record = asRecord(input);
+    const prompt = requireNonEmptyString(record.prompt ?? input, "prompt");
+    const result = await UnifiedMediaEngine.execute({
+      modality: "video",
+      prompt,
+      executionMode: "live",
+      userId: context.telegramUserId,
+      sourceInterface: "dag_engine",
+    });
+    if (!result.success) throw new Error(result.job.errorMessage || "Video generation tool failed");
+    return {
+      success: true,
+      jobId: result.job.jobId,
+      url: result.artifact?.url,
+      provider: result.job.actualProvider,
+      model: result.job.actualModel,
+      technique: result.job.videoTechnique,
+      enhancedPrompt: result.job.enhancedPrompt,
+      latencyMs: result.transparency.latencyMs,
+    };
+  },
+};
+
 export const deleteUserSessionTool: AssistantTool = {
   name: "delete_user_session",
   description: "Permanently deletes user session data and cached records. Destructive operation requiring approval.",
@@ -181,6 +237,8 @@ export function getProductionToolRegistry(): ToolRegistry {
     registry.register(fetchUserMemoryTool);
     registry.register(createTaskTool);
     registry.register(createReminderTool);
+    registry.register(generateImageTool);
+    registry.register(generateVideoTool);
     registry.register(deleteUserSessionTool);
     productionRegistryInstance = registry;
   }

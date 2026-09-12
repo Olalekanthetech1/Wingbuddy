@@ -105,6 +105,7 @@ async function buildAll() {
       "puppeteer",
       "puppeteer-core",
       "electron",
+      "cron-parser"
     ],
     sourcemap: "linked",
     plugins: [

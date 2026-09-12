@@ -78,9 +78,9 @@ export function renderDashboardResponsiveLayer(): string {
     --wb-body-bg:radial-gradient(circle at top right,#0f2843 0,#07111f 42%,#040b14 100%);
   }
   body{background:var(--wb-body-bg);color:var(--wb-text);transition:background .18s ease,color .18s ease}
-  .side{background:color-mix(in srgb,var(--wb-panel) 88%,transparent);border-color:var(--wb-line)}
-  .nav button,.mobile-nav button{color:var(--wb-muted)}
-  .nav button:hover,.nav button.active,.mobile-nav button.active{background:var(--wb-nav-active);color:var(--wb-text);border-color:var(--wb-line)}
+  .side,.mobile-nav{background:color-mix(in srgb,var(--wb-panel) 94%,transparent);border-color:var(--wb-line);backdrop-filter:blur(14px)}
+  .nav button,.mobile-nav button{color:var(--wb-muted);border:1px solid transparent;transition:background-color .18s ease,color .18s ease,border-color .18s ease}
+  .nav button:hover,.nav button.active,.mobile-nav button.active{background:var(--wb-nav-active);color:var(--wb-text);border-color:var(--wb-line-strong)}
   .health,.mini,.notice{background:var(--wb-panel-2);border-color:var(--wb-line)}
   .card{background:linear-gradient(180deg,color-mix(in srgb,var(--wb-panel) 97%,transparent),color-mix(in srgb,var(--wb-panel-2) 97%,transparent));border-color:var(--wb-line);box-shadow:var(--wb-shadow)}
   .label,.sub,.section-note,.subtitle,.mini span{color:var(--wb-muted)}
@@ -123,18 +123,21 @@ export function renderDashboardResponsiveLayer(): string {
   @media (max-width: 760px){
     .app{display:block}
     .side{display:none}
-    .mobile-nav{display:flex;width:100%;max-width:100%;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;padding:8px;gap:6px}
+    .mobile-nav{display:flex;position:sticky;top:0;z-index:40;width:100%;max-width:100%;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;padding:6px 8px;gap:6px;background:color-mix(in srgb,var(--wb-panel) 96%,transparent);border-bottom:1px solid var(--wb-line);backdrop-filter:blur(10px)}
     .mobile-nav::-webkit-scrollbar{display:none}
-    .mobile-nav button{flex:0 0 auto;white-space:nowrap;font-size:12px;min-height:38px}
-    main{padding:12px}
-    .top{gap:10px;margin-bottom:14px}
-    .title{font-size:22px;line-height:1.2}
-    .subtitle{font-size:13px}
-    .toolbar{width:100%}
+    .mobile-nav button{flex:0 0 auto;white-space:nowrap;font-size:12px;min-height:36px;padding:6px 10px}
+    main{padding:10px 10px}
+    .top{display:flex;flex-direction:column;gap:6px;margin-bottom:10px;height:auto;min-height:0}
+    .top>div:first-child{flex:0 0 auto;width:100%;min-width:0;min-height:0;height:auto;margin-bottom:0}
+    .eyebrow{font-size:10px;margin-bottom:2px}
+    .title{font-size:19px;line-height:1.2;margin:2px 0}
+    .subtitle{font-size:12px;line-height:1.35}
+    .toolbar{width:100%;margin-top:2px}
     .toolbar .btn,.toolbar .wb-theme-control{flex:1 1 auto}
-    .grid,.cards,.split,.form-grid{grid-template-columns:1fr}
-    .card{padding:13px;border-radius:12px}
-    .section-head{align-items:flex-start;flex-direction:column}
+    .grid,.cards,.split,.form-grid{grid-template-columns:1fr;gap:8px}
+    .card{padding:11px;border-radius:10px}
+    .section-head{align-items:flex-start;flex-direction:column;gap:6px;margin-bottom:8px}
+    .section-head>div:first-child{flex:0 0 auto;width:100%;min-width:0;min-height:0;height:auto}
     .section-head>.btn,.section-head>.toolbar,.section-head>.select{width:100%}
     .section-head .btn{flex:1 1 auto}
     .table-wrap{width:100%;max-width:100%;overflow-x:auto}
@@ -156,13 +159,14 @@ export function renderDashboardResponsiveLayer(): string {
 
   /* Very narrow phones. */
   @media (max-width: 390px){
-    main{padding:9px}
-    .mobile-nav{padding:6px}
-    .mobile-nav button{padding:8px 10px}
-    .title{font-size:20px}
-    .value{font-size:19px}
-    .card{padding:11px}
-    .btn,.input,.select{font-size:13px}
+    main{padding:8px}
+    .mobile-nav{padding:4px 6px}
+    .mobile-nav button{padding:6px 8px;font-size:11.5px}
+    .title{font-size:18px}
+    .subtitle{font-size:11.5px}
+    .value{font-size:18px}
+    .card{padding:10px}
+    .btn,.input,.select{font-size:12.5px}
   }
 </style>
 <script>

@@ -14,6 +14,69 @@ const makeId = (provider: AIProviderId, modelId: string): string => `${provider}
 function unique<T>(items: T[]): T[] { return [...new Set(items)]; }
 function parseList(value?: string): string[] { return String(value || "").split(",").map((v) => v.trim()).filter(Boolean); }
 
+export interface ModelUpgradeRule {
+  pattern: RegExp | string;
+  targetModelId: string;
+  provider?: AIProviderId;
+  reason?: string;
+}
+
+const DEFAULT_UPGRADE_RULES: ModelUpgradeRule[] = [
+  // Gemini deprecations / modern generation upgrades
+  { pattern: /^gemini-1\.5-flash/i, targetModelId: "gemini-3.6-flash", provider: "gemini", reason: "Gemini 1.5 Flash upgraded to Gemini 3.6 Flash" },
+  { pattern: /^gemini-2\.5-flash/i, targetModelId: "gemini-3.6-flash", provider: "gemini", reason: "Gemini 2.5 Flash upgraded to Gemini 3.6 Flash" },
+  { pattern: /^gemini-1\.5-pro/i, targetModelId: "gemini-3.7-flash", provider: "gemini", reason: "Gemini 1.5 Pro upgraded to Gemini 3.7 Flash" },
+  { pattern: /^gemini-2\.5-pro/i, targetModelId: "gemini-3.7-flash", provider: "gemini", reason: "Gemini 2.5 Pro upgraded to Gemini 3.7 Flash" },
+  { pattern: /^gemini-embedding-001$/i, targetModelId: "text-embedding-004", provider: "gemini", reason: "Gemini embedding-001 upgraded to text-embedding-004" },
+  { pattern: /^text-embedding-001$/i, targetModelId: "text-embedding-004", provider: "gemini", reason: "text-embedding-001 upgraded to text-embedding-004" },
+  // Groq model upgrades
+  { pattern: /^llama-3-8b/i, targetModelId: "llama-3.1-8b-instant", provider: "groq", reason: "Llama 3 8B upgraded to Llama 3.1 8B Instant" },
+  { pattern: /^llama-3-70b/i, targetModelId: "llama-3.3-70b-versatile", provider: "groq", reason: "Llama 3 70B upgraded to Llama 3.3 70B Versatile" },
+  // Mistral model upgrades
+  { pattern: /^mistral-tiny/i, targetModelId: "mistral-small-latest", provider: "mistral", reason: "Mistral Tiny upgraded to Mistral Small Latest" },
+  { pattern: /^mistral-medium/i, targetModelId: "mistral-large-latest", provider: "mistral", reason: "Mistral Medium upgraded to Mistral Large Latest" },
+];
+
+export function resolveDynamicModelUpgrade(modelId: string, provider?: AIProviderId): string {
+  if (!modelId) return modelId;
+  const trimmed = modelId.trim();
+
+  // 1. Check dynamic environment / custom rules
+  const customMap = process.env.MODEL_UPGRADE_MAP || process.env.MODEL_ALIAS_MAPPINGS;
+  if (customMap) {
+    try {
+      if (customMap.startsWith("{")) {
+        const parsed = JSON.parse(customMap);
+        if (parsed[trimmed]) return parsed[trimmed];
+      } else {
+        const pairs = customMap.split(",").map(p => p.trim());
+        for (const pair of pairs) {
+          const [from, to] = pair.split(":").map(s => s.trim());
+          if (from && to && (from.toLowerCase() === trimmed.toLowerCase() || new RegExp(`^${from}$`, "i").test(trimmed))) {
+            return to;
+          }
+        }
+      }
+    } catch {
+      // ignore parse errors and fallback to built-in rules
+    }
+  }
+
+  // 2. Check default upgrade rules
+  for (const rule of DEFAULT_UPGRADE_RULES) {
+    if (rule.provider && provider && rule.provider !== provider) continue;
+    if (typeof rule.pattern === "string") {
+      if (rule.pattern.toLowerCase() === trimmed.toLowerCase()) {
+        return rule.targetModelId;
+      }
+    } else if (rule.pattern.test(trimmed)) {
+      return rule.targetModelId;
+    }
+  }
+
+  return trimmed;
+}
+
 function normalize(value: unknown): UnifiedModelRecord[] {
   if (!Array.isArray(value)) return [];
   return value.filter((item) => {
@@ -23,13 +86,14 @@ function normalize(value: unknown): UnifiedModelRecord[] {
   }).map((item) => {
     const candidate = item as Partial<UnifiedModelRecord>;
     const provider = candidate.provider as AIProviderId;
+    const modelId = resolveDynamicModelUpgrade(candidate.modelId!, provider);
     const roles = unique(Array.isArray(candidate.roles) ? candidate.roles.filter((role): role is UnifiedModelRole => ROLES.includes(role as UnifiedModelRole)) : []);
     const embedding = roles.includes("embedding");
     return {
-      id: candidate.id || makeId(provider, candidate.modelId!),
+      id: candidate.id || makeId(provider, modelId),
       provider,
-      modelId: candidate.modelId!.trim(),
-      name: typeof candidate.name === "string" && candidate.name.trim() ? candidate.name.trim() : candidate.modelId!,
+      modelId,
+      name: typeof candidate.name === "string" && candidate.name.trim() && candidate.name !== candidate.modelId ? candidate.name.trim() : modelId,
       roles: embedding ? roles.filter((role) => role !== "primary" && role !== "primary_chat") : roles,
       enabled: candidate.enabled !== false,
       priority: Number.isFinite(candidate.priority) ? Number(candidate.priority) : 0,
@@ -51,6 +115,21 @@ export class UnifiedModelRegistryService {
     return [...deduped.values()].sort((a, b) => a.priority - b.priority || a.provider.localeCompare(b.provider) || a.modelId.localeCompare(b.modelId));
   }
 
+  public getDefaultModels(): UnifiedModelRecord[] {
+    const now = new Date().toISOString();
+    return [
+      { id: "gemini:gemini-3.8-flash", provider: "gemini", modelId: "gemini-3.8-flash", name: "Gemini 3.8 Flash", roles: ["primary", "primary_chat", "fast"], enabled: true, priority: 0, capabilities: ["generate", "chat", "streaming", "fast", "vision", "tool_calling", "web_search"], createdAt: now, updatedAt: now },
+      { id: "gemini:gemini-3.5-flash", provider: "gemini", modelId: "gemini-3.5-flash", name: "Gemini 3.5 Flash", roles: ["fast"], enabled: true, priority: 1, capabilities: ["generate", "chat", "streaming", "fast"], createdAt: now, updatedAt: now },
+      { id: "gemini:gemini-3.7-flash", provider: "gemini", modelId: "gemini-3.7-flash", name: "Gemini 3.7 Flash", roles: ["reasoning"], enabled: true, priority: 1, capabilities: ["generate", "chat", "streaming", "reasoning", "vision"], createdAt: now, updatedAt: now },
+      { id: "gemini:text-embedding-004", provider: "gemini", modelId: "text-embedding-004", name: "Gemini Text Embedding 004", roles: ["embedding", "primary_embedding"], enabled: true, priority: 2, capabilities: ["embedding"], createdAt: now, updatedAt: now },
+      { id: "groq:llama-3.3-70b-versatile", provider: "groq", modelId: "llama-3.3-70b-versatile", name: "Llama 3.3 70B", roles: ["fast", "reasoning"], enabled: true, priority: 1, capabilities: ["generate", "chat", "streaming", "fast", "reasoning", "tool_calling"], createdAt: now, updatedAt: now },
+      { id: "groq:llama-3.1-8b-instant", provider: "groq", modelId: "llama-3.1-8b-instant", name: "Llama 3.1 8B Instant", roles: ["fast"], enabled: true, priority: 2, capabilities: ["generate", "chat", "streaming", "fast"], createdAt: now, updatedAt: now },
+      { id: "mistral:mistral-large-latest", provider: "mistral", modelId: "mistral-large-latest", name: "Mistral Large", roles: ["reasoning"], enabled: true, priority: 1, capabilities: ["generate", "chat", "streaming", "reasoning", "tool_calling"], createdAt: now, updatedAt: now },
+      { id: "mistral:mistral-small-latest", provider: "mistral", modelId: "mistral-small-latest", name: "Mistral Small", roles: ["fast"], enabled: true, priority: 2, capabilities: ["generate", "chat", "streaming", "fast"], createdAt: now, updatedAt: now },
+      { id: "huggingface:meta-llama/Llama-3.2-3B-Instruct", provider: "huggingface", modelId: "meta-llama/Llama-3.2-3B-Instruct", name: "Llama 3.2 3B Instruct", roles: ["fast"], enabled: true, priority: 3, capabilities: ["generate", "chat", "streaming", "fast"], createdAt: now, updatedAt: now },
+    ];
+  }
+
   private envBootstrap(): UnifiedModelRecord[] {
     const now = new Date().toISOString();
     const sources: Array<{ provider: AIProviderId; role?: UnifiedModelRole; value?: string }> = [
@@ -67,6 +146,9 @@ export class UnifiedModelRegistryService {
       ...parseList(process.env.HF_TEXT_MODEL_POOL).map((value) => ({ provider: "huggingface" as const, value })),
     ];
     const models = new Map<string, UnifiedModelRecord>();
+    for (const def of this.getDefaultModels()) {
+      models.set(`${def.provider}:${def.modelId}`, def);
+    }
     for (const source of sources) {
       if (!source.value) continue;
       const key = `${source.provider}:${source.value}`;
@@ -91,11 +173,35 @@ export class UnifiedModelRegistryService {
     if (this.cache && Date.now() - this.cacheAt < this.cacheTtlMs) return this.cache;
     try {
       const rows = await db.select({ value: systemSettingsTable.value }).from(systemSettingsTable).where(eq(systemSettingsTable.key, REGISTRY_KEY)).limit(1);
-      if (rows[0]?.value) { this.cache = this.enforce(JSON.parse(rows[0].value)); this.cacheAt = Date.now(); return this.cache; }
+      if (rows[0]?.value) {
+        const stored = normalize(JSON.parse(rows[0].value));
+        const defaults = this.getDefaultModels();
+        const existingIds = new Set(stored.map((m) => `${m.provider}:${m.modelId}`));
+        const merged = [...stored];
+        for (const def of defaults) {
+          if (!existingIds.has(`${def.provider}:${def.modelId}`)) {
+            merged.push(def);
+          }
+        }
+        this.cache = this.enforce(merged);
+        this.cacheAt = Date.now();
+        return this.cache;
+      }
       const legacy = await db.select({ value: systemSettingsTable.value }).from(systemSettingsTable).where(eq(systemSettingsTable.key, LEGACY_GEMINI_KEY)).limit(1);
       if (legacy[0]?.value) {
         const migrated = normalize(JSON.parse(legacy[0].value)).map((model) => ({ ...model, provider: "gemini" as const, id: makeId("gemini", model.modelId) }));
-        this.cache = this.enforce(migrated); this.cacheAt = Date.now(); await this.persist(this.cache); return this.cache;
+        const defaults = this.getDefaultModels();
+        const existingIds = new Set(migrated.map((m) => `${m.provider}:${m.modelId}`));
+        const merged = [...migrated];
+        for (const def of defaults) {
+          if (!existingIds.has(`${def.provider}:${def.modelId}`)) {
+            merged.push(def);
+          }
+        }
+        this.cache = this.enforce(merged);
+        this.cacheAt = Date.now();
+        await this.persist(this.cache);
+        return this.cache;
       }
     } catch (error) { logger.warn({ error: String(error) }, "Failed to read unified AI model registry from PostgreSQL"); }
     this.cache = this.envBootstrap(); this.cacheAt = Date.now(); return this.cache;
@@ -161,6 +267,24 @@ export class UnifiedModelRegistryService {
   }
   async remove(id: string): Promise<void> { const models = await this.list(); const target = models.find((model) => model.id === id); if (!target) throw new Error("Model not found"); await this.persist(models.filter((model) => model.id !== id)); }
   async test(id: string): Promise<{ ok: boolean; latencyMs: number; error?: string }> { const model = (await this.list()).find((item) => item.id === id); if (!model) throw new Error("Model not found"); return aiProviderRegistryService.test(model.provider, model.modelId); }
+
+  getModelForRole(role?: UnifiedModelRole): UnifiedModelRecord | undefined {
+    const list = this.cache || this.getDefaultModels();
+    const enabled = list.filter((m) => m.enabled);
+    if (!role || role === "primary" || role === "primary_chat") {
+      return enabled.find((m) => m.roles.includes("primary") || m.roles.includes("primary_chat")) || enabled[0];
+    }
+    return enabled.find((m) => m.roles.includes(role)) || enabled.find((m) => m.roles.includes("primary")) || enabled[0];
+  }
+
+  async resolveModelForRole(role?: UnifiedModelRole): Promise<UnifiedModelRecord> {
+    const models = await this.list();
+    const enabled = models.filter((m) => m.enabled);
+    if (!role || role === "primary" || role === "primary_chat") {
+      return enabled.find((m) => m.roles.includes("primary") || m.roles.includes("primary_chat")) || enabled[0] || this.getDefaultModels()[0];
+    }
+    return enabled.find((m) => m.roles.includes(role)) || enabled.find((m) => m.roles.includes("primary")) || enabled[0] || this.getDefaultModels()[0];
+  }
 }
 
 export const unifiedModelRegistryService = new UnifiedModelRegistryService();

@@ -136,6 +136,16 @@ describe("Planner Compiler & Deterministic Agent Planner (Tests 1–18)", () => 
       goal: "What is Young's modulus?",
       context: { capabilities: ["read_research"] },
       toolRegistry: registry,
+    }, {
+      goal: "What is Young's modulus?",
+      nodes: [
+        {
+          id: "step_1",
+          title: "Provide answer",
+          type: "llm_reasoning",
+          reasoningSpec: { prompt: "Explain Young's modulus" }
+        }
+      ]
     });
 
     expect(result.success).toBe(true);
@@ -512,6 +522,16 @@ describe("Planner Compiler & Deterministic Agent Planner (Tests 1–18)", () => 
       goal: "Execute initial research",
       context: { capabilities: ["read_research"] },
       toolRegistry: registry,
+    }, {
+      goal: "Execute initial research",
+      nodes: [
+        {
+          id: "step_1",
+          title: "Research step 1",
+          type: "llm_reasoning",
+          reasoningSpec: { prompt: "Research..." }
+        }
+      ]
     });
 
     expect(initialPlanResult.success).toBe(true);
@@ -529,6 +549,16 @@ describe("Planner Compiler & Deterministic Agent Planner (Tests 1–18)", () => 
       failedNodeId: "step_1_direct_response",
       context: { capabilities: ["read_research"] },
       toolRegistry: registry,
+    }, {
+      goal: "Execute alternative research",
+      nodes: [
+        {
+          id: "step_1_alt",
+          title: "Research step 1 (Alternative)",
+          type: "llm_reasoning",
+          reasoningSpec: { prompt: "Research alternative..." }
+        }
+      ]
     });
 
     expect(replanResult.success).toBe(true);
@@ -831,6 +861,7 @@ describe("Planner Compiler & Deterministic Agent Planner (Tests 1–18)", () => 
     expect(graph.metadata.advisoryEstimatedSteps).toBe(42);
 
     // requiresApproval must be derived as TRUE due to destructive tool
+    
     expect(graph.metadata.requiresApproval).toBe(true);
     expect(graph.status).toBe("paused_for_approval");
   });

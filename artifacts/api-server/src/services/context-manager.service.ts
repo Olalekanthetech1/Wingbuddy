@@ -4,6 +4,7 @@ import {
   conversationIntelligenceService,
   type ConversationSemanticState,
 } from "./conversation-intelligence.service";
+import { adaptiveAIRouterService } from "./adaptive-ai-router.service";
 import { GeminiService } from "../gemini/gemini.service";
 import { getConfig } from "../config/env";
 import {
@@ -85,7 +86,7 @@ export class ContextManagerService {
     const taskIntent = cachedInteraction?.taskIntent;
     const activeTaskIsRelevant = Boolean(
       options.activeTask &&
-      (taskIntent === "CONTINUE_TASK" || taskIntent === "PAUSE_TASK" || taskIntent === "COMPLETE_TASK" || taskIntent === "CANCEL_TASK" || taskIntent === "VIEW_TASKS"),
+      (taskIntent === "NEW_TASK" || taskIntent === "CONTINUE_TASK" || taskIntent === "PAUSE_TASK" || taskIntent === "COMPLETE_TASK" || taskIntent === "CANCEL_TASK" || taskIntent === "VIEW_TASKS"),
     );
     const activeTaskData = activeTaskIsRelevant ? options.activeTask || null : null;
     const formattedTaskContext = activeTaskData
@@ -127,11 +128,19 @@ export class ContextManagerService {
           semanticState = await conversationIntelligenceService.analyzeSemanticState(
             options.userMessage,
             rawHistory,
-            async (history, analysisPrompt) => this.getGemini().generateReply(
-              history,
-              analysisPrompt,
-              "Act as the conversation-state interpreter. Return only the exact JSON object requested.",
-            ),
+            async (history, analysisPrompt) => {
+              const routed = await adaptiveAIRouterService.route({
+                systemInstruction: "Act as the conversation-state interpreter. Return only the exact JSON object requested.",
+                messages: [
+                  ...history.map((h) => ({ role: h.role === "model" ? "assistant" as const : "user" as const, content: h.content })),
+                  { role: "user" as const, content: analysisPrompt },
+                ],
+              }, {
+                isExtraction: true,
+                isSystemTask: true,
+              });
+              return routed.response.text;
+            },
           );
         } catch (error) {
           logger.debug?.(
@@ -164,6 +173,12 @@ export class ContextManagerService {
     if (continuityInstruction) fullSystemPrompt += `\n\n${continuityInstruction}`;
     if (semanticInstruction) fullSystemPrompt += `\n\n${semanticInstruction}`;
     if (formattedMemories) fullSystemPrompt += formattedMemories;
+    if (formattedTaskContext) {
+      fullSystemPrompt += `\n\n${formattedTaskContext}`;
+      if (taskIntent === "NEW_TASK") {
+        fullSystemPrompt += `\n\n[SYSTEM DIRECTIVE]\nYou have successfully created the above background task to fulfill the user's request. DO NOT hallucinate that you are unable to perform the action. Instead, playfully and enthusiastically confirm to the user that the task is locked in and will be handled in the background!`;
+      }
+    }
     fullSystemPrompt +=
       "\n\n[MEMORY SILENCE POLICY]\nTreat long-term memory as silent background context. Never say that you remember something, never list stored memories, never reveal memory keys or retrieval details, and never attribute an answer to a stored memory unless the user explicitly asks about memory itself.";
 

@@ -77,6 +77,19 @@ export class PlannerCompiler {
     const compiledNodes: Record<string, GraphNode> = {};
 
     for (const { candidate: cNode, canonicalId } of canonicalNodesList) {
+      const anyCandidate = cNode as any;
+      if (!cNode.actionSpec && anyCandidate.toolSpec && (anyCandidate.toolSpec.toolName || anyCandidate.toolSpec.name)) {
+        cNode.actionSpec = {
+          toolName: anyCandidate.toolSpec.toolName || anyCandidate.toolSpec.name,
+          parameters: anyCandidate.toolSpec.input || anyCandidate.toolSpec.parameters || {},
+        };
+      } else if (!cNode.actionSpec && anyCandidate.toolName) {
+        cNode.actionSpec = {
+          toolName: anyCandidate.toolName,
+          parameters: anyCandidate.parameters || anyCandidate.input || {},
+        };
+      }
+
       if (cNode.type === "llm_reasoning") {
         if (cNode.actionSpec) diagnostics.push({ severity: "error", code: "LLM_REASONING_CANNOT_HAVE_TOOL_ACTION", message: `Node "${canonicalId}" is of type "llm_reasoning" but specifies an actionSpec.`, nodeId: canonicalId });
         if (!cNode.reasoningSpec || !cNode.reasoningSpec.prompt?.trim()) diagnostics.push({ severity: "error", code: "MISSING_REASONING_SPEC", message: `Node "${canonicalId}" is of type "llm_reasoning" but is missing a valid reasoningSpec.prompt.`, nodeId: canonicalId });
@@ -247,12 +260,12 @@ export class PlannerCompiler {
     const hardCompileErrors = diagnostics.filter((d) => d.severity === "error");
     if (hardCompileErrors.length > 0) {
       const errorCode = this.classifyErrorCode(hardCompileErrors[0].code);
-      logger.warn({ ...correlationMeta, errorCode, errorCount: hardCompileErrors.length }, "PLAN_COMPILATION_FAILED: validation diagnostics present");
+      logger.warn({ ...correlationMeta, errorCode, errorCount: hardCompileErrors.length, diagnostics: hardCompileErrors }, "PLAN_COMPILATION_FAILED: validation diagnostics present");
       return { success: false, diagnostics, errorCode };
     }
 
     logger.info(correlationMeta, "PLAN_VALIDATION_STARTED");
-    const validationResult = GraphValidator.validate(graph, { toolRegistry: context.toolRegistry, userCapabilities: context.userCapabilities, userId: context.telegramUserId });
+    const validationResult = GraphValidator.validate(graph, { toolRegistry: context.toolRegistry, userCapabilities: context.userCapabilities, userId: context.telegramUserId, userTier: context.userTier, allowedDomains: context.allowedDomains });
     if (!validationResult.valid) {
       const allErrors = [...diagnostics, ...validationResult.errors];
       const errorCode = this.classifyErrorCode(validationResult.errors[0]?.code);

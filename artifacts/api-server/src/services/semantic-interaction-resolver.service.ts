@@ -1,3 +1,4 @@
+import { adaptiveAIRouterService } from "./adaptive-ai-router.service";
 import type { GeminiService } from "../gemini/gemini.service";
 import { MODE_KEYS, MODES, type ModeKey, type Capability } from "../config/mode";
 import { logger } from "../lib/logger";
@@ -57,6 +58,7 @@ const DURABILITY_EVIDENCE = [
 const COMPLEXITIES = ["simple", "moderate", "complex", "multi_step"] as const;
 const TASK_INTENTS: SemanticTaskIntent[] = [
   "NEW_TASK",
+  "SCHEDULE_TASK",
   "CONTINUE_TASK",
   "PAUSE_TASK",
   "COMPLETE_TASK",
@@ -121,7 +123,7 @@ function jsonOnlyPrompt(
     "- durable: persistent, trackable work, scheduled work, multi-stage external side effects, or workflows that must survive turns require a durable task/graph.",
     "- clarification: material information is missing or ambiguity makes safe execution unreliable.",
     "- unknown: classification confidence is too low to safely choose another profile.",
-    "Task intent semantics: NEW_TASK and other task-management intents are reserved for persistent, trackable work that the assistant should maintain as a task/workflow across turns. Ordinary conversation, brainstorming, tutoring, roleplay, games, demonstrations, or a multi-step answer remain NO_TASK unless the user asks for persistent task tracking.",
+    "Task intent semantics: NEW_TASK is for a standard one-off background task. SCHEDULE_TASK is used specifically when the user wants to schedule something recurrently or in the future (like 'remind me every day at 8am', 'send me a digest every Friday'). In this case, you MUST provide a standard unix 'cronExpression' (e.g. '0 8 * * *' for 8 AM daily). Other task-management intents are reserved for persistent, trackable work.",
     "Durability evidence semantics: durabilityEvidence MUST be empty unless the user explicitly requests persistence, scheduling, recurrence, background execution, continuation of an existing tracked task, multi-turn workflow state, or explicit task tracking. Prompt complexity, ZERO_SHOT, CONSTRAINT_DRIVEN, MULTI_STEP, file generation, media generation, dimensions, style, quality, or output count are NOT durability evidence by themselves.",
     "For image_generation and video_generation specifically, an immediate generation request is one_shot by default. Use durable only when concrete durability evidence is present in the user's request or an actual continuation/scheduling context exists.",
     "When an active task exists, CONTINUE_TASK is valid only when the current request is actually about that tracked task. Do not inherit unrelated active work.",
@@ -129,7 +131,7 @@ function jsonOnlyPrompt(
     `Persistent mode: ${persistentMode}`,
     `Recent conversation:\n${recent || "(none)"}`,
     `Current request:\n${request}`,
-    "JSON schema: { intent, promptTypes, primaryPromptType, executionProfile, effectiveMode, requiredCapabilities, enableSearch, thinkingLevel, isModeSwitch, requestedMode, cleanedPrompt, isGreeting, complexity, confidence, taskIntent, taskTitle, taskGoal, taskIdHint, taskSteps, durabilityEvidence, conversationOperation, conversationTargetHistoryIndices, unresolvedReference }",
+    "JSON schema: { intent, promptTypes, primaryPromptType, executionProfile, effectiveMode, requiredCapabilities, enableSearch, thinkingLevel, isModeSwitch, requestedMode, cleanedPrompt, isGreeting, complexity, confidence, taskIntent, taskTitle, taskGoal, taskIdHint, taskSteps, cronExpression, durabilityEvidence, conversationOperation, conversationTargetHistoryIndices, unresolvedReference }",
     "Do not authorize tools, external actions, approvals, destructive actions, or persistent storage from this classifier. It only resolves the semantic request profile; execution policy is enforced downstream.",
     `Available mode profiles:\n${modeProfiles}`,
   ].join("\n\n");
@@ -230,6 +232,7 @@ function sanitizeDecision(raw: unknown, fallbackMode: ModeKey): SemanticInteract
     taskGoal: taskIntent === "NO_TASK" ? undefined : taskGoal,
     taskIdHint: taskIntent === "NO_TASK" ? undefined : taskIdHint,
     taskSteps: taskIntent === "NO_TASK" ? undefined : taskSteps,
+    cronExpression: typeof data.cronExpression === "string" ? data.cronExpression.trim() : undefined,
     durabilityEvidence: artifactFollowUp ? [] : durabilityEvidence,
     conversationOperation: rawConversationOperation,
     conversationTargetHistoryIndices,
@@ -270,12 +273,25 @@ export class SemanticInteractionResolverService {
     };
 
     try {
-      const raw = await params.gemini.generateReply(
-        [],
-        jsonOnlyPrompt(params.text, params.persistentMode, history),
-        "Return the classification JSON only. Do not add explanations.",
-        { isExtraction: true, mode: "auto" },
-      );
+      let raw = "";
+      if (params.gemini && typeof params.gemini.generateReply === "function") {
+        raw = await params.gemini.generateReply(
+          [],
+          jsonOnlyPrompt(params.text, params.persistentMode, history),
+          "Return the classification JSON only. Do not add explanations.",
+          { isExtraction: true, mode: "auto" },
+        );
+      } else {
+        const routed = await adaptiveAIRouterService.route({
+          systemInstruction: "Return the classification JSON only. Do not add explanations.",
+          messages: [{ role: "user", content: jsonOnlyPrompt(params.text, params.persistentMode, history) }],
+        }, {
+          isExtraction: true,
+          mode: "auto",
+          isSystemTask: true,
+        });
+        raw = routed.response.text || "";
+      }
       const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
       const parsed = JSON.parse(cleaned);
       const decision = sanitizeDecision(parsed, params.persistentMode);

@@ -148,6 +148,11 @@ export async function ensureDatabaseSchema(pgPool?: pg.Pool): Promise<void> {
       current_step INTEGER NOT NULL DEFAULT 1,
       context_json TEXT,
       metadata_json TEXT,
+      is_recurring BOOLEAN NOT NULL DEFAULT FALSE,
+      cron_expression VARCHAR(100),
+      timezone VARCHAR(50) NOT NULL DEFAULT 'UTC',
+      next_run_at TIMESTAMPTZ,
+      last_run_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       completed_at TIMESTAMPTZ,
@@ -155,9 +160,15 @@ export async function ensureDatabaseSchema(pgPool?: pg.Pool): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS agent_tasks_user_status_idx ON agent_tasks(telegram_user_id, status);
     CREATE INDEX IF NOT EXISTS agent_tasks_user_updated_idx ON agent_tasks(telegram_user_id, updated_at);
+    CREATE INDEX IF NOT EXISTS agent_tasks_recurring_due_idx ON agent_tasks(is_recurring, next_run_at, status);
 
     -- Ensure upgraded columns exist for agent_tasks
     ALTER TABLE agent_tasks ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ;
+    ALTER TABLE agent_tasks ADD COLUMN IF NOT EXISTS is_recurring BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE agent_tasks ADD COLUMN IF NOT EXISTS cron_expression VARCHAR(100);
+    ALTER TABLE agent_tasks ADD COLUMN IF NOT EXISTS timezone VARCHAR(50) NOT NULL DEFAULT 'UTC';
+    ALTER TABLE agent_tasks ADD COLUMN IF NOT EXISTS next_run_at TIMESTAMPTZ;
+    ALTER TABLE agent_tasks ADD COLUMN IF NOT EXISTS last_run_at TIMESTAMPTZ;
 
     CREATE TABLE IF NOT EXISTS agent_task_steps (
       id SERIAL PRIMARY KEY,

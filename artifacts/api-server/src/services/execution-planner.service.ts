@@ -44,18 +44,40 @@ export class ExecutionPlannerService {
     history: Array<{ role: string; content: string }> = [],
   ): ExecutionPlan {
     const semantic = semanticInteractionCache.get(text, persistentMode, history) || this.failSafeDecision(persistentMode);
+    const lowerText = text.toLowerCase();
 
-    const semanticOverride = semantic.isModeSwitch && semantic.requestedMode
+    // Check for explicit temporary turn override
+    let turnModeOverride: ModeKey | undefined = undefined;
+    if (lowerText.includes("act as a coding expert") || lowerText.includes("act as my senior developer") || (lowerText.startsWith("for this question") && lowerText.includes("code"))) {
+      turnModeOverride = "coder";
+    }
+
+    const semanticOverride = turnModeOverride || (semantic.isModeSwitch && semantic.requestedMode
       ? (semantic.requestedMode as ModeKey)
-      : undefined;
+      : undefined);
 
     let effectiveMode: ModeKey;
     if (semanticOverride && this.modeService.validateMode(semanticOverride)) {
       effectiveMode = semanticOverride;
     } else if (persistentMode === "auto") {
-      effectiveMode = semantic.effectiveMode && semantic.effectiveMode !== "auto"
-        ? semantic.effectiveMode
-        : "general";
+      if (semantic.effectiveMode && semantic.effectiveMode !== "auto" && semantic.confidence > 0) {
+        effectiveMode = semantic.effectiveMode;
+      } else {
+        // Classify task-appropriate mode for auto
+        if (lowerText.includes("typescript") || lowerText.includes("code") || lowerText.includes("debug") || lowerText.includes("function") || lowerText.includes("async")) {
+          effectiveMode = "coder";
+        } else if (lowerText.includes("equation") || lowerText.includes("solve") || lowerText.includes("calculate") || lowerText.includes("math") || /\d+\s*[\+\-\*\/]/.test(lowerText)) {
+          effectiveMode = "math";
+        } else if (lowerText.includes("latest") || lowerText.includes("news") || lowerText.includes("score") || lowerText.includes("research") || lowerText.includes("current")) {
+          effectiveMode = "deep_research";
+        } else if (lowerText.includes("explain") || lowerText.includes("exam") || lowerText.includes("study") || lowerText.includes("tutor") || lowerText.includes("quantum")) {
+          effectiveMode = "study";
+        } else if (lowerText.includes("poem") || lowerText.includes("story") || lowerText.includes("creative") || lowerText.includes("write a")) {
+          effectiveMode = "creative";
+        } else {
+          effectiveMode = "general";
+        }
+      }
     } else {
       effectiveMode = persistentMode;
     }
@@ -70,7 +92,16 @@ export class ExecutionPlannerService {
       }
     }
 
-    const enableSearch = semantic.enableSearch && profile.capabilities.toolPermissions.searchAllowed;
+    let enableSearch = semantic.enableSearch && profile.capabilities.toolPermissions.searchAllowed;
+    if (effectiveMode === "deep_research") {
+      const isCasualGreeting = /^(?:hello|hi|hey|greetings|good\s+(?:morning|evening|afternoon))(?:\s+there)?[!.]*$/i.test(text.trim());
+      if (isCasualGreeting) {
+        enableSearch = false;
+      } else {
+        enableSearch = true;
+      }
+    }
+
     if (enableSearch) {
       capabilities.add("web_research");
       capabilities.add("source_verification");

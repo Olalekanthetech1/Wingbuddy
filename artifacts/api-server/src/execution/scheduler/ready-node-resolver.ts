@@ -122,13 +122,22 @@ export class ReadyNodeResolver {
     if (state.waitingApprovalNodeIds.size > 0 && readyNodes.length === 0 && state.runningNodeIds.size === 0) {
       isTerminal = true;
       terminalStatus = "paused_for_approval";
-    } else if (
-      readyNodes.length === 0 &&
-      state.runningNodeIds.size === 0 &&
-      processedCount >= allNodeKeys.length
-    ) {
+    } else if (readyNodes.length === 0 && state.runningNodeIds.size === 0) {
       isTerminal = true;
-      terminalStatus = state.failedNodeIds.size > 0 ? "failed" : "completed";
+      terminalStatus = (state.failedNodeIds.size > 0 || processedCount < allNodeKeys.length) ? "failed" : "completed";
+      // Ensure all unreached nodes are accounted for
+      if (processedCount < allNodeKeys.length) {
+        for (const nodeId of allNodeKeys) {
+          if (
+            !state.completedNodeIds.has(nodeId) &&
+            !state.failedNodeIds.has(nodeId) &&
+            !state.skippedNodeIds.has(nodeId) &&
+            !newlySkippedNodeIds.includes(nodeId)
+          ) {
+            newlySkippedNodeIds.push(nodeId);
+          }
+        }
+      }
     }
 
     return {

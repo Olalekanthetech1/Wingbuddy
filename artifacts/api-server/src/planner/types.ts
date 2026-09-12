@@ -29,7 +29,7 @@ export interface InputBinding { source: InputBindingSource; }
 export interface ToolInvocationSpec { toolName: string; parameters: Record<string, unknown>; }
 export interface LLMReasoningSpec { prompt: string; systemInstruction?: string; targetFormat?: "text" | "json" | "markdown"; jsonSchema?: Record<string, unknown>; }
 export interface MemoryWriteSpec { key: string; content: string; category?: string; }
-export type VerificationStrategy = "none" | "schema" | "assertion" | "tool_result" | "llm_review";
+export type VerificationStrategy = "none" | "schema" | "assertion" | "tool_result" | "llm_review" | "evidence";
 export interface NodeVerificationSpec { required: boolean; strategy: VerificationStrategy; schemaOrRule?: Record<string, unknown>; assertionExpression?: string; reviewPrompt?: string; }
 export interface NodeRetryPolicy { maxAttempts: number; backoffMs: number; }
 export interface GraphNode { id: string; title: string; type: NodeActionType; actionSpec?: ToolInvocationSpec; reasoningSpec?: LLMReasoningSpec; memorySpec?: MemoryWriteSpec; inputBindings: Record<string, InputBinding>; status: NodeStatus; approval: NodeApprovalInfo; verification: NodeVerificationSpec; retryPolicy: NodeRetryPolicy; timeoutMs: number; result?: NodeResult; }
@@ -46,8 +46,17 @@ export interface ValidationResult { valid: boolean; errors: ValidationDiagnostic
 export interface CandidateNode { id?: string; title: string; type: NodeActionType; actionSpec?: ToolInvocationSpec; reasoningSpec?: LLMReasoningSpec; memorySpec?: MemoryWriteSpec; inputBindings?: Record<string, InputBinding>; status?: NodeStatus; approval?: Partial<NodeApprovalInfo>; verification?: Partial<NodeVerificationSpec>; retryPolicy?: Partial<NodeRetryPolicy>; timeoutMs?: number; dependsOn?: string[]; }
 export interface CandidateEdge { fromNodeId: string; toNodeId: string; dependencyType?: EdgeDependencyType; condition?: EdgeCondition; }
 export interface CandidatePlan { graphId?: string; goal: string; strategy?: string; advisoryEstimatedSteps?: number; advisoryRequiresApproval?: boolean; nodes: CandidateNode[]; edges?: CandidateEdge[]; }
+export type ExecutionTransitionType = "RETRY" | "RECOVER" | "REPLAN" | "ABORT";
+
+export interface ExecutionTransition {
+  type: ExecutionTransitionType;
+  attempt?: number;
+  delayMs?: number;
+  reason: string;
+}
+
 export type PlannerErrorCode = "PLAN_GENERATION_FAILED" | "PLAN_COMPILATION_FAILED" | "PLAN_VALIDATION_FAILED" | "UNAUTHORIZED_TOOL_CAPABILITY" | "PLAN_REJECTED" | "INVALID_INPUT_BINDING" | "INVALID_DEPENDENCY" | "APPROVAL_REQUIRED";
-export interface CompilerContext { telegramUserId: number; requestId: string; taskId?: number; graphId?: string; planRevision?: number; parentRevisionId?: string; toolRegistry?: ToolRegistry; userCapabilities?: string[]; plannerModel?: string; timestamp?: string; effectivePolicy?: EffectiveExecutionPolicy; }
+export interface CompilerContext { telegramUserId: number; requestId: string; taskId?: number; graphId?: string; planRevision?: number; parentRevisionId?: string; toolRegistry?: ToolRegistry; userCapabilities?: string[]; userTier?: string; allowedDomains?: string[]; plannerModel?: string; timestamp?: string; effectivePolicy?: EffectiveExecutionPolicy; }
 export interface PlannerUserContext {
   mode?: string;
   capabilities?: string[];
@@ -58,6 +67,7 @@ export interface PlannerUserContext {
   userPreferences?: Record<string, unknown>;
   mediaPresent?: boolean;
   requiresExternalEvidence?: boolean;
+  isBackgroundTask?: boolean;
 }
 export interface PlannerRequest { requestId: string; telegramUserId: number; goal: string; context?: PlannerUserContext; toolRegistry?: ToolRegistry; taskId?: number; graphId?: string; plannerModel?: string; }
 export interface ReplannerRequest { requestId: string; telegramUserId: number; previousGraphId: string; previousRevision: number; replanReason: string; failedNodeId?: string; context?: PlannerUserContext; toolRegistry?: ToolRegistry; taskId?: number; plannerModel?: string; }

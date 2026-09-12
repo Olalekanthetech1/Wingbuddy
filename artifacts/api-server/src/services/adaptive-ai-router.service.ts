@@ -36,7 +36,7 @@ function isQuotaOrRateLimit(error: unknown): boolean {
   const status = typeof record?.status === "number" ? record.status : undefined;
   if (status === 429) return true;
   const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-  return message.includes("429") || message.includes("quota") || message.includes("resource_exhausted") || message.includes("rate limit") || message.includes("too many requests") || message.includes("tokens per minute") || message.includes("tpm");
+  return message.includes("429") || message.includes("quota") || message.includes("resource_exhausted") || message.includes("rate limit") || message.includes("too many requests") || message.includes("tokens per minute") || message.includes("tpm") || message.includes("depleted") || message.includes("credits");
 }
 
 export class AdaptiveAIRouterService {
@@ -241,8 +241,14 @@ export class AdaptiveAIRouterService {
     health.consecutiveFailures += 1;
     health.lastFailureAt = new Date().toISOString();
     health.lastError = error instanceof Error ? error.message : String(error);
-    if (isQuotaOrRateLimit(error)) health.cooldownUntil = Date.now() + 30_000;
-    else if (health.consecutiveFailures >= 3) health.cooldownUntil = Date.now() + Math.min(60_000, 5_000 * 2 ** (health.consecutiveFailures - 3));
+    const errStr = health.lastError.toLowerCase();
+    if (errStr.includes("no longer available") || errStr.includes("not_found") || errStr.includes("not found")) {
+      health.cooldownUntil = Date.now() + 86_400_000; // 24hr cooldown for deprecated models
+    } else if (isQuotaOrRateLimit(error)) {
+      health.cooldownUntil = Date.now() + 60_000 * 15; // 15 min cooldown for quota exhaustion
+    } else if (health.consecutiveFailures >= 3) {
+      health.cooldownUntil = Date.now() + Math.min(60_000, 5_000 * 2 ** (health.consecutiveFailures - 3));
+    }
     this.health.set(modelId, health);
   }
 

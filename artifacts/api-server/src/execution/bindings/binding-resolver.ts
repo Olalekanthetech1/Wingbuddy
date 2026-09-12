@@ -90,37 +90,18 @@ export class BindingResolver {
         if (source.value === undefined) {
           throw new Error(`Invalid literal binding for parameter "${paramName}": value is undefined.`);
         }
-        return JSON.parse(JSON.stringify(source.value));
+        return this.interpolateLiteral(
+          JSON.parse(JSON.stringify(source.value)),
+          graph,
+          completedResults,
+          ancestorNodeIds,
+          paramName
+        );
       }
 
       case "node_output": {
         const { nodeId, path } = source;
-
-        // 1. Referenced node must exist in graph
-        const referencedNode = graph.nodes[nodeId];
-        if (!referencedNode) {
-          throw new Error(
-            `Invalid binding for parameter "${paramName}": referenced node "${nodeId}" does not exist in graph.`,
-          );
-        }
-
-        // 2. Referenced node must be an ancestor
-        if (!ancestorNodeIds.has(nodeId)) {
-          throw new Error(
-            `Security violation: parameter "${paramName}" attempts forward or non-ancestor reference to "${nodeId}".`,
-          );
-        }
-
-        // 3. Referenced node must be completed successfully
-        const nodeResult = completedResults[nodeId];
-        if (!nodeResult || !nodeResult.success) {
-          throw new Error(
-            `Binding failure for parameter "${paramName}": referenced ancestor node "${nodeId}" has not completed successfully.`,
-          );
-        }
-
-        // 4. Extract path safely without eval
-        return this.extractPathValue(nodeResult.output, path, nodeId, paramName);
+        return this.resolveNodeOutput(nodeId, path, graph, completedResults, ancestorNodeIds, paramName);
       }
 
       case "context": {
@@ -134,6 +115,71 @@ export class BindingResolver {
         );
       }
     }
+  }
+
+  private interpolateLiteral(
+    value: unknown,
+    graph: ExecutionGraph,
+    completedResults: Record<string, NodeResult>,
+    ancestorNodeIds: Set<string>,
+    paramName: string
+  ): unknown {
+    if (typeof value === "string") {
+      const regex = /\{\{steps\.([^.]+)\.output\.?([^}]*)\}\}/g;
+      
+      // Fast path for exact match to preserve object types
+      const exactMatch = value.match(/^\{\{steps\.([^.]+)\.output\.?([^}]*)\}\}$/);
+      if (exactMatch) {
+        const nodeId = exactMatch[1];
+        const path = exactMatch[2] || "";
+        return this.resolveNodeOutput(nodeId, path, graph, completedResults, ancestorNodeIds, paramName);
+      }
+
+      // String interpolation for mixed content
+      return value.replace(regex, (match, nodeId, path) => {
+        const resolved = this.resolveNodeOutput(nodeId, path, graph, completedResults, ancestorNodeIds, paramName);
+        if (typeof resolved === "object") {
+          return JSON.stringify(resolved);
+        }
+        return String(resolved);
+      });
+    }
+
+    if (Array.isArray(value)) {
+      return value.map(v => this.interpolateLiteral(v, graph, completedResults, ancestorNodeIds, paramName));
+    }
+
+    if (value && typeof value === "object") {
+      const result: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(value)) {
+        result[k] = this.interpolateLiteral(v, graph, completedResults, ancestorNodeIds, paramName);
+      }
+      return result;
+    }
+
+    return value;
+  }
+
+  private resolveNodeOutput(
+    nodeId: string,
+    path: string,
+    graph: ExecutionGraph,
+    completedResults: Record<string, NodeResult>,
+    ancestorNodeIds: Set<string>,
+    paramName: string
+  ): unknown {
+    const referencedNode = graph.nodes[nodeId];
+    if (!referencedNode) {
+      throw new Error(`Invalid binding for parameter "${paramName}": referenced node "${nodeId}" does not exist in graph.`);
+    }
+    if (!ancestorNodeIds.has(nodeId)) {
+      throw new Error(`Security violation: parameter "${paramName}" attempts forward or non-ancestor reference to "${nodeId}".`);
+    }
+    const nodeResult = completedResults[nodeId];
+    if (!nodeResult || !nodeResult.success) {
+      throw new Error(`Binding failure for parameter "${paramName}": referenced ancestor node "${nodeId}" has not completed successfully.`);
+    }
+    return this.extractPathValue(nodeResult.output, path, nodeId, paramName);
   }
 
   private extractPathValue(

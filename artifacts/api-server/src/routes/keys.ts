@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { apiKeyPoolService } from "../services/api-key-pool.service";
-import { GeminiService } from "../gemini/gemini.service";
-import { getConfig } from "../config/env";
+import { adaptiveAIRouterService } from "../services/adaptive-ai-router.service";
+import { getConfig, AI_SYSTEM_INSTRUCTION } from "../config/env";
 import { logger } from "../lib/logger";
 import { chatDatabaseService, db, systemSettingsTable } from "@workspace/db";
 import { isExecutionEngineEnabled } from "../execution/config";
@@ -126,8 +126,6 @@ router.post("/chat/test", async (req: Request, res: Response) => {
   try {
     const { message, personality, mode, enableSearch, userId } = req.body;
     if (!message || typeof message !== "string") { res.status(400).json({ error: "Missing required 'message' field" }); return; }
-    const config = getConfig();
-    const gemini = new GeminiService(apiKeyPoolService, config.geminiModel, config.geminiTimeoutMs);
     let memoryContext = "";
     if (userId) {
       try {
@@ -136,8 +134,29 @@ router.post("/chat/test", async (req: Request, res: Response) => {
       } catch (error) { logger.warn({ error: error instanceof Error ? error.message : String(error) }, "Failed to fetch user memories for test chat"); }
     }
     const start = Date.now();
-    const reply = await gemini.generateReply([], message, { personalityInstruction: personality ? `Personality: ${personality}` : undefined, modeInstruction: mode ? `Mode: ${mode}` : undefined, memoryInstruction: memoryContext || undefined }, { enableSearch: Boolean(enableSearch) });
-    res.json({ reply, latencyMs: Date.now() - start, timestamp: new Date().toISOString(), poolState: apiKeyPoolService.getSummary() });
+    const systemInstruction = [
+      AI_SYSTEM_INSTRUCTION,
+      personality ? `Personality: ${personality}` : "",
+      mode ? `Mode: ${mode}` : "",
+      memoryContext ? `Memory:\n${memoryContext}` : "",
+    ].filter(Boolean).join("\n\n");
+
+    const routed = await adaptiveAIRouterService.route({
+      systemInstruction,
+      messages: [{ role: "user", content: message }],
+    }, {
+      mode,
+      enableSearch: Boolean(enableSearch),
+    });
+
+    res.json({
+      reply: routed.response.text,
+      provider: routed.candidate.model.provider,
+      model: routed.candidate.model.modelId,
+      latencyMs: Date.now() - start,
+      timestamp: new Date().toISOString(),
+      poolState: apiKeyPoolService.getSummary(),
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error({ error: msg }, "Test chat request failed");

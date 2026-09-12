@@ -115,7 +115,7 @@ export class TelegramWorkerQueueService {
   }
 
   private scheduleProcessing(): void {
-    if (!this.handler || this.isShuttingDown) return;
+    if (!this.handler) return;
     const maxConcurrency = this.computeAdaptiveConcurrency();
 
     for (const [userKey, queue] of this.userQueues.entries()) {

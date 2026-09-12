@@ -57,10 +57,64 @@ export interface ExecutionSession {
   failedNodes: string[];
   waitingApprovalNodes: string[];
   error?: ExecutionError;
+  
+  workerId?: string;
+  leaseExpiresAt?: string;
+  lastHeartbeatAt?: string;
+  expiresAt?: string;
+  executionBudget?: Record<string, unknown>;
+  executionUsage?: Record<string, unknown>;
+  failureCode?: string;
+  failureMessage?: string;
+
   startedAt: string;
   updatedAt: string;
   completedAt?: string;
   deadlineAt?: string;
+}
+
+export type ExecutionEventType = 
+  | "SESSION_CREATED"
+  | "PLAN_COMPILED"
+  | "NODE_CREATED"
+  | "NODE_STARTED"
+  | "NODE_COMPLETED"
+  | "NODE_FAILED"
+  | "NODE_SKIPPED"
+  | "TOOL_INVOKED"
+  | "TOOL_COMPLETED"
+  | "TOOL_FAILED"
+  | "RETRY_REQUESTED"
+  | "WORKER_LEASE_ACQUIRED"
+  | "WORKER_HEARTBEAT"
+  | "WORKER_LEASE_EXPIRED"
+  | "SESSION_CANCEL_REQUESTED"
+  | "SESSION_CANCELLED"
+  | "SESSION_FAILED"
+  | "SESSION_COMPLETED"
+  | "SESSION_EXPIRED"
+  | "SESSION_BUDGET_EXCEEDED"
+  | "REPLAN_STARTED"
+  | "REPLAN_COMPLETED"
+  | "HITL_REQUESTED"
+  | "HITL_APPROVED"
+  | "HITL_REJECTED"
+  | "HITL_EXPIRED"
+  | "VERIFICATION_STARTED"
+  | "VERIFICATION_COMPLETED"
+  | "VERIFICATION_FAILED";
+
+export interface ExecutionEventRecordType {
+  eventId: string;
+  executionId: string;
+  graphId?: string;
+  planRevision?: number;
+  nodeId?: string;
+  eventType: ExecutionEventType;
+  sequenceNumber: number;
+  actor: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
 }
 
 export interface NodeExecutionAttempt {
@@ -103,6 +157,7 @@ export interface StoredApproval {
   requestedAt: string;
   resolvedAt?: string;
   expiresAt?: string;
+  parameterHash?: string;
   resolvedByUserId?: number;
 }
 

@@ -3,14 +3,8 @@ import type {
   ExecutionErrorCategory,
   GraphNode,
   NodeRetryPolicy,
+  ExecutionTransition
 } from "../../planner/types";
-
-export interface RetryEvaluation {
-  shouldRetry: boolean;
-  attempt: number;
-  delayMs: number;
-  reason?: string;
-}
 
 export class RetryEngine {
   private static readonly MAX_BACKOFF_MS = 30_000;
@@ -23,7 +17,6 @@ export class RetryEngine {
     if (err && typeof err === "object" && "category" in err && "code" in err) {
       return err as ExecutionError;
     }
-
     const message = err instanceof Error ? err.message : String(err);
     const lower = message.toLowerCase();
 
@@ -106,46 +99,35 @@ export class RetryEngine {
   }
 
   /**
-   * Evaluates whether a failed node attempt should be retried.
+   * Evaluates a failed node attempt and transitions execution explicitly.
    */
-  evaluateRetry(params: {
+  evaluateTransition(params: {
     node: GraphNode;
     currentAttempt: number;
     error: ExecutionError;
     isDestructiveTool?: boolean;
     hasSideEffect?: boolean;
     isCancelled?: boolean;
-  }): RetryEvaluation {
+  }): ExecutionTransition {
     const { node, currentAttempt, error, isDestructiveTool, hasSideEffect, isCancelled } = params;
 
     // Rule 1: No retry if graph is cancelled
     if (isCancelled) {
-      return {
-        shouldRetry: false,
-        attempt: currentAttempt,
-        delayMs: 0,
-        reason: "Execution was cancelled.",
-      };
+      return { type: "ABORT", reason: "Execution was cancelled." };
     }
 
-    // Rule 2: Error must be retryable
+    // Recoverable state? (Timeout/Transient errors on nodes with no side effects)
     if (!error.retryable) {
-      return {
-        shouldRetry: false,
-        attempt: currentAttempt,
-        delayMs: 0,
-        reason: `Error category "${error.category}" is non-retryable.`,
-      };
+      // Replan if the error is due to something that might be fixed by different reasoning
+      if (error.category === "validation" || error.category === "unknown") {
+         return { type: "RECOVER", reason: `Attempting recovery for category "${error.category}".` };
+      }
+      return { type: "ABORT", reason: `Error category "${error.category}" is non-retryable.` };
     }
 
     // Rule 3: No automatic retries for destructive tools
     if (isDestructiveTool) {
-      return {
-        shouldRetry: false,
-        attempt: currentAttempt,
-        delayMs: 0,
-        reason: "Automatic retries are disallowed for destructive tools without explicit policy.",
-      };
+      return { type: "ABORT", reason: "Automatic retries are disallowed for destructive tools without explicit policy." };
     }
 
     // Rule 4: Disallow blind retry for side-effecting external tools on timeout (Item 4)
@@ -153,12 +135,7 @@ export class RetryEngine {
       hasSideEffect &&
       (error.category === "timeout" || error.code === "TIMEOUT" || error.code === "EXECUTION_TIMEOUT")
     ) {
-      return {
-        shouldRetry: false,
-        attempt: currentAttempt,
-        delayMs: 0,
-        reason: "Automatic retries are disallowed for side-effecting external tools on timeout to prevent duplicate side effects.",
-      };
+      return { type: "RECOVER", reason: "Automatic retries are disallowed for side-effecting external tools on timeout. Falling back to RECOVER." };
     }
 
     // Rule 5: Check retry budget
@@ -166,12 +143,7 @@ export class RetryEngine {
     const maxAttempts = Math.min(Math.max(1, policy.maxAttempts), 5);
 
     if (currentAttempt >= maxAttempts) {
-      return {
-        shouldRetry: false,
-        attempt: currentAttempt,
-        delayMs: 0,
-        reason: `Retry budget exhausted (${currentAttempt}/${maxAttempts} attempts).`,
-      };
+      return { type: "REPLAN", reason: `Retry budget exhausted (${currentAttempt}/${maxAttempts} attempts). Triggering REPLAN.` };
     }
 
     // Calculate bounded backoff
@@ -181,10 +153,33 @@ export class RetryEngine {
       baseBackoff * Math.pow(2, currentAttempt - 1),
     );
 
+    return { type: "RETRY", attempt: currentAttempt + 1, delayMs, reason: "Retrying step." };
+  }
+
+  /**
+   * Evaluates retry eligibility with boolean shouldRetry and delayMs, for test assertion compatibility.
+   */
+  evaluateRetry(params: {
+    node: GraphNode;
+    currentAttempt: number;
+    error: ExecutionError;
+    isDestructiveTool?: boolean;
+    hasSideEffect?: boolean;
+    isCancelled?: boolean;
+  }): { shouldRetry: boolean; attempt?: number; delayMs?: number; reason: string } {
+    const transition = this.evaluateTransition(params);
+    if (transition.type === "RETRY") {
+      return {
+        shouldRetry: true,
+        attempt: transition.attempt,
+        delayMs: transition.delayMs,
+        reason: transition.reason,
+      };
+    }
     return {
-      shouldRetry: true,
-      attempt: currentAttempt + 1,
-      delayMs,
+      shouldRetry: false,
+      attempt: params.currentAttempt,
+      reason: transition.reason,
     };
   }
 

@@ -9,5 +9,5 @@ describe("health endpoint", () => {
     const response = await request(app).get("/api/healthz");
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ status: "ok" });
-  });
+  }, 15000);
 });

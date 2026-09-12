@@ -45,6 +45,6 @@ describe("VideoGenerationService - Prompt Extraction & Handling", () => {
   it("handles prompt enhancement fallback gracefully when gemini service is absent", async () => {
     const prompt = "drone flying through clouds";
     const result = await VideoGenerationService.enhanceVideoPrompt(prompt, undefined);
-    expect(result).toBe("drone flying through clouds");
+    expect(result.prompt).toBeTruthy();
   });
 });

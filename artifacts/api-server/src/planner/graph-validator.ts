@@ -18,7 +18,7 @@ import { ToolRegistry, type ToolSecurityPolicy } from "../tools/tool-registry";
 
 export interface ValidatorContext {
   toolRegistry?: ToolRegistry;
-  userCapabilities?: string[];
+  userCapabilities?: string[]; userTier?: string; allowedDomains?: string[];
   userId?: number;
 }
 
@@ -69,12 +69,24 @@ export class GraphValidator {
     const nodeKeys = Object.keys(graph.nodes || {});
     const totalNodes = nodeKeys.length;
     const totalEdges = (graph.edges || []).length;
+    
+    const maxNodesLimit = graph.effectivePolicy?.maxNodes || MAX_GRAPH_NODES;
+    const maxEdgesLimit = graph.effectivePolicy?.maxEdges || MAX_GRAPH_EDGES;
+    const maxToolCallsLimit = graph.effectivePolicy?.maxToolCalls || MAX_TOOL_CALLS;
 
-    if (totalEdges > MAX_GRAPH_EDGES) {
+    if (totalNodes > maxNodesLimit) {
+      errors.push({
+        severity: "error",
+        code: "GRAPH_SIZE_EXCEEDED",
+        message: `Graph node count (${totalNodes}) exceeds effective budget limit of ${maxNodesLimit}.`,
+      });
+    }
+
+    if (totalEdges > maxEdgesLimit) {
       errors.push({
         severity: "error",
         code: "GRAPH_EDGES_EXCEEDED",
-        message: `Graph edge count (${totalEdges}) exceeds maximum limit of ${MAX_GRAPH_EDGES}.`,
+        message: `Graph edge count (${totalEdges}) exceeds effective budget limit of ${maxEdgesLimit}.`,
       });
     }
 
@@ -84,11 +96,11 @@ export class GraphValidator {
         toolCallCount++;
       }
     }
-    if (toolCallCount > MAX_TOOL_CALLS) {
+    if (toolCallCount > maxToolCallsLimit) {
       errors.push({
         severity: "error",
         code: "TOOL_CALL_LIMIT_EXCEEDED",
-        message: `Graph tool call count (${toolCallCount}) exceeds maximum limit of ${MAX_TOOL_CALLS}.`,
+        message: `Graph tool call count (${toolCallCount}) exceeds effective budget limit of ${maxToolCallsLimit}.`,
       });
     }
 
@@ -470,6 +482,34 @@ export class GraphValidator {
 
         const policy = context.toolRegistry.getPolicy(toolName);
         effectivePolicies[node.id] = policy;
+
+        // Tier Permission Validation
+        const userTier = context.userTier || "free";
+        if (policy.allowedTiers && policy.allowedTiers.length > 0 && !policy.allowedTiers.includes(userTier)) {
+          errors.push({
+            severity: "error",
+            code: "UNAUTHORIZED_TIER",
+            message: `User tier "${userTier}" is not authorized for tool "${toolName}" in node "${node.id}". Allowed tiers: [${policy.allowedTiers.join(", ")}]. Plan rejected.`,
+            nodeId: node.id,
+          });
+        }
+
+        // Domain Whitelist Validation
+        if (policy.domainWhitelist && !policy.domainWhitelist.includes("*")) {
+          // If the tool has a strict domain whitelist, the user's allowedDomains must be a subset or exactly permitted,
+          // or we check the parameters. For "Pre-Execution Policy Engine", we validate if the context allows it.
+          const allowed = context.allowedDomains || [];
+          // If the user context doesn't explicitly allow one of the tool's whitelisted domains, and the tool isn't open (*)
+          const hasOverlap = policy.domainWhitelist.some(d => allowed.includes(d));
+          if (!hasOverlap && allowed.length > 0) {
+            errors.push({
+              severity: "error",
+              code: "UNAUTHORIZED_DOMAIN",
+              message: `Execution context allowed domains [${allowed.join(", ")}] do not overlap with tool "${toolName}" domain whitelist [${policy.domainWhitelist.join(", ")}].`,
+              nodeId: node.id,
+            });
+          }
+        }
 
         // Capability Validation (Point 7)
         if (context.userCapabilities && policy.requiredCapabilities.length > 0) {

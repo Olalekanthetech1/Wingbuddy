@@ -18,7 +18,7 @@ describe("StreamingResponder", () => {
     const responder = new StreamingResponder(mockCtx);
     const msgId = await responder.init();
     expect(msgId).toBe(12345);
-    expect(replyMock).toHaveBeenCalledWith("…", { parse_mode: "HTML" });
+    expect(replyMock).toHaveBeenCalledWith("💭 Thinking", { parse_mode: "HTML" });
 
     // Feed token chunks
     await responder.onChunk("Hello");

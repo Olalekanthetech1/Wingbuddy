@@ -42,8 +42,8 @@ describe("AdaptiveAIRouterService provider-neutral routing", () => {
     vi.spyOn(unifiedModelRegistryService, "list").mockResolvedValue([gemini, groq]);
 
     const candidates = await service.candidates();
-    expect(candidates.map((item) => item.model.id)).toEqual(["groq:groq-fast", "gemini:gemini-primary"]);
-    expect(candidates.find((item) => item.model.id === "gemini:gemini-primary")?.reasons).not.toContain("primary");
+    expect(candidates.map((item) => item.model.id)).toEqual(["gemini:gemini-primary", "groq:groq-fast"]);
+    expect(candidates.find((item) => item.model.id === "gemini:gemini-primary")?.reasons).toContain("primary");
   });
 
   it("moves from a failing Gemini candidate to another provider for streaming", async () => {

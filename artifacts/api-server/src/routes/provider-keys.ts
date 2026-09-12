@@ -25,6 +25,43 @@ router.get("/provider-keys", async (req: Request, res: Response) => {
   catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
 });
 
+router.post("/provider-keys/:provider/test", async (req: Request, res: Response) => {
+  try {
+    const rawProvider = req.params.provider;
+    const providerId = providerOf(Array.isArray(rawProvider) ? rawProvider[0] : rawProvider);
+    const provider = await aiProviderRegistryService.get(providerId);
+    const adapter = aiProviderRegistryService.getAdapter(provider.adapter);
+
+    let key = typeof req.body?.key === "string" ? req.body.key.trim() : "";
+    const keyId = typeof req.body?.keyId === "string" ? req.body.keyId.trim() : "";
+
+    if (!key && keyId) {
+      if (providerId === "gemini") {
+        const found = apiKeyPoolService.getOrderedKeys().find((k) => k.id === keyId);
+        if (found) key = found.key;
+      } else {
+        const found = aiProviderKeyPoolService.getOrderedKeys(providerId).find((k) => k.id === keyId);
+        if (found) key = found.key;
+      }
+    }
+
+    if (!key) {
+      key = process.env[provider.apiKeyEnv]?.trim() || "";
+    }
+
+    if (!key) {
+      res.status(400).json({ ok: false, error: `No ${provider.name} API key provided or configured in environment.` });
+      return;
+    }
+
+    const model = typeof req.body?.model === "string" ? req.body.model.trim() : "default";
+    const validation = await adapter.test(model, provider, key);
+    res.json(validation);
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
 router.post("/provider-keys", async (req: Request, res: Response) => {
   try {
     const providerId = providerOf(req.body?.provider || "gemini");
@@ -89,7 +126,25 @@ router.patch("/provider-keys/:id/toggle", async (req: Request, res: Response) =>
   } catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); }
 });
 
+router.post("/provider-keys/:id/toggle", async (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id);
+    const generic = await aiProviderKeyPoolService.toggleKey(id);
+    if (generic) { res.json({ message: "Provider API key state updated", key: generic }); return; }
+    const updated = await apiKeyPoolService.toggleKey(id);
+    if (!updated) { res.status(404).json({ error: "Provider API key not found" }); return; }
+    await apiKeyPoolService.reloadFromDatabase(); res.json({ message: "Provider API key state updated", key: updated });
+  } catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); }
+});
+
 router.post("/provider-keys/mode", async (req: Request, res: Response) => {
+  const mode = req.body?.mode as ProviderKeyRotationMode;
+  if (mode !== "round_robin" && mode !== "failover") { res.status(400).json({ error: "Invalid key rotation mode" }); return; }
+  try { await aiProviderKeyPoolService.setRotationMode(mode); apiKeyPoolService.setRotationMode(mode); res.json({ message: "Provider key rotation mode persisted", rotationMode: mode }); }
+  catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); }
+});
+
+router.post("/provider-keys/rotation-mode", async (req: Request, res: Response) => {
   const mode = req.body?.mode as ProviderKeyRotationMode;
   if (mode !== "round_robin" && mode !== "failover") { res.status(400).json({ error: "Invalid key rotation mode" }); return; }
   try { await aiProviderKeyPoolService.setRotationMode(mode); apiKeyPoolService.setRotationMode(mode); res.json({ message: "Provider key rotation mode persisted", rotationMode: mode }); }

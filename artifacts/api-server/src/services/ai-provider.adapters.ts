@@ -486,10 +486,52 @@ class ElevenLabsAdapter implements AIProviderAdapter {
   }
 }
 
+class TavilyAdapter implements AIProviderAdapter {
+  readonly providerId: AIProviderId = "tavily";
+
+  async test(model: string, provider: AIProviderRecord, apiKey?: string): Promise<{ ok: boolean; latencyMs: number; error?: string }> {
+    const key = apiKey?.trim() || process.env.TAVILY_API_KEY?.trim();
+    if (!key) return { ok: false, latencyMs: 0, error: "TAVILY_API_KEY is not configured" };
+    const start = Date.now();
+    try {
+      const response = await fetch("https://api.tavily.com/search", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ query: "ping test", max_results: 1, search_depth: "basic" }),
+      });
+      const latencyMs = Date.now() - start;
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        return { ok: false, latencyMs, error: `HTTP ${response.status}: ${text.slice(0, 150)}` };
+      }
+      return { ok: true, latencyMs };
+    } catch (error) {
+      return { ok: false, latencyMs: Date.now() - start, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  async listModels(provider: AIProviderRecord, apiKey?: string): Promise<AIModelCatalogEntry[]> {
+    return [
+      catalogEntry(this.providerId, "tavily-search-basic", "Tavily Web Search (Basic)", "active", ["web_search"]),
+      catalogEntry(this.providerId, "tavily-search-advanced", "Tavily Deep Web Research (Advanced)", "active", ["web_search"]),
+      catalogEntry(this.providerId, "tavily-extract", "Tavily Web Extract (Direct Parsing)", "active", ["web_extract"]),
+    ];
+  }
+
+  async chat(): Promise<any> {
+    throw new Error("Tavily is a web research and search provider, not a conversational LLM.");
+  }
+
+  async *stream(): AsyncGenerator<any> {
+    throw new Error("Tavily is a web research and search provider, not a conversational LLM.");
+  }
+}
+
 export const aiProviderAdapters: Record<AIProviderId, AIProviderAdapter & { listModels: (provider: AIProviderRecord, apiKey?: string) => Promise<AIModelCatalogEntry[]> }> = {
   gemini: new GeminiAdapter(),
   groq: new GroqAdapter(),
   mistral: new MistralAdapter(),
   huggingface: new HuggingFaceAdapter(),
   elevenlabs: new ElevenLabsAdapter(),
+  tavily: new TavilyAdapter(),
 };

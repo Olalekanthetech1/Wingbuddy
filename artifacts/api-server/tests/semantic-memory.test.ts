@@ -50,6 +50,12 @@ describe("Semantic Vector Memory & Hybrid RAG", () => {
         }
         return [0.0, 0.1, 0.9];
       }),
+      generateReply: vi.fn().mockResolvedValue(JSON.stringify({
+        intent: "general",
+        effectiveMode: "general",
+        requiredCapabilities: [],
+        complexity: "simple",
+      })),
     };
 
     const service = new GlobalContextService(mockConversations as ConversationService);

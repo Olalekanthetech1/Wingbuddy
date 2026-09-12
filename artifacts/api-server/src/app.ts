@@ -20,15 +20,43 @@ import { renderDashboardMediaStorage } from "./dashboard-media-storage";
 import { renderDashboardKnowledgeBase } from "./dashboard-knowledge-base";
 import { renderDashboardUserAccess } from "./dashboard-user-access";
 import { renderDashboardPersonas } from "./dashboard-personas";
+import { renderDashboardWebResearchControlPlane } from "./dashboard-web-research-control-plane";
+import { renderDashboardExecutionVisualizer } from "./dashboard-execution-visualizer";
 import { apiKeyPoolService } from "./services/api-key-pool.service";
 import { aiProviderRegistryService } from "./services/ai-provider-registry.service";
+import { aiProviderKeyPoolService } from "./services/ai-provider-key-pool.service";
 import { unifiedModelRegistryService } from "./services/unified-model-registry.service";
 import { adaptiveAIRouterService } from "./services/adaptive-ai-router.service";
 import { aiObservabilityService } from "./services/ai-observability.service";
 import { proactiveAssistantService } from "./services/proactive-assistant.service";
+import { cronTaskService } from "./services/cron-task.service";
+import { tavilyService } from "./services/tavily.service";
 
 const app: Express = express();
-app.use(pinoHttp({ logger, serializers: { req(req) { return { id: req.id, method: req.method, url: req.url?.split("?")[0] }; }, res(res) { return { statusCode: res.statusCode }; } } }));
+app.use(
+  pinoHttp({
+    logger,
+    serializers: {
+      req(req) {
+        return { id: req.id, method: req.method, url: req.url?.split("?")[0] };
+      },
+      res(res) {
+        return { statusCode: res.statusCode };
+      },
+      err(err) {
+        return safeErrorMetadata(err);
+      },
+    },
+    customLogLevel(_req, res, err) {
+      if (res.statusCode >= 500 || err) return "error";
+      if (res.statusCode >= 400) return "warn";
+      return "info";
+    },
+    customErrorMessage(req, res, err) {
+      return `HTTP ${req.method} ${req.url?.split("?")[0]} errored (${res.statusCode}): ${err?.message || "error"}`;
+    },
+  })
+);
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -45,10 +73,14 @@ export async function initOrReloadTelegramBotAsync() {
     if (process.env.TELEGRAM_BOT_TOKEN?.trim() && (process.env.GEMINI_API_KEY?.trim() || apiKeyPoolService.getSummary().totalKeys > 0)) {
       if (realTelegramRuntime) {
         proactiveAssistantService.detachBot(realTelegramRuntime.bot);
+        cronTaskService.detachBot();
+        cronTaskService.stopPolling();
         await realTelegramRuntime.stop().catch(() => {});
       }
       realTelegramRuntime = createTelegramBot();
       proactiveAssistantService.attachBot(realTelegramRuntime.bot);
+      cronTaskService.attachBot(realTelegramRuntime.bot);
+      cronTaskService.startPolling();
       await realTelegramRuntime.start();
       logger.info("Telegram bot runtime initialized/reloaded successfully");
       return realTelegramRuntime;
@@ -65,11 +97,15 @@ export function initOrReloadTelegramBot(): ReturnType<typeof createTelegramBot> 
     if (process.env.TELEGRAM_BOT_TOKEN?.trim() && (process.env.GEMINI_API_KEY?.trim() || apiKeyPoolService.getSummary().totalKeys > 0)) {
       if (realTelegramRuntime) {
         proactiveAssistantService.detachBot(realTelegramRuntime.bot);
+        cronTaskService.detachBot();
+        cronTaskService.stopPolling();
         // synchronous stop attempt; handled properly by async init
         realTelegramRuntime.stop().catch(() => {});
       }
       realTelegramRuntime = createTelegramBot();
       proactiveAssistantService.attachBot(realTelegramRuntime.bot);
+      cronTaskService.attachBot(realTelegramRuntime.bot);
+      cronTaskService.startPolling();
       logger.info("Telegram bot runtime initialized/reloaded successfully");
       return realTelegramRuntime;
     }
@@ -209,8 +245,8 @@ app.get("/api/dashboard/runtime", async (_req: Request, res: Response) => {
     routingPolicy,
     routingHealth,
     observability: aiObservabilityService.snapshot(),
-    webResearchProvider: process.env.TAVILY_API_KEY?.trim() ? "Tavily" : "",
-    webResearchConfigured: Boolean(process.env.TAVILY_API_KEY?.trim()),
+    webResearchProvider: tavilyService.isConfigured() ? "Tavily" : (process.env.TAVILY_API_KEY?.trim() ? "Tavily" : ""),
+    webResearchConfigured: tavilyService.isConfigured(),
     executionEngineEnabled: String(process.env.EXECUTION_ENGINE_ENABLED ?? "").toLowerCase() === "true",
     telegramRuntimeActive: Boolean(realTelegramRuntime),
     keyPool: apiKeyPoolService.getSummary(),
@@ -222,11 +258,33 @@ app.use("/api", router);
 
 const serveDashboard = (_req: Request, res: Response): void => {
   const html = renderDashboardHtml();
-  const enhanced = html.replace("</body>", `${renderDashboardModelControls()}${renderDashboardControlPlane()}${renderDashboardBotSimulator()}${renderDashboardResponsiveLayer()}${renderDashboardAIRoutingControls()}${renderDashboardProviderKeyControls()}${renderDashboardProactiveAssistant()}${renderDashboardKnowledgeBase()}${renderDashboardMediaStorage()}${renderDashboardUserAccess()}${renderDashboardPersonas()}${renderDashboardThemeLayer()}</body>`);
+  const injected = `${renderDashboardModelControls()}${renderDashboardControlPlane()}${renderDashboardBotSimulator()}${renderDashboardResponsiveLayer()}${renderDashboardAIRoutingControls()}${renderDashboardProviderKeyControls()}${renderDashboardWebResearchControlPlane()}${renderDashboardProactiveAssistant()}${renderDashboardKnowledgeBase()}${renderDashboardMediaStorage()}${renderDashboardUserAccess()}${renderDashboardPersonas()}${renderDashboardExecutionVisualizer()}${renderDashboardThemeLayer()}</body>`;
+  const enhanced = html.replace("</body>", () => injected);
   res.type("html").send(enhanced);
 };
 
+app.get("/favicon.ico", (_req: Request, res: Response) => {
+  res.status(204).end();
+});
+
 app.get("/", serveDashboard);
 app.get("/dashboard", serveDashboard);
+
+// 404 handler
+app.use((req: Request, res: Response) => {
+  if (req.path.startsWith("/api/")) {
+    res.status(404).json({ error: `API route not found: ${req.method} ${req.path}` });
+  } else {
+    res.status(404).type("text/plain").send("Not Found");
+  }
+});
+
+// Global Express error handler
+app.use((err: any, req: Request, res: Response, _next: express.NextFunction) => {
+  logger.error({ error: safeErrorMetadata(err), method: req.method, path: req.path }, "Express request error");
+  if (!res.headersSent) {
+    res.status(err.status || 500).json({ error: err.message || "Internal server error" });
+  }
+});
 
 export default app;

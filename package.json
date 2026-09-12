@@ -26,10 +26,12 @@
   "dependencies": {
     "@prisma/client": "^6.4.1",
     "@replit/connectors-sdk": "^0.4.1",
+    "cron-parser": "^5.10.0",
     "prisma": "^6.4.1"
   },
   "devDependencies": {
     "prettier": "^3.9.6",
+    "supertest": "^7.2.2",
     "typescript": "~5.9.3"
   },
   "engines": {

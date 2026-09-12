@@ -3,6 +3,7 @@ import type { ModeKey } from "../config/mode";
 import type { Message } from "@workspace/db";
 import { StructureAwareParser } from "../utils/telegram-formatter";
 import { MAX_GRAPH_NODES, MAX_GRAPH_EDGES, MAX_TOOL_CALLS, MAX_PLAN_REVISIONS, MAX_EXECUTION_DURATION_MS, type EffectiveExecutionPolicy } from "../planner/types";
+import { unifiedModelRegistryService, type UnifiedModelRole } from "./unified-model-registry.service";
 
 export interface AdaptiveHistoryOptions {
   mode?: ModeKey | string;
@@ -241,11 +242,11 @@ export class AdaptiveEngineService {
   // 4. ADAPTIVE MODEL SELECTOR (Replaces static hardcoded model string)
   // =========================================================================
   /**
-   * Dynamically selects the optimal Gemini model variant based on task intent:
-   * - Fast Flash tier for quick conversational messages, greetings, and live search grounding
-   * - Pro reasoning tier for deep multi-step logic, code generation, and complex math
-   * - Lightweight fast tier for background semantic fact extraction
-   * - Respects explicit GEMINI_MODEL overrides if configured by user
+   * Dynamically resolves the optimal model from UnifiedModelRegistryService based on task intent:
+   * - Evaluates capability role: "reasoning", "fast", "extraction", or "primary"
+   * - Queries UnifiedModelRegistryService as the authoritative single source of truth
+   * - Never hardcodes provider-specific models to tasks
+   * - Respects explicit custom overrides if configured by user
    */
   static computeAdaptiveModel(options: {
     mode?: ModeKey | string;
@@ -275,37 +276,57 @@ export class AdaptiveEngineService {
       return configuredModel;
     }
 
-    // 2. Background JSON/Fact extraction uses fast responsive Flash tier
+    // 2. Classify task into an authoritative Registry role
+    let targetRole: UnifiedModelRole = "primary";
+
     if (isExtraction) {
-      return "gemini-2.5-flash";
+      targetRole = "extraction";
+    } else {
+      const isCodeOrMathPrompt =
+        /\b(write code|implement|refactor|debug|algorithm|proof|solve equation|architect|dockerfile|kubernetes|regex)\b/i.test(
+          prompt,
+        );
+
+      const modeStr = String(mode);
+      if (
+        isDeepReasoning ||
+        modeStr === "coder" ||
+        modeStr === "architect" ||
+        modeStr === "reasoning" ||
+        modeStr === "deep_research" ||
+        modeStr === "math" ||
+        isCodeOrMathPrompt
+      ) {
+        targetRole = "reasoning";
+      } else if (enableSearch || modeStr === "concise" || modeStr === "casual" || modeStr === "general") {
+        targetRole = "fast";
+      }
     }
 
-    // 3. Deep code, mathematics, or explicit reasoning tasks adapt to Pro tier
-    const isCodeOrMathPrompt =
-      /\b(write code|implement|refactor|debug|algorithm|proof|solve equation|architect|dockerfile|kubernetes|regex)\b/i.test(
-        prompt,
-      );
-
-    const modeStr = String(mode);
-    if (
-      isDeepReasoning ||
-      modeStr === "coder" ||
-      modeStr === "architect" ||
-      modeStr === "reasoning" ||
-      modeStr === "deep_research" ||
-      modeStr === "math" ||
-      isCodeOrMathPrompt
-    ) {
-      return "gemini-2.5-pro";
+    // 3. Delegate to authoritative UnifiedModelRegistryService
+    const registryModel = unifiedModelRegistryService.getModelForRole(targetRole);
+    if (registryModel?.modelId) {
+      return registryModel.modelId;
     }
 
-    // 4. Web search grounding and general conversational chat adapt to fast, high-rate-limit Flash
-    if (enableSearch || modeStr === "concise" || modeStr === "casual" || modeStr === "creative" || modeStr === "general" || modeStr === "study" || modeStr === "auto") {
-      return "gemini-2.5-flash";
+    // 4. Synchronized environment variables configured by Registry
+    if (targetRole === "reasoning" && process.env.GEMINI_MODEL_REASONING) {
+      return process.env.GEMINI_MODEL_REASONING;
+    }
+    if (targetRole === "fast" && process.env.GEMINI_MODEL_FAST) {
+      return process.env.GEMINI_MODEL_FAST;
+    }
+    if (targetRole === "extraction" && process.env.GEMINI_MODEL_EXTRACTION) {
+      return process.env.GEMINI_MODEL_EXTRACTION;
+    }
+    if (process.env.GEMINI_MODEL) {
+      return process.env.GEMINI_MODEL;
     }
 
-    // 5. Default dynamic model
-    return "gemini-2.5-flash";
+    // 5. Authoritative fallback: first model registered in registry
+    const defaultRegistry = unifiedModelRegistryService.getDefaultModels();
+    const fallbackForRole = defaultRegistry.find((m) => m.roles.includes(targetRole)) || defaultRegistry[0];
+    return fallbackForRole?.modelId || "gemini-3.8-flash";
   }
 
   // =========================================================================

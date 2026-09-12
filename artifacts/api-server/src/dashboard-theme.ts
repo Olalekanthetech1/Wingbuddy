@@ -95,7 +95,9 @@ export function renderDashboardThemeLayer(): string {
   .btn.primary{background:var(--primary)!important;color:var(--on-primary)!important;border-color:var(--primary)!important}
   .btn.danger{background:var(--danger-bg)!important;color:var(--danger)!important;border-color:var(--danger-border)!important}
   .sim-panel,.sim-card,.sim-kv,.sim-run,.sim-tab,.sim-result,.sim-input,.sim-select,.sim-textarea,
-  .wb-model-card,.wb-role,.wb-cp-stat,.wb-key-card{transition:background-color .18s ease,color .18s ease,border-color .18s ease}
+  .wb-model-card,.wb-role,.wb-cp-stat,.wb-key-card,.wb-pk-card,.wb-pk-item,.wb-air-stat-card,.wb-air-provider-card,.wb-media-asset,
+  .wb-dag-suite,.wb-node-card,.wb-inspector-card,.wb-explain-item,.wb-code-block,.wb-dag-canvas-card,.persona-card,
+  .side,.mobile-nav,.nav button,.mobile-nav button{transition:background-color .18s ease,color .18s ease,border-color .18s ease}
 </style>
 <script>
 (function(){

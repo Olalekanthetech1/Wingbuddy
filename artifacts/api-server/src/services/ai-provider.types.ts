@@ -1,4 +1,4 @@
-export type AIProviderId = "gemini" | "groq" | "mistral" | "huggingface" | "elevenlabs";
+export type AIProviderId = "gemini" | "groq" | "mistral" | "huggingface" | "elevenlabs" | "tavily";
 
 export type AIProviderCapability =
   | "chat"
@@ -8,6 +8,7 @@ export type AIProviderCapability =
   | "reasoning"
   | "long_context"
   | "web_search"
+  | "web_extract"
   | "image_generation"
   | "video_generation"
   | "audio_generation";

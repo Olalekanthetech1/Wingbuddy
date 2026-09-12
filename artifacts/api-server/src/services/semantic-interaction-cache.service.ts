@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 export type SemanticTaskIntent =
   | "NEW_TASK"
+  | "SCHEDULE_TASK"
   | "CONTINUE_TASK"
   | "PAUSE_TASK"
   | "COMPLETE_TASK"
@@ -53,6 +54,7 @@ export interface SemanticInteractionDecision {
   taskGoal?: string;
   taskIdHint?: number;
   taskSteps?: string[];
+  cronExpression?: string;
   /** Semantic evidence that the user explicitly requires durable/persistent work. */
   durabilityEvidence?: string[];
   conversationOperation?: string;

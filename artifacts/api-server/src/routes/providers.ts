@@ -5,7 +5,7 @@ import type { AIProviderCapability, AIProviderId } from "../services/ai-provider
 const router: IRouter = Router();
 const CAPABILITIES: AIProviderCapability[] = ["chat", "streaming", "tool_calling", "vision", "reasoning", "long_context", "web_search", "image_generation", "video_generation", "audio_generation"];
 
-router.get("/providers", async (_req: Request, res: Response) => {
+router.get(["/providers", "/ai/providers"], async (_req: Request, res: Response) => {
   try {
     res.json({ timestamp: new Date().toISOString(), providers: await aiProviderRegistryService.list() });
   } catch (error) {
@@ -13,7 +13,7 @@ router.get("/providers", async (_req: Request, res: Response) => {
   }
 });
 
-router.patch("/providers/:id", async (req: Request, res: Response) => {
+router.patch(["/providers/:id", "/ai/providers/:id"], async (req: Request, res: Response) => {
   try {
     const rawId = req.params.id;
     const id = Array.isArray(rawId) ? rawId[0] : rawId;
@@ -37,7 +37,7 @@ router.patch("/providers/:id", async (req: Request, res: Response) => {
   }
 });
 
-router.post("/providers/:id/test", async (req: Request, res: Response) => {
+router.post(["/providers/:id/test", "/ai/providers/:id/test"], async (req: Request, res: Response) => {
   try {
     const rawId = req.params.id;
     const id = Array.isArray(rawId) ? rawId[0] : rawId;

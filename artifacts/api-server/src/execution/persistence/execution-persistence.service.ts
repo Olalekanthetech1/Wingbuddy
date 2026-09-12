@@ -50,15 +50,24 @@ export class ExecutionPersistenceService {
         await pool.query(
           `INSERT INTO execution_sessions (
             execution_id, request_id, task_id, graph_id, plan_revision, revision_id,
-            telegram_user_id, status, current_nodes_json, error_json, started_at, updated_at, deadline_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            telegram_user_id, status, current_nodes_json, error_json, started_at, updated_at, deadline_at,
+            worker_id, lease_expires_at, last_heartbeat_at, expires_at, execution_budget, execution_usage, failure_code, failure_message
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
           ON CONFLICT (execution_id) DO UPDATE SET
             status = $8,
             current_nodes_json = $9,
             error_json = $10,
             updated_at = $12,
             completed_at = CASE WHEN $8 IN ('completed', 'failed', 'cancelled') THEN NOW() ELSE execution_sessions.completed_at END,
-            deadline_at = $13`,
+            deadline_at = $13,
+            worker_id = $14,
+            lease_expires_at = $15,
+            last_heartbeat_at = $16,
+            expires_at = $17,
+            execution_budget = $18,
+            execution_usage = $19,
+            failure_code = $20,
+            failure_message = $21`,
           [
             session.executionId,
             session.requestId,
@@ -73,6 +82,14 @@ export class ExecutionPersistenceService {
             new Date(session.startedAt),
             new Date(session.updatedAt),
             session.deadlineAt ? new Date(session.deadlineAt) : null,
+            session.workerId ?? null,
+            session.leaseExpiresAt ? new Date(session.leaseExpiresAt) : null,
+            session.lastHeartbeatAt ? new Date(session.lastHeartbeatAt) : null,
+            session.expiresAt ? new Date(session.expiresAt) : null,
+            session.executionBudget ? JSON.stringify(session.executionBudget) : null,
+            session.executionUsage ? JSON.stringify(session.executionUsage) : null,
+            session.failureCode ?? null,
+            session.failureMessage ?? null,
           ],
         );
       } catch (err) {
@@ -141,6 +158,14 @@ export class ExecutionPersistenceService {
             updatedAt: new Date(row.updated_at).toISOString(),
             completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : inMem?.completedAt,
             deadlineAt: row.deadline_at ? new Date(row.deadline_at).toISOString() : inMem?.deadlineAt,
+            workerId: row.worker_id || inMem?.workerId,
+            leaseExpiresAt: row.lease_expires_at ? new Date(row.lease_expires_at).toISOString() : inMem?.leaseExpiresAt,
+            lastHeartbeatAt: row.last_heartbeat_at ? new Date(row.last_heartbeat_at).toISOString() : inMem?.lastHeartbeatAt,
+            expiresAt: row.expires_at ? new Date(row.expires_at).toISOString() : inMem?.expiresAt,
+            executionBudget: row.execution_budget ? JSON.parse(row.execution_budget) : inMem?.executionBudget,
+            executionUsage: row.execution_usage ? JSON.parse(row.execution_usage) : inMem?.executionUsage,
+            failureCode: row.failure_code || inMem?.failureCode,
+            failureMessage: row.failure_message || inMem?.failureMessage,
           };
         }
       } catch (err) {
@@ -617,6 +642,28 @@ export class ExecutionPersistenceService {
       }
     }
     return results;
+  }
+
+  /**
+   * Clears node execution attempts for a node, enabling on-demand re-execution.
+   */
+  async clearNodeExecution(graphId: string, planRevision: number, nodeId: string): Promise<void> {
+    if (this.isDbAvailable()) {
+      try {
+        const pool = getPool();
+        await pool.query(
+          `DELETE FROM node_executions WHERE graph_id = $1 AND plan_revision = $2 AND node_id = $3`,
+          [graphId, planRevision, nodeId],
+        );
+      } catch (err) {
+        logger.warn({ err: String(err) }, "DELETE_NODE_EXECUTION_ERROR");
+      }
+    }
+    for (const [key, execution] of this.nodeExecutions.entries()) {
+      if (execution.graphId === graphId && execution.planRevision === planRevision && execution.nodeId === nodeId) {
+        this.nodeExecutions.delete(key);
+      }
+    }
   }
 
   // --- Stale Lease Recovery ---

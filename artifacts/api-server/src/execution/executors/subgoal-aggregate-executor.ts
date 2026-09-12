@@ -1,7 +1,7 @@
 import type { INodeExecutor, NodeExecutionParams } from "./node-executor.interface";
 import type { NodeResult } from "../../planner/types";
 import { executionPersistence } from "../persistence/execution-persistence.service";
-import { getDefaultGeminiService } from "../../gemini/gemini.service";
+import { adaptiveAIRouterService } from "../../services/adaptive-ai-router.service";
 import { ASSISTANT_ARCHITECTURE_FACTS } from "../../config/env";
 import { logger } from "../../lib/logger";
 
@@ -24,8 +24,11 @@ export class SubgoalAggregateExecutor implements INodeExecutor {
     }
 
     let synthesizedAnswer = "";
+    let executedProvider = "adaptive-router";
+    let executedModel = "auto";
+    let executedReasons: string[] = [];
+
     try {
-      const gemini = getDefaultGeminiService();
       const aggregationPrompt =
         `${ASSISTANT_ARCHITECTURE_FACTS}\n\n` +
         `[FINAL AUTONOMOUS AGGREGATION & SYNTHESIS]\n` +
@@ -40,20 +43,23 @@ export class SubgoalAggregateExecutor implements INodeExecutor {
         `- Deliver a complete, definitive answer that fulfills the user's autonomous task.\n` +
         `- Do NOT append follow-up questions asking whether to proceed or requiring manual continuation.`;
 
-      synthesizedAnswer = await gemini.generateReply(
-        [],
-        aggregationPrompt,
-        {
-          personalityInstruction: executionContext.userPersonality,
-          modeInstruction: executionContext.userMode,
-        },
-        {
-          thinkingLevel: "LOW",
-        },
-      );
-    } catch (geminiErr: any) {
+      const routed = await adaptiveAIRouterService.route({
+        systemInstruction: [
+          executionContext.userPersonality ? `Personality: ${executionContext.userPersonality}` : "",
+          executionContext.userMode ? `Mode: ${executionContext.userMode}` : "",
+        ].filter(Boolean).join("\n"),
+        messages: [{ role: "user", content: aggregationPrompt }],
+      }, {
+        isSystemTask: true,
+      });
+
+      synthesizedAnswer = routed.response.text;
+      executedProvider = routed.candidate.model.provider;
+      executedModel = routed.candidate.model.modelId;
+      executedReasons = routed.candidate.reasons;
+    } catch (routerErr: any) {
       logger.warn(
-        { graphId, planRevision, error: geminiErr?.message },
+        { graphId, planRevision, error: routerErr?.message },
         "Subgoal aggregation fallback to structured summary",
       );
       synthesizedAnswer = `Aggregated results for ${node.title}:\n` +
@@ -70,7 +76,12 @@ export class SubgoalAggregateExecutor implements INodeExecutor {
         nodeResults: aggregated,
         parameters: resolvedInputs,
       },
-      metadata: { durationMs: Date.now() - startTime },
+      metadata: {
+        durationMs: Date.now() - startTime,
+        provider: executedProvider,
+        model: executedModel,
+        candidateReasons: executedReasons,
+      },
     };
   }
 }

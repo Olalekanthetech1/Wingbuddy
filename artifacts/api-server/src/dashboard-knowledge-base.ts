@@ -1,5 +1,5 @@
 export function renderDashboardKnowledgeBase(): string {
-  return `<script>
+  return String.raw`<script>
 (function(){
   function showKnowledgeView(){
     document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
@@ -28,15 +28,17 @@ export function renderDashboardKnowledgeBase(): string {
       const res = await fetch('/api/knowledge');
       const data = await res.json();
       if (data.documents && data.documents.length > 0) {
-        list.innerHTML = data.documents.map(d => \`
-          <div style="display:flex;justify-content:space-between;align-items:center;padding:12px;border:1px solid var(--line);border-radius:6px;margin-bottom:8px;background:var(--bg)">
-            <div>
-              <div style="font-weight:600;font-size:14px">\${d.filename.replace(/</g, '&lt;')}</div>
-              <div style="font-size:12px;color:var(--muted);margin-top:4px">\${new Date(d.createdAt).toLocaleString()}</div>
-            </div>
-            <button class="btn danger" onclick="window.__wbDeleteDoc('\${d.id}')">Delete</button>
-          </div>
-        \`).join('');
+        list.innerHTML = data.documents.map(d => {
+          const fn = String(d.filename || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          const dt = new Date(d.createdAt).toLocaleString();
+          return '<div style="display:flex;justify-content:space-between;align-items:center;padding:12px;border:1px solid var(--line);border-radius:6px;margin-bottom:8px;background:var(--bg)">' +
+            '<div>' +
+              '<div style="font-weight:600;font-size:14px">' + fn + '</div>' +
+              '<div style="font-size:12px;color:var(--muted);margin-top:4px">' + dt + '</div>' +
+            '</div>' +
+            '<button class="btn danger" onclick="window.__wbDeleteDoc(\'' + d.id + '\')">Delete</button>' +
+          '</div>';
+        }).join('');
       } else {
         list.innerHTML = '<div class="empty">No documents uploaded yet.</div>';
       }
@@ -56,28 +58,25 @@ export function renderDashboardKnowledgeBase(): string {
       const section=document.createElement('section');
       section.className='view';
       section.id='view-knowledge';
-      section.innerHTML=\`
-        <div class="card section">
-          <div class="section-head">
-            <div>
-              <div class="section-title">Knowledge Vault</div>
-              <div class="section-note">Upload private documents (TXT, MD, CSV) for Retrieval-Augmented Generation (RAG).</div>
-            </div>
-            <button class="btn" onclick="window.__wbLoadDocs()">Refresh</button>
-          </div>
-          
-          <input type="file" id="wbKbFileInput" style="display: none;" accept=".txt,.md,.csv" multiple />
-          <div id="wbKbUploadArea" style="border:2px dashed var(--line);border-radius:8px;padding:32px;text-align:center;cursor:pointer;color:var(--muted);margin-bottom:24px;" onclick="document.getElementById('wbKbFileInput').click()">
-            <strong style="font-size:14px;color:var(--text);">Click to Upload Document</strong>
-            <div style="font-size:12px;margin-top:6px;">Supports .txt, .md, .csv (Raw Text)</div>
-          </div>
-          
-          <div style="font-weight:600;margin-bottom:12px;font-size:14px;">Indexed Documents</div>
-          <div id="wbKbDocList">
-            <div class="empty">Loading...</div>
-          </div>
-        </div>
-      \`;
+      section.innerHTML = '' +
+        '<div class="card section">' +
+          '<div class="section-head">' +
+            '<div>' +
+              '<div class="section-title">Knowledge Vault</div>' +
+              '<div class="section-note">Upload private documents (TXT, MD, CSV) for Retrieval-Augmented Generation (RAG).</div>' +
+            '</div>' +
+            '<button class="btn" onclick="window.__wbLoadDocs()">Refresh</button>' +
+          '</div>' +
+          '<input type="file" id="wbKbFileInput" style="display: none;" accept=".txt,.md,.csv" multiple />' +
+          '<div id="wbKbUploadArea" style="border:2px dashed var(--line);border-radius:8px;padding:32px;text-align:center;cursor:pointer;color:var(--muted);margin-bottom:24px;" onclick="document.getElementById(\'wbKbFileInput\').click()">' +
+            '<strong style="font-size:14px;color:var(--text);">Click to Upload Document</strong>' +
+            '<div style="font-size:12px;margin-top:6px;">Supports .txt, .md, .csv (Raw Text)</div>' +
+          '</div>' +
+          '<div style="font-weight:600;margin-bottom:12px;font-size:14px;">Indexed Documents</div>' +
+          '<div id="wbKbDocList">' +
+            '<div class="empty">Loading...</div>' +
+          '</div>' +
+        '</div>';
       const mainEl=document.querySelector('main');
       if(mainEl) mainEl.appendChild(section);
       

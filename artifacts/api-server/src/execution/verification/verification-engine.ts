@@ -47,6 +47,9 @@ export class VerificationEngine {
       case "llm_review":
         return this.verifyLlmReview(result.output, spec.reviewPrompt);
 
+      case "evidence":
+        return this.verifyEvidence(result.output, spec.schemaOrRule);
+
       default:
         return {
           verified: false,
@@ -290,6 +293,60 @@ export class VerificationEngine {
       };
     }
     return { verified: true, strategy: "llm_review" };
+  }
+
+  /**
+   * Schema-driven evidence validation (verifying URLs against actually retrieved sources, dates, numbers, and claims).
+   */
+  private verifyEvidence(
+    output: unknown,
+    schemaOrRule?: Record<string, unknown>
+  ): VerificationOutcome {
+    if (!output || typeof output !== "object") {
+      executionObservability.recordVerificationFailure();
+      return {
+        verified: false,
+        strategy: "evidence",
+        reason: "Output is empty or not an object; cannot verify evidence.",
+      };
+    }
+    
+    if (!schemaOrRule || Object.keys(schemaOrRule).length === 0) {
+      return { verified: true, strategy: "evidence" };
+    }
+
+    const outputObj = output as Record<string, unknown>;
+    const missingClaims: string[] = [];
+    const missingSources: string[] = [];
+    
+    // Check required claim fields
+    const requiredClaims = (schemaOrRule.claims as string[]) || [];
+    for (const claim of requiredClaims) {
+      if (outputObj[claim] === undefined) {
+        missingClaims.push(claim);
+      }
+    }
+    
+    // Verify source evidence presence if required
+    const requiresSources = schemaOrRule.requiresSources === true;
+    if (requiresSources) {
+      const sources = outputObj.sources || outputObj.url || outputObj.urls;
+      if (!sources || (Array.isArray(sources) && sources.length === 0)) {
+        missingSources.push("sources");
+      }
+    }
+
+    if (missingClaims.length > 0 || missingSources.length > 0) {
+      executionObservability.recordVerificationFailure();
+      return {
+        verified: false,
+        strategy: "evidence",
+        reason: `Evidence verification failed. Missing claims: [${missingClaims.join(", ")}]. Missing sources: [${missingSources.join(", ")}].`,
+        diagnostics: { missingClaims, missingSources }
+      };
+    }
+
+    return { verified: true, strategy: "evidence" };
   }
 }
 

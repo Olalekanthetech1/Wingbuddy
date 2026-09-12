@@ -80,7 +80,21 @@ describe("ApiKeyPoolService", () => {
   });
 
   it("does not embed a known fallback secret in source", async () => {
-    const source = await readFile(resolve(process.cwd(), "src/services/api-key-pool.service.ts"), "utf8");
+    const candidatePaths = [
+      resolve(process.cwd(), "artifacts/api-server/src/services/api-key-pool.service.ts"),
+      resolve(process.cwd(), "src/services/api-key-pool.service.ts"),
+      new URL("../src/services/api-key-pool.service.ts", import.meta.url).pathname,
+    ];
+    let source = "";
+    for (const p of candidatePaths) {
+      try {
+        source = await readFile(p, "utf8");
+        break;
+      } catch {
+        // try next
+      }
+    }
+    expect(source).toBeTruthy();
     expect(source).not.toContain("fallback-in-memory-managed-key-secret");
   });
 });

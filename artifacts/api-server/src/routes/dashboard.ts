@@ -498,4 +498,122 @@ router.post("/dashboard/cache/flush", async (req: Request, res: Response) => {
   }
 });
 
+// =============================================================================
+// 6. WEB RESEARCH CONTROL PLANE & SANDBOX ENDPOINTS
+// =============================================================================
+
+router.get("/dashboard/research/telemetry", async (req: Request, res: Response) => {
+  try {
+    const { tavilyService } = await import("../services/tavily.service");
+    const { aiProviderKeyPoolService } = await import("../services/ai-provider-key-pool.service");
+    const { researchObservabilityService } = await import("../services/research-observability.service");
+    
+    await aiProviderKeyPoolService.hydrateProvider("tavily", "TAVILY_API_KEY");
+    const summary = aiProviderKeyPoolService.getSummary("tavily");
+    const telemetry = researchObservabilityService.getTelemetry(tavilyService.isConfigured(), summary.healthyKeys > 0);
+
+    res.json({
+      telemetry,
+      pool: summary,
+      isConfigured: tavilyService.isConfigured(),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
+  }
+});
+
+router.post("/dashboard/research/search", async (req: Request, res: Response) => {
+  try {
+    const { tavilyService } = await import("../services/tavily.service");
+    const { query, searchDepth, topic, maxResults, timeRange, includeDomains, excludeDomains } = req.body;
+
+    if (!query || typeof query !== "string" || !query.trim()) {
+      res.status(400).json({ error: "Query must be a non-empty string." });
+      return;
+    }
+
+    const start = Date.now();
+    const traceSteps: Array<{ phase: string; description: string; durationMs?: number; data?: Record<string, unknown> }> = [];
+
+    traceSteps.push({
+      phase: "1. Query Planned",
+      description: `Normalized search query: "${query.trim()}" with depth=${searchDepth || "basic"}, topic=${topic || "general"}`,
+      data: { query: query.trim(), searchDepth: searchDepth || "basic", topic: topic || "general" }
+    });
+
+    traceSteps.push({
+      phase: "2. Tavily Provider Dispatched",
+      description: `Routing query through authoritative Tavily key pool...`,
+    });
+
+    const result = await tavilyService.search({
+      query: query.trim(),
+      searchDepth: searchDepth === "advanced" ? "advanced" : "basic",
+      topic: topic === "news" || topic === "finance" ? topic : "general",
+      maxResults: typeof maxResults === "number" ? maxResults : 5,
+      timeRange: timeRange || undefined,
+      includeDomains: Array.isArray(includeDomains) ? includeDomains.filter(Boolean) : undefined,
+      excludeDomains: Array.isArray(excludeDomains) ? excludeDomains.filter(Boolean) : undefined,
+    });
+
+    const searchDurationMs = Date.now() - start;
+
+    traceSteps.push({
+      phase: "3. Results Received",
+      description: `Retrieved ${result.results.length} results from Tavily API`,
+      durationMs: searchDurationMs,
+      data: { resultsCount: result.results.length, responseTime: result.responseTime }
+    });
+
+    traceSteps.push({
+      phase: "4. Evidence Extraction & Normalization",
+      description: `Structured snippets, source domain validation, and relevance score mapping complete`,
+      data: {
+        sources: result.results.map(r => ({ title: r.title, url: r.url, score: r.score }))
+      }
+    });
+
+    traceSteps.push({
+      phase: "5. Citations Generated",
+      description: `Generated ${result.results.length} numbered reference attributions ready for conversational grounding`,
+    });
+
+    res.json({
+      success: true,
+      result,
+      trace: traceSteps,
+      latencyMs: searchDurationMs,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
+  }
+});
+
+router.post("/dashboard/research/extract", async (req: Request, res: Response) => {
+  try {
+    const { tavilyService } = await import("../services/tavily.service");
+    const { urls, depth } = req.body;
+
+    if (!Array.isArray(urls) || !urls.length) {
+      res.status(400).json({ error: "urls must be a non-empty array of URLs." });
+      return;
+    }
+
+    const start = Date.now();
+    const result = await tavilyService.extract(urls, depth === "advanced" ? "advanced" : "basic");
+    const latencyMs = Date.now() - start;
+
+    res.json({
+      success: true,
+      result,
+      latencyMs,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
+  }
+});
+
 export default router;

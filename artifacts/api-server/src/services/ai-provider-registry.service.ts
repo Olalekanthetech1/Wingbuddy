@@ -13,6 +13,7 @@ const BUILT_IN_PROVIDERS: Record<AIProviderId, Omit<AIProviderRecord, "createdAt
   mistral: { id: "mistral", name: "Mistral AI", adapter: "mistral", baseUrl: "https://api.mistral.ai", apiKeyEnv: "MISTRAL_API_KEY", capabilities: ["chat", "streaming"] },
   huggingface: { id: "huggingface", name: "Hugging Face", adapter: "huggingface", baseUrl: "https://huggingface.co", apiKeyEnv: "HF_TOKEN", capabilities: ["chat", "streaming", "image_generation", "video_generation"] },
   elevenlabs: { id: "elevenlabs", name: "ElevenLabs", adapter: "elevenlabs", baseUrl: "https://api.elevenlabs.io", apiKeyEnv: "ELEVENLABS_API_KEY", capabilities: ["audio_generation"] },
+  tavily: { id: "tavily", name: "Tavily Web Research", adapter: "tavily", baseUrl: "https://api.tavily.com", apiKeyEnv: "TAVILY_API_KEY", capabilities: ["web_search", "web_extract"] },
 };
 
 function normalize(value: unknown): AIProviderRecord[] {

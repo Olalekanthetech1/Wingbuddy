@@ -1,5 +1,5 @@
 export function renderDashboardUserAccess(): string {
-  return `<script>
+  return String.raw`<script>
 (function(){
   function showUserAccessView(){
     document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
@@ -377,7 +377,7 @@ export function renderDashboardUserAccess(): string {
       const d = await res.json();
       if (d.success) {
         resultBox.innerHTML =
-          '<div style="background:#091524;border:1px solid var(--line);border-radius:8px;padding:12px;margin-top:8px">' +
+          '<div style="background:var(--panel-3);border:1px solid var(--line);border-radius:8px;padding:12px;margin-top:8px">' +
             '<div style="display:flex;justify-content:space-between;align-items:center">' +
               '<div><span style="color:var(--muted);font-size:11px">SELECTED MODEL</span><div style="font-size:16px;font-weight:800;color:var(--green)">' + d.selectedProvider + ' / ' + d.selectedModel + '</div></div>' +
               '<div><span class="pill good">Score: ' + d.score + '</span></div>' +
@@ -402,213 +402,205 @@ export function renderDashboardUserAccess(): string {
       const section=document.createElement('section');
       section.className='view';
       section.id='view-user-access';
-      section.innerHTML = \`
-        <div class="grid">
-          <div class="card">
-            <div class="label">Total Tracked Users</div>
-            <div class="value" id="uaStatTotal">—</div>
-            <div class="sub">Telegram bot community</div>
-          </div>
-          <div class="card">
-            <div class="label">VIP Members</div>
-            <div class="value" id="uaStatVip" style="color:var(--amber)">—</div>
-            <div class="sub">Unlimited frontier routing</div>
-          </div>
-          <div class="card">
-            <div class="label">Pro Members</div>
-            <div class="value" id="uaStatPro" style="color:var(--blue)">—</div>
-            <div class="sub">Elevated limits & speeds</div>
-          </div>
-          <div class="card">
-            <div class="label">Requests Today</div>
-            <div class="value" id="uaStatToday">—</div>
-            <div class="sub">Smart daily quota usage</div>
-          </div>
-        </div>
-
-        <div class="split" style="margin-bottom:16px">
-          <!-- Global Policy Card -->
-          <div class="card section">
-            <div class="section-head">
-              <div>
-                <div class="section-title">Smart Quotas & Tier Policy</div>
-                <div class="section-note">Global default quotas and access rules.</div>
-              </div>
-              <button class="btn primary" onclick="window.__wbSaveAccessPolicy()">Save Policy</button>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
-              <div>
-                <div class="label">Default Tier (New Users)</div>
-                <select id="uaPolicyDefaultTier" class="select" style="margin-top:4px">
-                  <option value="free">🌱 Free Tier</option>
-                  <option value="pro">⚡ Pro Tier</option>
-                  <option value="vip">👑 VIP Tier</option>
-                </select>
-              </div>
-              <div>
-                <div class="label">Access Mode</div>
-                <select id="uaPolicyWhitelist" class="select" style="margin-top:4px">
-                  <option value="false">Open to All Telegram Users</option>
-                  <option value="true">🔒 Whitelist Only (VIPs/Approved)</option>
-                </select>
-              </div>
-              <div>
-                <div class="label">Free Daily Quota</div>
-                <input id="uaPolicyFreeQuota" class="input" type="number" value="30" style="margin-top:4px" />
-              </div>
-              <div>
-                <div class="label">Pro Daily Quota</div>
-                <input id="uaPolicyProQuota" class="input" type="number" value="150" style="margin-top:4px" />
-              </div>
-              <div>
-                <div class="label">VIP Daily Quota</div>
-                <input id="uaPolicyVipQuota" class="input" type="number" value="500" style="margin-top:4px" />
-              </div>
-              
-              <div>
-                <div class="label">Free Image Quota</div>
-                <input id="uaFreeImageQuota" class="input" type="number" value="3" style="margin-top:4px" />
-              </div>
-              <div>
-                <div class="label">Pro Image Quota</div>
-                <input id="uaProImageQuota" class="input" type="number" value="20" style="margin-top:4px" />
-              </div>
-              <div>
-                <div class="label">VIP Image Quota</div>
-                <input id="uaVipImageQuota" class="input" type="number" value="60" style="margin-top:4px" />
-              </div>
-              
-              <div>
-                <div class="label">Free Video Quota</div>
-                <input id="uaFreeVideoQuota" class="input" type="number" value="0" style="margin-top:4px" />
-              </div>
-              <div>
-                <div class="label">Pro Video Quota</div>
-                <input id="uaProVideoQuota" class="input" type="number" value="3" style="margin-top:4px" />
-              </div>
-              <div>
-                <div class="label">VIP Video Quota</div>
-                <input id="uaVipVideoQuota" class="input" type="number" value="10" style="margin-top:4px" />
-              </div>
-              <div>
-                <div class="label">Free Context Retention (Messages)</div>
-                <input id="uaFreeContextLimit" class="input" type="number" value="10" style="margin-top:4px" />
-              </div>
-              <div>
-                <div class="label">Pro Context Retention (Messages)</div>
-                <input id="uaProContextLimit" class="input" type="number" value="30" style="margin-top:4px" />
-              </div>
-              <div>
-                <div class="label">VIP Context Retention (Messages)</div>
-                <input id="uaVipContextLimit" class="input" type="number" value="60" style="margin-top:4px" />
-              </div>
-            </div>
-            
-            <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px;">
-              <div class="section-title" style="margin-bottom:8px;">💎 Upgrade & Monetization</div>
-              <div class="field" style="margin-bottom:12px;">
-                <label class="label">Admin Support Telegram Handle</label>
-                <input id="uaSupportContact" class="input" placeholder="@admin or @YourSupportHandle" style="margin-top:4px;" />
-                <div class="sub">Used on upgrade offer cards in Telegram when users tap locked personas.</div>
-              </div>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-                <div class="field">
-                  <label class="label">PRO Plan Price Label</label>
-                  <input id="uaProPrice" class="input" placeholder="e.g. $9.99 / mo or 50 Stars" style="margin-top:4px;" />
-                  <label class="label" style="margin-top:8px">PRO Telegram Stars (⭐️)</label>
-                  <input id="uaProStars" class="input" type="number" value="500" style="margin-top:4px;" />
-                  <label class="label" style="margin-top:8px">PRO Card Checkout URL (Stripe)</label>
-                  <input id="uaProCheckout" class="input" placeholder="https://buy.stripe.com/..." style="margin-top:4px;" />
-                  <label class="label" style="margin-top:8px">PRO Crypto Checkout URL</label>
-                  <input id="uaProCrypto" class="input" placeholder="https://commerce.coinbase.com/..." style="margin-top:4px;" />
-                </div>
-                <div class="field">
-                  <label class="label">VIP Plan Price Label</label>
-                  <input id="uaVipPrice" class="input" placeholder="e.g. $24.99 / mo or 150 Stars" style="margin-top:4px;" />
-                  <label class="label" style="margin-top:8px">VIP Telegram Stars (⭐️)</label>
-                  <input id="uaVipStars" class="input" type="number" value="1250" style="margin-top:4px;" />
-                  <label class="label" style="margin-top:8px">VIP Card Checkout URL (Stripe)</label>
-                  <input id="uaVipCheckout" class="input" placeholder="https://buy.stripe.com/..." style="margin-top:4px;" />
-                  <label class="label" style="margin-top:8px">VIP Crypto Checkout URL</label>
-                  <input id="uaVipCrypto" class="input" placeholder="https://commerce.coinbase.com/..." style="margin-top:4px;" />
-                </div>
-              </div>
-            </div>
-
-            <div style="font-size:12px;color:var(--muted);background:#091524;padding:8px 12px;border-radius:8px;margin-top:12px;">
-              💡 <strong>How Routing Works:</strong> Free users route to ultra-fast, budget-optimized models (e.g. Qwen, Ministral 3B, Gemini Flash). VIP users automatically route to heavy-duty reasoning models (e.g. DeepSeek-R1, GPT-OSS 120B) with unlimited quotas.
-            </div>
-          </div>
-
-          <!-- Dynamic Routing Simulator -->
-          <div class="card section">
-            <div class="section-head">
-              <div>
-                <div class="section-title">🧪 Dynamic Tier Routing Simulator</div>
-                <div class="section-note">Live test which model a tier or user will receive.</div>
-              </div>
-              <button class="btn" onclick="window.__wbTestRouting()">Simulate Route</button>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">
-              <div>
-                <div class="label">Simulated Tier</div>
-                <select id="uaTestTier" class="select" style="margin-top:4px">
-                  <option value="free">🌱 Free Tier</option>
-                  <option value="pro">⚡ Pro Tier</option>
-                  <option value="vip">👑 VIP Tier</option>
-                </select>
-              </div>
-              <div>
-                <div class="label">Model Override</div>
-                <input id="uaTestOverride" class="input" placeholder="Optional (e.g. deepseek-r1)" style="margin-top:4px" />
-              </div>
-              <div>
-                <div class="label">Deep Reasoning</div>
-                <select id="uaTestReasoning" class="select" style="margin-top:4px">
-                  <option value="false">Standard chat</option>
-                  <option value="true">Thinking / /think</option>
-                </select>
-              </div>
-            </div>
-            <div id="uaTestResult">
-              <div style="font-size:12px;color:var(--muted);padding:8px 0">Click "Simulate Route" to see live router decision and candidates.</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- User Directory & Management Table -->
-        <div class="card section">
-          <div class="section-head">
-            <div>
-              <div class="section-title">Tracked Telegram Users & VIP Tiers</div>
-              <div class="section-note">Assign tiers, custom quotas, or specific model overrides to each user.</div>
-            </div>
-            <div style="display:flex;gap:8px">
-              <input id="uaSearchInput" class="input" placeholder="Search user, ID, tier..." style="width:200px" oninput="window.__wbFilterUsers()" />
-              <button class="btn" onclick="window.__wbLoadUserAccess()">Refresh</button>
-              <button class="btn danger" onclick="window.__wbCleanupMockUsers()" title="Delete mock test users from database">🧹 Clean Up Mock Users</button>
-            </div>
-          </div>
-          <div class="table-wrap">
-            <table class="table">
-              <thead>
-                <tr>
-                  <th>Telegram User</th>
-                  <th>Tier</th>
-                  <th>Today's Quota</th>
-                  <th>Model Override</th>
-                  <th>Status</th>
-                  <th>Activity</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody id="wbUserAccessList">
-                <tr><td colspan="7" class="empty">Loading tracked users…</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      \`;
+      section.innerHTML = '' +
+        '<div class="grid">' +
+          '<div class="card">' +
+            '<div class="label">Total Tracked Users</div>' +
+            '<div class="value" id="uaStatTotal">—</div>' +
+            '<div class="sub">Telegram bot community</div>' +
+          '</div>' +
+          '<div class="card">' +
+            '<div class="label">VIP Members</div>' +
+            '<div class="value" id="uaStatVip" style="color:var(--amber)">—</div>' +
+            '<div class="sub">Unlimited frontier routing</div>' +
+          '</div>' +
+          '<div class="card">' +
+            '<div class="label">Pro Members</div>' +
+            '<div class="value" id="uaStatPro" style="color:var(--blue)">—</div>' +
+            '<div class="sub">Elevated limits & speeds</div>' +
+          '</div>' +
+          '<div class="card">' +
+            '<div class="label">Requests Today</div>' +
+            '<div class="value" id="uaStatToday">—</div>' +
+            '<div class="sub">Smart daily quota usage</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="split" style="margin-bottom:16px">' +
+          '<!-- Global Policy Card -->' +
+          '<div class="card section">' +
+            '<div class="section-head">' +
+              '<div>' +
+                '<div class="section-title">Smart Quotas & Tier Policy</div>' +
+                '<div class="section-note">Global default quotas and access rules.</div>' +
+              '</div>' +
+              '<button class="btn primary" onclick="window.__wbSaveAccessPolicy()">Save Policy</button>' +
+            '</div>' +
+            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">' +
+              '<div>' +
+                '<div class="label">Default Tier (New Users)</div>' +
+                '<select id="uaPolicyDefaultTier" class="select" style="margin-top:4px">' +
+                  '<option value="free">🌱 Free Tier</option>' +
+                  '<option value="pro">⚡ Pro Tier</option>' +
+                  '<option value="vip">👑 VIP Tier</option>' +
+                '</select>' +
+              '</div>' +
+              '<div>' +
+                '<div class="label">Access Mode</div>' +
+                '<select id="uaPolicyWhitelist" class="select" style="margin-top:4px">' +
+                  '<option value="false">Open to All Telegram Users</option>' +
+                  '<option value="true">🔒 Whitelist Only (VIPs/Approved)</option>' +
+                '</select>' +
+              '</div>' +
+              '<div>' +
+                '<div class="label">Free Daily Quota</div>' +
+                '<input id="uaPolicyFreeQuota" class="input" type="number" value="30" style="margin-top:4px" />' +
+              '</div>' +
+              '<div>' +
+                '<div class="label">Pro Daily Quota</div>' +
+                '<input id="uaPolicyProQuota" class="input" type="number" value="150" style="margin-top:4px" />' +
+              '</div>' +
+              '<div>' +
+                '<div class="label">VIP Daily Quota</div>' +
+                '<input id="uaPolicyVipQuota" class="input" type="number" value="500" style="margin-top:4px" />' +
+              '</div>' +
+              '<div>' +
+                '<div class="label">Free Image Quota</div>' +
+                '<input id="uaFreeImageQuota" class="input" type="number" value="3" style="margin-top:4px" />' +
+              '</div>' +
+              '<div>' +
+                '<div class="label">Pro Image Quota</div>' +
+                '<input id="uaProImageQuota" class="input" type="number" value="20" style="margin-top:4px" />' +
+              '</div>' +
+              '<div>' +
+                '<div class="label">VIP Image Quota</div>' +
+                '<input id="uaVipImageQuota" class="input" type="number" value="60" style="margin-top:4px" />' +
+              '</div>' +
+              '<div>' +
+                '<div class="label">Free Video Quota</div>' +
+                '<input id="uaFreeVideoQuota" class="input" type="number" value="0" style="margin-top:4px" />' +
+              '</div>' +
+              '<div>' +
+                '<div class="label">Pro Video Quota</div>' +
+                '<input id="uaProVideoQuota" class="input" type="number" value="3" style="margin-top:4px" />' +
+              '</div>' +
+              '<div>' +
+                '<div class="label">VIP Video Quota</div>' +
+                '<input id="uaVipVideoQuota" class="input" type="number" value="10" style="margin-top:4px" />' +
+              '</div>' +
+              '<div>' +
+                '<div class="label">Free Context Retention (Messages)</div>' +
+                '<input id="uaFreeContextLimit" class="input" type="number" value="10" style="margin-top:4px" />' +
+              '</div>' +
+              '<div>' +
+                '<div class="label">Pro Context Retention (Messages)</div>' +
+                '<input id="uaProContextLimit" class="input" type="number" value="30" style="margin-top:4px" />' +
+              '</div>' +
+              '<div>' +
+                '<div class="label">VIP Context Retention (Messages)</div>' +
+                '<input id="uaVipContextLimit" class="input" type="number" value="60" style="margin-top:4px" />' +
+              '</div>' +
+            '</div>' +
+            '<div style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px;">' +
+              '<div class="section-title" style="margin-bottom:8px;">💎 Upgrade & Monetization</div>' +
+              '<div class="field" style="margin-bottom:12px;">' +
+                '<label class="label">Admin Support Telegram Handle</label>' +
+                '<input id="uaSupportContact" class="input" placeholder="@admin or @YourSupportHandle" style="margin-top:4px;" />' +
+                '<div class="sub">Used on upgrade offer cards in Telegram when users tap locked personas.</div>' +
+              '</div>' +
+              '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
+                '<div class="field">' +
+                  '<label class="label">PRO Plan Price Label</label>' +
+                  '<input id="uaProPrice" class="input" placeholder="e.g. $9.99 / mo or 50 Stars" style="margin-top:4px;" />' +
+                  '<label class="label" style="margin-top:8px">PRO Telegram Stars (⭐️)</label>' +
+                  '<input id="uaProStars" class="input" type="number" value="500" style="margin-top:4px;" />' +
+                  '<label class="label" style="margin-top:8px">PRO Card Checkout URL (Stripe)</label>' +
+                  '<input id="uaProCheckout" class="input" placeholder="https://buy.stripe.com/..." style="margin-top:4px;" />' +
+                  '<label class="label" style="margin-top:8px">PRO Crypto Checkout URL</label>' +
+                  '<input id="uaProCrypto" class="input" placeholder="https://commerce.coinbase.com/..." style="margin-top:4px;" />' +
+                '</div>' +
+                '<div class="field">' +
+                  '<label class="label">VIP Plan Price Label</label>' +
+                  '<input id="uaVipPrice" class="input" placeholder="e.g. $24.99 / mo or 150 Stars" style="margin-top:4px;" />' +
+                  '<label class="label" style="margin-top:8px">VIP Telegram Stars (⭐️)</label>' +
+                  '<input id="uaVipStars" class="input" type="number" value="1250" style="margin-top:4px;" />' +
+                  '<label class="label" style="margin-top:8px">VIP Card Checkout URL (Stripe)</label>' +
+                  '<input id="uaVipCheckout" class="input" placeholder="https://buy.stripe.com/..." style="margin-top:4px;" />' +
+                  '<label class="label" style="margin-top:8px">VIP Crypto Checkout URL</label>' +
+                  '<input id="uaVipCrypto" class="input" placeholder="https://commerce.coinbase.com/..." style="margin-top:4px;" />' +
+                '</div>' +
+              '</div>' +
+            '</div>' +
+            '<div style="font-size:12px;color:var(--muted);background:var(--panel-2);border:1px solid var(--line);padding:8px 12px;border-radius:8px;margin-top:12px;">' +
+              '💡 <strong>How Routing Works:</strong> Free users route to ultra-fast, budget-optimized models (e.g. Qwen, Ministral 3B, Gemini Flash). VIP users automatically route to heavy-duty reasoning models (e.g. DeepSeek-R1, GPT-OSS 120B) with unlimited quotas.' +
+            '</div>' +
+          '</div>' +
+          '<!-- Dynamic Routing Simulator -->' +
+          '<div class="card section">' +
+            '<div class="section-head">' +
+              '<div>' +
+                '<div class="section-title">🧪 Dynamic Tier Routing Simulator</div>' +
+                '<div class="section-note">Live test which model a tier or user will receive.</div>' +
+              '</div>' +
+              '<button class="btn" onclick="window.__wbTestRouting()">Simulate Route</button>' +
+            '</div>' +
+            '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">' +
+              '<div>' +
+                '<div class="label">Simulated Tier</div>' +
+                '<select id="uaTestTier" class="select" style="margin-top:4px">' +
+                  '<option value="free">🌱 Free Tier</option>' +
+                  '<option value="pro">⚡ Pro Tier</option>' +
+                  '<option value="vip">👑 VIP Tier</option>' +
+                '</select>' +
+              '</div>' +
+              '<div>' +
+                '<div class="label">Model Override</div>' +
+                '<input id="uaTestOverride" class="input" placeholder="Optional (e.g. deepseek-r1)" style="margin-top:4px" />' +
+              '</div>' +
+              '<div>' +
+                '<div class="label">Deep Reasoning</div>' +
+                '<select id="uaTestReasoning" class="select" style="margin-top:4px">' +
+                  '<option value="false">Standard chat</option>' +
+                  '<option value="true">Thinking / /think</option>' +
+                '</select>' +
+              '</div>' +
+            '</div>' +
+            '<div id="uaTestResult">' +
+              '<div style="font-size:12px;color:var(--muted);padding:8px 0">Click "Simulate Route" to see live router decision and candidates.</div>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+        '<!-- User Directory & Management Table -->' +
+        '<div class="card section">' +
+          '<div class="section-head">' +
+            '<div>' +
+              '<div class="section-title">Tracked Telegram Users & VIP Tiers</div>' +
+              '<div class="section-note">Assign tiers, custom quotas, or specific model overrides to each user.</div>' +
+            '</div>' +
+            '<div style="display:flex;gap:8px">' +
+              '<input id="uaSearchInput" class="input" placeholder="Search user, ID, tier..." style="width:200px" oninput="window.__wbFilterUsers()" />' +
+              '<button class="btn" onclick="window.__wbLoadUserAccess()">Refresh</button>' +
+              '<button class="btn danger" onclick="window.__wbCleanupMockUsers()" title="Delete mock test users from database">🧹 Clean Up Mock Users</button>' +
+            '</div>' +
+          '</div>' +
+          '<div class="table-wrap">' +
+            '<table class="table">' +
+              '<thead>' +
+                '<tr>' +
+                  '<th>Telegram User</th>' +
+                  '<th>Tier</th>' +
+                  '<th>Today\'s Quota</th>' +
+                  '<th>Model Override</th>' +
+                  '<th>Status</th>' +
+                  '<th>Activity</th>' +
+                  '<th>Actions</th>' +
+                '</tr>' +
+              '</thead>' +
+              '<tbody id="wbUserAccessList">' +
+                '<tr><td colspan="7" class="empty">Loading tracked users…</td></tr>' +
+              '</tbody>' +
+            '</table>' +
+          '</div>' +
+        '</div>';
       document.querySelector('main')?.appendChild(section);
     }
   }

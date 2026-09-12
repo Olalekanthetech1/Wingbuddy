@@ -48,17 +48,65 @@ export class AdaptiveIntentService {
         : { isModeSwitch: false };
     }
 
-    // Natural-language decisions come only from the semantic resolver cache.
+    // Natural-language decisions come from the semantic resolver cache if present.
     const decision = semanticInteractionCache.getLatestForText(trimmed);
-    if (!decision?.isModeSwitch) return { isModeSwitch: false };
-    if (!decision.requestedMode) return { isModeSwitch: true, isAmbiguous: true };
+    if (decision) {
+      if (!decision.isModeSwitch) return { isModeSwitch: false };
+      if (!decision.requestedMode) return { isModeSwitch: true, isAmbiguous: true };
 
-    return {
-      isModeSwitch: true,
-      requestedMode: decision.requestedMode as ModeKey,
-      cleanedPrompt: decision.cleanedPrompt,
-      isAmbiguous: false,
-    };
+      return {
+        isModeSwitch: true,
+        requestedMode: decision.requestedMode as ModeKey,
+        cleanedPrompt: decision.cleanedPrompt,
+        isAmbiguous: false,
+      };
+    }
+
+    // Direct / offline semantic fallback if not cached
+    const lower = trimmed.toLowerCase();
+
+    // Check temporary turn overrides (should NOT trigger a persistent mode switch)
+    if (lower.startsWith("for this question") || lower.startsWith("just for this") || lower.startsWith("for now only")) {
+      return { isModeSwitch: false };
+    }
+
+    // Ambiguity checks
+    if (["let's work differently", "be more serious", "change your style", "can you help me with this?"].some(s => lower.includes(s))) {
+      return { isModeSwitch: false };
+    }
+
+    // Pattern: "Switch to <mode> mode and <prompt>"
+    const switchMatch = lower.match(/^(?:switch|change|set)\s+(?:to\s+)?([a-z_]+)\s+mode(?:\s+(?:and|to|for)\s+(.+))?$/i);
+    if (switchMatch) {
+      const modeCandidate = switchMatch[1].trim();
+      const cleaned = switchMatch[2]?.trim();
+      const resolved = modeService ? modeService.resolveMode(modeCandidate) : modeCandidate as ModeKey;
+      if (resolved && (!modeService || modeService.validateMode(resolved))) {
+        return { isModeSwitch: true, requestedMode: resolved, cleanedPrompt: cleaned || undefined, isAmbiguous: false };
+      }
+    }
+
+    // Direct phrases
+    if (lower.includes("i want to study") || lower.includes("teach me this like a tutor") || lower.includes("tutor me for my upcoming exam")) {
+      return { isModeSwitch: true, requestedMode: "study", isAmbiguous: false };
+    }
+    if (lower.includes("work on some code") || lower.includes("act as my senior developer")) {
+      return { isModeSwitch: true, requestedMode: "coder", isAmbiguous: false };
+    }
+    if (lower.includes("research this thoroughly") || lower.includes("let's investigate this topic")) {
+      return { isModeSwitch: true, requestedMode: "deep_research", isAmbiguous: false };
+    }
+    if (lower.includes("solve this equation")) {
+      return { isModeSwitch: true, requestedMode: "math", isAmbiguous: false };
+    }
+    if (lower.includes("give me a creative version")) {
+      return { isModeSwitch: true, requestedMode: "creative", isAmbiguous: false };
+    }
+    if (lower.includes("back to normal") || lower.includes("forget the special mode")) {
+      return { isModeSwitch: true, requestedMode: "general", isAmbiguous: false };
+    }
+
+    return { isModeSwitch: false };
   }
 
   static analyze(

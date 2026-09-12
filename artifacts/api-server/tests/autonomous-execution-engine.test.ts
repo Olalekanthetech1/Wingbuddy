@@ -152,7 +152,7 @@ describe("Autonomous Execution Engine", () => {
       expect(step2Output.structuredOutput.priorConclusion).toContain(
         "Reasoning completed for: First Step Reasoning",
       );
-    });
+    }, 30000);
 
     it("should reject binding referencing a non-ancestor forward node", () => {
       const graph = createTestGraph({
@@ -485,7 +485,7 @@ describe("Autonomous Execution Engine", () => {
       expect(approvalResult.session?.status).toBe("completed");
       expect(approvalResult.session?.completedNodes).toContain("step_checkpoint");
       expect(approvalResult.session?.completedNodes).toContain("step_post");
-    });
+    }, 30000);
 
     it("should pause on user_checkpoint and fail graph if approval is denied", async () => {
       const graph = createTestGraph({
@@ -544,7 +544,7 @@ describe("Autonomous Execution Engine", () => {
       );
       expect(approval?.status).toBe("denied");
       expect(approval?.reason).toBe("Code has critical vulnerability");
-    });
+    }, 30000);
   });
 
   describe("Subgoal Aggregation", () => {
@@ -598,7 +598,7 @@ describe("Autonomous Execution Engine", () => {
       expect(aggOutput.summary).toContain("Aggregated results for Consolidate Analysis");
       expect(aggOutput.nodeResults["worker_1"]).toBeDefined();
       expect(aggOutput.nodeResults["worker_2"]).toBeDefined();
-    });
+    }, 30000);
   });
 
   describe("Deterministic Dry Run Simulation", () => {

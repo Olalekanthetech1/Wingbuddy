@@ -1,5 +1,6 @@
 import { logger } from "../../lib/logger";
 import type { ExecutionEventName, ExecutionEventPayload } from "../types";
+import { durableEventStoreService } from "../persistence/durable-event-store.service";
 
 export interface ExecutionMetrics {
   totalExecutions: number;
@@ -90,6 +91,19 @@ export class ExecutionObservabilityService {
     this.recentEvents.push(sanitizedPayload);
     if (this.recentEvents.length > 500) {
       this.recentEvents.shift();
+    }
+
+    if (payload.executionId) {
+      durableEventStoreService.appendEvent({
+        executionId: payload.executionId,
+        graphId: payload.graphId,
+        nodeId: payload.nodeId,
+        eventType: payload.event as any,
+        actor: "system",
+        metadata: sanitizedDetails as Record<string, unknown> | undefined,
+      }).catch(err => {
+        logger.error({ err: String(err), executionId: payload.executionId }, "Failed to append durable event");
+      });
     }
 
     logger.info(

@@ -338,8 +338,8 @@ export class ExecutionEngine {
         }
 
         // Check Terminal Conditions
-        if (resolution.isTerminal && state.runningNodeIds.size === 0) {
-          const finalStatus = resolution.terminalStatus || "completed";
+        if ((resolution.isTerminal || (resolution.readyNodes.length === 0 && state.runningNodeIds.size === 0)) && state.runningNodeIds.size === 0) {
+          const finalStatus = resolution.terminalStatus || (state.failedNodeIds.size > 0 ? "failed" : "completed");
           session.status = finalStatus;
           session.completedNodes = Array.from(state.completedNodeIds);
           session.failedNodes = Array.from(state.failedNodeIds);
@@ -351,7 +351,7 @@ export class ExecutionEngine {
           if (finalStatus === "failed" && !session.error) {
             session.error = {
               code: "GRAPH_EXECUTION_FAILED",
-              message: `Execution failed for node(s): ${Array.from(state.failedNodeIds).join(", ")}.`,
+              message: `Execution failed for node(s): ${Array.from(state.failedNodeIds).join(", ") || "unfulfilled dependency deadlock"}.`,
               retryable: false,
               category: "tool",
             };
@@ -370,11 +370,6 @@ export class ExecutionEngine {
             executionId: session.executionId,
           });
 
-          break;
-        }
-
-        if (resolution.readyNodes.length === 0 && state.runningNodeIds.size === 0) {
-          // No ready nodes and none running: terminal
           break;
         }
 
@@ -680,7 +675,7 @@ export class ExecutionEngine {
       const isDestructive = !!toolPolicy?.destructive;
       const hasSideEffect = !!toolPolicy?.sideEffect;
 
-      const retryEval = retryEngine.evaluateRetry({
+      const transition = retryEngine.evaluateTransition({
         node,
         currentAttempt: attempt,
         error: nodeResult.error || {
@@ -704,12 +699,12 @@ export class ExecutionEngine {
         idempotencyKey,
         status: "failed",
         error: nodeResult.error,
-        isRetryable: retryEval.shouldRetry,
+        isRetryable: transition.type === "RETRY",
         startedAt: new Date().toISOString(),
         completedAt: new Date().toISOString(),
       });
 
-      if (retryEval.shouldRetry && !signal.aborted) {
+      if (transition.type === "RETRY" && transition.attempt && !signal.aborted) {
         executionObservability.logEvent({
           event: "NODE_RETRY_SCHEDULED",
           timestamp: new Date().toISOString(),
@@ -717,16 +712,39 @@ export class ExecutionEngine {
           graphId: graph.graphId,
           nodeId: node.id,
           attempt,
-          details: { nextAttempt: retryEval.attempt, delayMs: retryEval.delayMs },
+          details: { nextAttempt: transition.attempt, delayMs: transition.delayMs },
         });
 
         // Backoff delay before next attempt
-        if (retryEval.delayMs > 0) {
-          await new Promise((resolve) => setTimeout(resolve, Math.min(retryEval.delayMs, 5000)));
+        if (transition.delayMs && transition.delayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, Math.min(transition.delayMs!, 5000)));
         }
-        attempt = retryEval.attempt;
+        attempt = transition.attempt;
+      } else if (transition.type === "REPLAN" || transition.type === "RECOVER") {
+        // Log transition and fail the node execution to bubble up to the planner
+        await executionPersistence.releaseLease(leaseKey, workerId);
+        state.failedNodeIds.add(node.id);
+        executionObservability.logEvent({
+          event: `EXECUTION_TRANSITION_${transition.type}`,
+          timestamp: new Date().toISOString(),
+          requestId: session.requestId,
+          taskId: session.taskId,
+          graphId: graph.graphId,
+          nodeId: node.id,
+          details: { error: nodeResult.error, transitionReason: transition.reason },
+        });
+        
+        if (!session.error) {
+          session.error = {
+            code: `TRANSITION_${transition.type}`,
+            message: `Transitioning to ${transition.type} due to node failure: ${transition.reason}`,
+            retryable: transition.type === "RECOVER",
+            category: "system"
+          };
+        }
+        return;
       } else {
-        // Retries exhausted or non-retryable error
+        // ABORT: Retries exhausted or non-retryable error
         await executionPersistence.releaseLease(leaseKey, workerId);
         state.failedNodeIds.add(node.id);
         executionObservability.logEvent({
@@ -742,7 +760,10 @@ export class ExecutionEngine {
       }
     }
 
-    await executionPersistence.releaseLease(`${graph.graphId}:r${graph.planRevision}:${node.id}`);
+    if (!state.completedNodeIds.has(node.id) && !state.failedNodeIds.has(node.id)) {
+      state.failedNodeIds.add(node.id);
+    }
+    await executionPersistence.releaseLease(`${graph.graphId}:r${graph.planRevision}:${node.id}`, workerId);
   }
 
   private getExecutorForNode(node: GraphNode): INodeExecutor {
@@ -1077,6 +1098,233 @@ export class ExecutionEngine {
       completedAt: session.completedAt,
       failure: session.error,
       nodeResults,
+    };
+  }
+
+  /**
+   * Interactive Stepper: Executes exactly one topologically ready node.
+   */
+  async executeStep(params: {
+    graphId: string;
+    planRevision: number;
+    executionId?: string;
+    telegramUserId?: number;
+  }): Promise<{
+    session: ExecutionSession;
+    executedNodeId?: string;
+    nodeResult?: NodeResult;
+    hasMoreSteps: boolean;
+    readyNext: string[];
+  }> {
+    const graph = await planPersistenceService.getGraph(params.graphId, params.planRevision);
+    if (!graph) {
+      throw new Error(`Graph "${params.graphId}" at revision ${params.planRevision} not found.`);
+    }
+
+    let session = await executionPersistence.getSessionForGraph(params.graphId, params.planRevision);
+    if (!session) {
+      session = {
+        executionId: params.executionId || `exec_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        requestId: `req_step_${Date.now()}`,
+        graphId: params.graphId,
+        planRevision: params.planRevision,
+        revisionId: `${params.graphId}:r${params.planRevision}`,
+        telegramUserId: params.telegramUserId || 1,
+        status: "paused",
+        currentNodes: [],
+        completedNodes: [],
+        failedNodes: [],
+        skippedNodes: [],
+        waitingApprovalNodes: [],
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      await executionPersistence.saveExecutionSession(session);
+    }
+
+    const completedAttempts = await executionPersistence.getCompletedExecutionsForGraph(
+      params.graphId,
+      params.planRevision,
+    );
+    const completedResults: Record<string, NodeResult> = {};
+    for (const att of completedAttempts) {
+      if (att.result) completedResults[att.nodeId] = att.result;
+    }
+
+    const state: NodeResolutionState = {
+      completedNodeIds: new Set(session.completedNodes || []),
+      failedNodeIds: new Set(session.failedNodes || []),
+      skippedNodeIds: new Set(session.skippedNodes || []),
+      runningNodeIds: new Set(),
+      waitingApprovalNodeIds: new Set(session.waitingApprovalNodes || []),
+    };
+
+    const resolution = readyNodeResolver.resolveReadyNodes(graph, state);
+    if (resolution.readyNodes.length === 0) {
+      const allFinished = Object.keys(graph.nodes).every(
+        (id) => state.completedNodeIds.has(id) || state.skippedNodeIds.has(id),
+      );
+      if (allFinished) {
+        session.status = "completed";
+        session.completedAt = new Date().toISOString();
+      } else if (state.waitingApprovalNodeIds.size > 0) {
+        session.status = "paused_for_approval";
+      }
+      session.updatedAt = new Date().toISOString();
+      await executionPersistence.saveExecutionSession(session);
+      return {
+        session,
+        hasMoreSteps: !allFinished,
+        readyNext: [],
+      };
+    }
+
+    const nodeToExecute = resolution.readyNodes[0];
+    const context: ExecutionContext = {
+      telegramUserId: session.telegramUserId || 1,
+      availableCapabilities: [],
+    };
+
+    session.status = "executing";
+    session.currentNodes = [nodeToExecute.id];
+    session.updatedAt = new Date().toISOString();
+    await executionPersistence.saveExecutionSession(session);
+
+    const abortController = new AbortController();
+    await this.executeNode(
+      nodeToExecute,
+      graph,
+      session,
+      context,
+      completedResults,
+      state,
+      abortController.signal,
+    );
+
+    session.completedNodes = Array.from(state.completedNodeIds);
+    session.failedNodes = Array.from(state.failedNodeIds);
+    session.waitingApprovalNodes = Array.from(state.waitingApprovalNodeIds);
+    session.currentNodes = [];
+
+    const nextResolution = readyNodeResolver.resolveReadyNodes(graph, state);
+    const allFinished = Object.keys(graph.nodes).every(
+      (id) => state.completedNodeIds.has(id) || state.skippedNodeIds.has(id),
+    );
+
+    if (allFinished) {
+      session.status = "completed";
+      session.completedAt = new Date().toISOString();
+    } else if (session.waitingApprovalNodes.length > 0) {
+      session.status = "paused_for_approval";
+    } else {
+      session.status = "paused";
+    }
+
+    session.updatedAt = new Date().toISOString();
+    await executionPersistence.saveExecutionSession(session);
+
+    return {
+      session,
+      executedNodeId: nodeToExecute.id,
+      nodeResult: completedResults[nodeToExecute.id],
+      hasMoreSteps: !allFinished,
+      readyNext: nextResolution.readyNodes.map((n) => n.id),
+    };
+  }
+
+  /**
+   * Node Re-run: Re-executes a specific node in a graph session.
+   */
+  async rerunNode(params: {
+    graphId: string;
+    planRevision: number;
+    nodeId: string;
+    telegramUserId?: number;
+  }): Promise<{
+    session: ExecutionSession;
+    nodeId: string;
+    result?: NodeResult;
+    success: boolean;
+  }> {
+    const graph = await planPersistenceService.getGraph(params.graphId, params.planRevision);
+    if (!graph) {
+      throw new Error(`Graph "${params.graphId}" at revision ${params.planRevision} not found.`);
+    }
+
+    const node = graph.nodes[params.nodeId];
+    if (!node) {
+      throw new Error(`Node "${params.nodeId}" does not exist in graph "${params.graphId}".`);
+    }
+
+    let session = await executionPersistence.getSessionForGraph(params.graphId, params.planRevision);
+    if (!session) {
+      session = {
+        executionId: `exec_rerun_${Date.now()}`,
+        requestId: `req_rerun_${Date.now()}`,
+        graphId: params.graphId,
+        planRevision: params.planRevision,
+        revisionId: `${params.graphId}:r${params.planRevision}`,
+        telegramUserId: params.telegramUserId || 1,
+        status: "executing",
+        currentNodes: [params.nodeId],
+        completedNodes: [],
+        failedNodes: [],
+        skippedNodes: [],
+        waitingApprovalNodes: [],
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+    }
+
+    // Clear prior attempt from persistence and memory
+    await executionPersistence.clearNodeExecution(params.graphId, params.planRevision, params.nodeId);
+
+    // Remove from completed/failed lists
+    session.completedNodes = session.completedNodes.filter((id) => id !== params.nodeId);
+    session.failedNodes = session.failedNodes.filter((id) => id !== params.nodeId);
+    session.currentNodes = [params.nodeId];
+    session.updatedAt = new Date().toISOString();
+
+    const completedAttempts = await executionPersistence.getCompletedExecutionsForGraph(
+      params.graphId,
+      params.planRevision,
+    );
+    const completedResults: Record<string, NodeResult> = {};
+    for (const att of completedAttempts) {
+      if (att.nodeId !== params.nodeId && att.result) {
+        completedResults[att.nodeId] = att.result;
+      }
+    }
+
+    const state: NodeResolutionState = {
+      completedNodeIds: new Set(session.completedNodes),
+      failedNodeIds: new Set(session.failedNodes),
+      skippedNodeIds: new Set(session.skippedNodes || []),
+      runningNodeIds: new Set(),
+      waitingApprovalNodeIds: new Set(session.waitingApprovalNodes || []),
+    };
+
+    const context: ExecutionContext = {
+      telegramUserId: session.telegramUserId || 1,
+      availableCapabilities: [],
+    };
+
+    const abortController = new AbortController();
+    await this.executeNode(node, graph, session, context, completedResults, state, abortController.signal);
+
+    session.completedNodes = Array.from(state.completedNodeIds);
+    session.failedNodes = Array.from(state.failedNodeIds);
+    session.currentNodes = [];
+    session.updatedAt = new Date().toISOString();
+
+    const isSuccess = state.completedNodeIds.has(params.nodeId);
+    await executionPersistence.saveExecutionSession(session);
+
+    return {
+      session,
+      nodeId: params.nodeId,
+      result: completedResults[params.nodeId],
+      success: isSuccess,
     };
   }
 }

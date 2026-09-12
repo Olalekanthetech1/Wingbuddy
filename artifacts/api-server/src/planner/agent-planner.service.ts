@@ -14,31 +14,36 @@ import { ToolRegistry } from "../tools/tool-registry";
 import { getProductionToolRegistry } from "../tools/production-tools";
 import { AdaptiveEngineService } from "../services/adaptive-engine.service";
 import { AutonomyDecisionService } from "../services/autonomy-decision.service";
-import { GeminiService } from "../gemini/gemini.service";
+
+import { adaptiveAIRouterService } from "../services/adaptive-ai-router.service";
+import { type AIChatRequest } from "../services/ai-provider.adapters";
+
 import { getConfig } from "../config/env";
 import { logger } from "../lib/logger";
 
 export class AgentPlannerService {
   private autonomyDecisionService?: AutonomyDecisionService;
-  private candidateGenerator?: GeminiService;
 
   constructor(
     private persistenceService: PlanPersistenceService = planPersistenceService,
     private defaultToolRegistry?: ToolRegistry,
   ) {}
 
-  private getGemini(): GeminiService {
-    if (!this.candidateGenerator) {
-      const config = getConfig();
-      this.candidateGenerator = new GeminiService(config.geminiApiKey, config.geminiModel, config.geminiTimeoutMs);
-    }
-    return this.candidateGenerator;
-  }
-
   private getAutonomyDecisionService(): AutonomyDecisionService {
     if (!this.autonomyDecisionService) {
-      const gemini = this.getGemini();
-      this.autonomyDecisionService = new AutonomyDecisionService((history, message) => gemini.generateReply(history, message));
+      this.autonomyDecisionService = new AutonomyDecisionService(async (history, message) => {
+        const routed = await adaptiveAIRouterService.route({
+          systemInstruction: "You are an autonomous agent decision evaluator.",
+          messages: [
+            ...history.map((h) => ({ role: h.role === "model" ? "assistant" as const : "user" as const, content: h.content })),
+            { role: "user" as const, content: message },
+          ],
+        }, {
+          isSystemTask: true,
+          isDeepReasoning: false,
+        });
+        return routed.response.text;
+      });
     }
     return this.autonomyDecisionService;
   }
@@ -203,7 +208,8 @@ export class AgentPlannerService {
       "- An llm_reasoning node is a pure transformation over supplied context and prior node outputs; it has no actionSpec.",
       "- If a tool result must be synthesized, create a separate downstream llm_reasoning node and bind its inputs to the tool node output using {source:{type:\"node_output\",nodeId:<toolNodeId>,path:\"output\"}}.",
       "- Never invent tool names; use only registered tools supplied below.",
-      "- Use the fewest nodes that completely fulfill the goal; do not add generic analysis/evaluation steps merely to make the graph longer.",
+      "- If the user's goal explicitly specifies numbered steps (e.g., 'Step 1', 'Step 2', ...), plan a distinct node for each specified step and connect them with sequential dependency edges.",
+      "- For open-ended single-intent requests, use the fewest nodes that completely fulfill the goal.",
       "- Do not fabricate missing dates, times, recipients, accounts, identifiers, or other material action parameters.",
       "- When required action information is genuinely missing, do not invent it. Use a user_checkpoint only when a safe, meaningful clarification is required for execution.",
       "- Registry security policy is authoritative. Never downgrade approval, capability, retry, or timeout requirements.",
@@ -211,6 +217,12 @@ export class AgentPlannerService {
       "- Durable task creation should use create_task with explicit title, goal and ordered steps when persistent task state is requested.",
       "- Reminder scheduling should use create_reminder only when a valid future dueAt can be established; never guess.",
       "- A final reasoning/synthesis node may claim success only from successful upstream tool results.",
+      ...(context?.isBackgroundTask ? [
+        "- BACKGROUND CONDITIONAL WATCHERS: Because this is an autonomous background execution, the final output node (or direct response) MUST output a strictly formatted JSON evaluation of the user's condition.",
+        "- Your output MUST be a valid JSON object matching this schema: {\"action\": \"notify\" | \"silent\", \"reason\": \"internal reasoning\", \"message\": \"message to send user if notify\"}",
+        "- If the condition is MET, set action to 'notify' and provide the 'message'.",
+        "- If the condition is NOT MET, set action to 'silent'."
+      ] : []),
       "",
       `Execution reasons: ${JSON.stringify(reasons)}`,
       `Runtime context: ${JSON.stringify(context)}`,
@@ -221,7 +233,16 @@ export class AgentPlannerService {
 
     let raw: string;
     try {
-      raw = await this.getGemini().generateReply([], prompt);
+      
+      const routeResult = await adaptiveAIRouterService.route({
+        systemInstruction: "",
+        messages: [{ role: "user", content: prompt }]
+      }, {
+        isSystemTask: true,
+        reasoningRequired: true
+      });
+      raw = routeResult.response.text;
+
     } catch (error) {
       logger.warn({ error: error instanceof Error ? error.message : String(error) }, "Dynamic planner model call failed; refusing to guess an execution plan");
       throw new Error("Dynamic planner model call failed; execution plan generation is unavailable.");
@@ -245,6 +266,29 @@ export class AgentPlannerService {
     const extraEdges = Array.isArray(candidate.edges) ? [...candidate.edges] : [];
 
     for (const node of nodes) {
+      // Auto-migrate legacy or model-hallucinated toolSpec/toolName/action properties into canonical actionSpec
+      const anyNode = node as any;
+      if (!node.actionSpec && anyNode.toolSpec && (anyNode.toolSpec.toolName || anyNode.toolSpec.name)) {
+        node.actionSpec = {
+          toolName: anyNode.toolSpec.toolName || anyNode.toolSpec.name,
+          parameters: anyNode.toolSpec.input || anyNode.toolSpec.parameters || {},
+        };
+      } else if (!node.actionSpec && anyNode.toolName) {
+        node.actionSpec = {
+          toolName: anyNode.toolName,
+          parameters: anyNode.parameters || anyNode.input || {},
+        };
+      }
+
+      if (node.type === "llm_reasoning") {
+        if (!node.reasoningSpec || !node.reasoningSpec.prompt?.trim()) {
+          node.reasoningSpec = {
+            prompt: node.title || `Synthesize findings for: ${candidate.goal || request.goal}`,
+            targetFormat: node.reasoningSpec?.targetFormat || "markdown",
+          };
+        }
+      }
+
       if (node.type === "llm_reasoning" && node.actionSpec?.toolName) {
         const toolName = node.actionSpec.toolName.trim();
         if (!registry.get(toolName)) {
@@ -263,6 +307,29 @@ export class AgentPlannerService {
         }
         logger.warn({ requestId: request.requestId, originalNodeId: node.id, toolNodeId, repairedHybridNode: true }, "PLANNER_CANDIDATE_SHAPE_REPAIRED");
         continue;
+      }
+
+      if (node.type === "tool_call" && node.actionSpec?.toolName) {
+        const tool = registry.get(node.actionSpec.toolName.trim());
+        if (tool) {
+          const policy = registry.getPolicy(node.actionSpec.toolName.trim());
+          if ((policy.destructive || policy.confirmationRequired) && (!node.approval || node.approval.status === "not_required")) {
+            node.approval = {
+              status: "pending",
+              reason: `Security policy mandates confirmation for tool "${node.actionSpec.toolName}".`,
+              requestedAt: new Date().toISOString(),
+            };
+          }
+        }
+      }
+
+      if (node.verification) {
+        if (node.verification.required && (!node.verification.strategy || node.verification.strategy === "none")) {
+          node.verification.strategy = "llm_review";
+          if (!node.verification.reviewPrompt?.trim()) {
+            node.verification.reviewPrompt = `Verify that step "${node.title || node.id}" completed successfully.`;
+          }
+        }
       }
 
       if (node.inputBindings) {

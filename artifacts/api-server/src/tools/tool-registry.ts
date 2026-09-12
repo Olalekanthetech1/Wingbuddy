@@ -13,6 +13,8 @@ export interface ToolSecurityPolicy {
   /** True only when the tool can safely be repeated with the same logical operation. */
   idempotent: boolean;
   requiredCapabilities: string[];
+  allowedTiers?: string[];
+  domainWhitelist?: string[];
   timeoutMs: number;
 }
 
@@ -22,6 +24,8 @@ export const DEFAULT_TOOL_POLICY: ToolSecurityPolicy = {
   confirmationRequired: false,
   idempotent: true,
   requiredCapabilities: [],
+  allowedTiers: ["free", "pro", "enterprise"],
+  domainWhitelist: ["*"],
   timeoutMs: 30000,
 };
 

@@ -107,14 +107,6 @@ const ENV_SPECS: EnvVariableSpec[] = [
     required: false,
   },
   {
-    key: "GEMINI_MODEL",
-    category: "access",
-    isSensitive: false,
-    description: "Runtime-managed Gemini primary model. Configure it from Model Registry; environment value is bootstrap-only.",
-    required: false,
-    defaultValue: "",
-  },
-  {
     key: "KEY_ROTATION_MODE",
     category: "access",
     isSensitive: false,

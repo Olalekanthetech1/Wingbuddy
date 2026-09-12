@@ -1,5 +1,5 @@
 export function renderDashboardPersonas(): string {
-  return `<script>
+  return String.raw`<script>
 (function(){
   function showPersonasView(){
     document.querySelectorAll('.view').forEach(function(v){ v.classList.remove('active'); });
@@ -101,43 +101,43 @@ export function renderDashboardPersonas(): string {
       var modelLabel = p.preferredModel ? p.preferredModel.split(':').pop().replace(/_/g, '/') : 'Auto-Adaptive';
       var tempDesc = p.temperature <= 0.3 ? 'Analytical (' + p.temperature + ')' : (p.temperature >= 0.8 ? 'Creative (' + p.temperature + ')' : 'Balanced (' + p.temperature + ')');
 
-      return '<div class="card persona-card ' + (p.enabled ? '' : 'disabled-persona') + '" style="position:relative;display:flex;flex-direction:column;justify-content:space-between;border:1px solid ' + (p.enabled ? 'var(--border)' : 'rgba(255,255,255,0.06)') + ';border-radius:12px;padding:16px;background:var(--card-bg, #0f172a);">' +
+      return '<div class="card persona-card ' + (p.enabled ? '' : 'disabled-persona') + '" style="position:relative;display:flex;flex-direction:column;justify-content:space-between;border:1px solid ' + (p.enabled ? 'var(--line)' : 'color-mix(in srgb, var(--line) 40%, transparent)') + ';border-radius:12px;padding:16px;background:var(--panel-2);color:var(--text);transition:background-color .18s ease,color .18s ease,border-color .18s ease;">' +
         '<div>' +
           '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:10px;">' +
             '<div style="display:flex;align-items:center;gap:10px;">' +
               '<span style="font-size:28px;line-height:1;">' + (p.emoji || '🎭') + '</span>' +
               '<div>' +
-                '<div style="font-weight:600;font-size:16px;color:var(--text, #f8fafc);display:flex;align-items:center;gap:6px;">' +
+                '<div style="font-weight:600;font-size:16px;color:var(--text);display:flex;align-items:center;gap:6px;">' +
                   escapeHtml(p.name) +
-                  (p.isBuiltIn ? '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(59,130,246,0.2);color:#60a5fa;border:1px solid rgba(59,130,246,0.3)">Built-In</span>' : '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(168,85,247,0.2);color:#c084fc;border:1px solid rgba(168,85,247,0.3)">Custom</span>') +
+                  (p.isBuiltIn ? '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(59,130,246,0.15);color:var(--blue);border:1px solid rgba(59,130,246,0.3)">Built-In</span>' : '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(168,85,247,0.15);color:#c084fc;border:1px solid rgba(168,85,247,0.3)">Custom</span>') +
                 '</div>' +
-                '<div style="font-size:12px;color:var(--muted, #94a3b8);margin-top:2px;">' + escapeHtml(p.tagline || '') + '</div>' +
+                '<div style="font-size:12px;color:var(--muted);margin-top:2px;">' + escapeHtml(p.tagline || '') + '</div>' +
               '</div>' +
             '</div>' +
             '<span class="badge ' + tierBadgeClass + '" style="font-size:11px;padding:3px 8px;border-radius:6px;font-weight:600;">' + tierLabel + '</span>' +
           '</div>' +
 
-          '<div style="font-size:12px;color:var(--muted, #94a3b8);background:rgba(0,0,0,0.25);border-radius:8px;padding:10px;margin-bottom:12px;max-height:80px;overflow:hidden;text-overflow:ellipsis;line-height:1.5;font-family:monospace;">' +
+          '<div style="font-size:12px;color:var(--text);background:var(--panel-3);border:1px solid var(--line);border-radius:8px;padding:10px;margin-bottom:12px;max-height:80px;overflow:hidden;text-overflow:ellipsis;line-height:1.5;font-family:monospace;">' +
             escapeHtml(p.systemPrompt.slice(0, 180)) + (p.systemPrompt.length > 180 ? '…' : '') +
           '</div>' +
 
-          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px;color:var(--muted, #94a3b8);margin-bottom:14px;">' +
-            '<div>🧠 <strong>Engine:</strong> <span style="color:#38bdf8">' + escapeHtml(modelLabel) + '</span></div>' +
-            '<div>🌡️ <strong>Temp:</strong> <span style="color:#fbbf24">' + tempDesc + '</span></div>' +
-            '<div>👥 <strong>Active Users:</strong> <span style="color:#34d399;font-weight:600">' + usersCount + '</span></div>' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px;color:var(--muted);margin-bottom:14px;">' +
+            '<div>🧠 <strong>Engine:</strong> <span style="color:var(--blue)">' + escapeHtml(modelLabel) + '</span></div>' +
+            '<div>🌡️ <strong>Temp:</strong> <span style="color:var(--warn, #fbbf24)">' + tempDesc + '</span></div>' +
+            '<div>👥 <strong>Active Users:</strong> <span style="color:var(--green);font-weight:600">' + usersCount + '</span></div>' +
             '<div>⚡ <strong>Telegram:</strong> <code>/persona ' + escapeHtml(p.id) + '</code></div>' +
           '</div>' +
         '</div>' +
 
-        '<div style="display:flex;align-items:center;justify-content:space-between;border-top:1px solid rgba(255,255,255,0.06);padding-top:12px;margin-top:4px;">' +
-          '<label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;">' +
-            '<input type="checkbox" ' + (p.enabled ? 'checked' : '') + ' onchange="window.__wbTogglePersona(\\'' + p.id + '\\', this.checked)" />' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--line);padding-top:12px;margin-top:4px;">' +
+          '<label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;color:var(--text);">' +
+            '<input type="checkbox" ' + (p.enabled ? 'checked' : '') + ' onchange="window.__wbTogglePersona(\'' + p.id + '\', this.checked)" />' +
             '<span>' + (p.enabled ? 'Active' : 'Disabled') + '</span>' +
           '</label>' +
           '<div style="display:flex;gap:6px;">' +
-            '<button class="btn" style="padding:4px 10px;font-size:12px;" onclick="window.__wbEditPersona(\\'' + p.id + '\\')">Edit</button>' +
-            '<button class="btn" style="padding:4px 10px;font-size:12px;" onclick="window.__wbTestPersona(\\'' + p.id + '\\')">🧪 Test</button>' +
-            (!p.isBuiltIn ? '<button class="btn danger" style="padding:4px 8px;font-size:12px;" onclick="window.__wbDeletePersona(\\'' + p.id + '\\')">🗑️</button>' : '') +
+            '<button class="btn" style="padding:4px 10px;font-size:12px;" onclick="window.__wbEditPersona(\'' + p.id + '\')">Edit</button>' +
+            '<button class="btn" style="padding:4px 10px;font-size:12px;" onclick="window.__wbTestPersona(\'' + p.id + '\')">🧪 Test</button>' +
+            (!p.isBuiltIn ? '<button class="btn danger" style="padding:4px 8px;font-size:12px;" onclick="window.__wbDeletePersona(\'' + p.id + '\')">🗑️</button>' : '') +
           '</div>' +
         '</div>' +
       '</div>';
@@ -423,19 +423,19 @@ export function renderDashboardPersonas(): string {
         '</div>' +
 
         '<!-- Modal for Create/Edit Persona -->' +
-        '<div id="personaModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.75);z-index:9999;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px);">' +
-          '<div class="card" style="width:100%;max-width:680px;max-height:90vh;overflow-y:auto;background:var(--card-bg, #0f172a);border:1px solid var(--border);border-radius:16px;padding:24px;box-shadow:0 25px 50px -12px rgba(0,0,0,0.5);">' +
-            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;border-bottom:1px solid var(--border);padding-bottom:12px;">' +
-              '<h3 id="personaModalTitle" style="margin:0;font-size:18px;font-weight:600;color:var(--text, #f8fafc);">Create Persona</h3>' +
+        '<div id="personaModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px);">' +
+          '<div class="card" style="width:100%;max-width:680px;max-height:90vh;overflow-y:auto;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:24px;box-shadow:var(--shadow);">' +
+            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;border-bottom:1px solid var(--line);padding-bottom:12px;">' +
+              '<h3 id="personaModalTitle" style="margin:0;font-size:18px;font-weight:600;color:var(--text);">Create Persona</h3>' +
               '<button class="btn" style="padding:4px 8px;font-size:14px;" onclick="window.__wbClosePersonaModal()">✕</button>' +
             '</div>' +
 
-            '<div style="background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.2);border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:12px;color:#93c5fd;">' +
+            '<div style="background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:12px;color:var(--text);">' +
               '<strong>💡 Quick Presets:</strong> ' +
-              '<button type="button" class="btn" style="padding:2px 8px;font-size:11px;margin-left:6px;" onclick="window.__wbApplyPreset(\\'tutor\\')">🎓 Language Tutor</button>' +
-              '<button type="button" class="btn" style="padding:2px 8px;font-size:11px;margin-left:4px;" onclick="window.__wbApplyPreset(\\'cbt_coach\\')">🧘 Mind Coach</button>' +
-              '<button type="button" class="btn" style="padding:2px 8px;font-size:11px;margin-left:4px;" onclick="window.__wbApplyPreset(\\'quantum\\')">🔬 Theoretical Physicist</button>' +
-              '<button type="button" class="btn" style="padding:2px 8px;font-size:11px;margin-left:4px;" onclick="window.__wbApplyPreset(\\'yc_advisor\\')">💼 Startup Advisor</button>' +
+              '<button type="button" class="btn" style="padding:2px 8px;font-size:11px;margin-left:6px;" onclick="window.__wbApplyPreset(\'tutor\')">🎓 Language Tutor</button>' +
+              '<button type="button" class="btn" style="padding:2px 8px;font-size:11px;margin-left:4px;" onclick="window.__wbApplyPreset(\'cbt_coach\')">🧘 Mind Coach</button>' +
+              '<button type="button" class="btn" style="padding:2px 8px;font-size:11px;margin-left:4px;" onclick="window.__wbApplyPreset(\'quantum\')">🔬 Theoretical Physicist</button>' +
+              '<button type="button" class="btn" style="padding:2px 8px;font-size:11px;margin-left:4px;" onclick="window.__wbApplyPreset(\'yc_advisor\')">💼 Startup Advisor</button>' +
             '</div>' +
 
             '<form id="personaForm" onsubmit="window.__wbSavePersonaForm(event)">' +
@@ -484,9 +484,9 @@ export function renderDashboardPersonas(): string {
                 '<div>' +
                   '<div style="display:flex;justify-content:space-between;">' +
                     '<label class="label">Creativity / Temperature</label>' +
-                    '<span id="personaFormTempVal" style="font-size:12px;font-weight:600;color:#fbbf24;">0.7</span>' +
+                    '<span id="personaFormTempVal" style="font-size:12px;font-weight:600;color:var(--warn, #fbbf24);">0.7</span>' +
                   '</div>' +
-                  '<input type="range" id="personaFormTemp" min="0.1" max="1.0" step="0.05" value="0.7" style="width:100%;margin-top:6px;" oninput="document.getElementById(\\'personaFormTempVal\\').textContent=this.value" />' +
+                  '<input type="range" id="personaFormTemp" min="0.1" max="1.0" step="0.05" value="0.7" style="width:100%;margin-top:6px;" oninput="document.getElementById(\'personaFormTempVal\').textContent=this.value" />' +
                   '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);">' +
                     '<span>0.1 (Strict Logic)</span>' +
                     '<span>0.7 (Balanced)</span>' +
@@ -499,7 +499,7 @@ export function renderDashboardPersonas(): string {
                 '</div>' +
               '</div>' +
 
-              '<div style="display:flex;justify-content:flex-end;gap:10px;border-top:1px solid var(--border);padding-top:16px;">' +
+              '<div style="display:flex;justify-content:flex-end;gap:10px;border-top:1px solid var(--line);padding-top:16px;">' +
                 '<button type="button" class="btn" onclick="window.__wbClosePersonaModal()">Cancel</button>' +
                 '<button type="submit" class="btn primary">Save Persona</button>' +
               '</div>' +
@@ -508,18 +508,18 @@ export function renderDashboardPersonas(): string {
         '</div>' +
 
         '<!-- Modal for Testing Persona Simulator -->' +
-        '<div id="personaSimModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.75);z-index:9999;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px);">' +
-          '<div class="card" style="width:100%;max-width:640px;background:var(--card-bg, #0f172a);border:1px solid var(--border);border-radius:16px;padding:24px;box-shadow:0 25px 50px -12px rgba(0,0,0,0.5);">' +
-            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;border-bottom:1px solid var(--border);padding-bottom:10px;">' +
-              '<h3 style="margin:0;font-size:16px;font-weight:600;color:var(--text, #f8fafc);">🧪 Live Persona Simulation: <span id="personaSimName" style="color:#38bdf8;"></span></h3>' +
+        '<div id="personaSimModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px);">' +
+          '<div class="card" style="width:100%;max-width:640px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:24px;box-shadow:var(--shadow);">' +
+            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;border-bottom:1px solid var(--line);padding-bottom:10px;">' +
+              '<h3 style="margin:0;font-size:16px;font-weight:600;color:var(--text);">🧪 Live Persona Simulation: <span id="personaSimName" style="color:var(--blue);"></span></h3>' +
               '<button class="btn" style="padding:4px 8px;font-size:14px;" onclick="window.__wbCloseTestModal()">✕</button>' +
             '</div>' +
             '<input type="hidden" id="personaSimId" />' +
-            '<div id="personaSimOutput" style="background:#090d16;border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:12px;min-height:120px;max-height:240px;overflow-y:auto;font-size:13px;color:#e2e8f0;margin-bottom:14px;">' +
+            '<div id="personaSimOutput" style="background:var(--panel-3);border:1px solid var(--line);border-radius:8px;padding:12px;min-height:120px;max-height:240px;overflow-y:auto;font-size:13px;color:var(--text);margin-bottom:14px;">' +
               'Ready to simulate.' +
             '</div>' +
             '<div style="display:flex;gap:8px;">' +
-              '<input id="personaSimPrompt" class="input" placeholder="Type a message to test this persona..." style="flex:1;" onkeydown="if(event.key===\\'Enter\\'){window.__wbRunPersonaSim();}" />' +
+              '<input id="personaSimPrompt" class="input" placeholder="Type a message to test this persona..." style="flex:1;" onkeydown="if(event.key===\'Enter\'){window.__wbRunPersonaSim();}" />' +
               '<button class="btn primary" onclick="window.__wbRunPersonaSim()">Simulate</button>' +
             '</div>' +
           '</div>' +
