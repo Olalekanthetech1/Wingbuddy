@@ -175,15 +175,7 @@ export class UnifiedModelRegistryService {
       const rows = await db.select({ value: systemSettingsTable.value }).from(systemSettingsTable).where(eq(systemSettingsTable.key, REGISTRY_KEY)).limit(1);
       if (rows[0]?.value) {
         const stored = normalize(JSON.parse(rows[0].value));
-        const defaults = this.getDefaultModels();
-        const existingIds = new Set(stored.map((m) => `${m.provider}:${m.modelId}`));
-        const merged = [...stored];
-        for (const def of defaults) {
-          if (!existingIds.has(`${def.provider}:${def.modelId}`)) {
-            merged.push(def);
-          }
-        }
-        this.cache = this.enforce(merged);
+        this.cache = this.enforce(stored);
         this.cacheAt = Date.now();
         return this.cache;
       }

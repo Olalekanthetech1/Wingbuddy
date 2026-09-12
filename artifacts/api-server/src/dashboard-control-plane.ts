@@ -40,10 +40,26 @@ export function renderDashboardControlPlane(): string {
   async function setMode(mode){try{await api('/api/keys/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});toast('Rotation mode persisted');await loadKeys()}catch(e){toast('Rotation mode update failed: '+e.message)}}
 
   document.addEventListener('click',async e=>{
-    const t=e.target;
-    if(t.matches('[data-key-toggle]')){try{await api('/api/keys/'+encodeURIComponent(t.dataset.keyToggle)+'/toggle',{method:'PATCH'});toast('Key state persisted');await loadKeys()}catch(err){toast('Update failed: '+err.message)}}
-    if(t.matches('[data-key-delete]')){if(!confirm('Remove this managed API key?'))return;try{const d=await api('/api/keys/'+encodeURIComponent(t.dataset.keyDelete),{method:'DELETE'});toast('✓ '+d.message);await loadKeys()}catch(err){toast('Delete failed: '+err.message)}}
-    if(t.matches('[data-key-test]')){try{const d=await api('/api/keys/'+encodeURIComponent(t.dataset.keyTest)+'/test',{method:'POST'});toast(d.valid?(d.isRateLimited?'⚠ Key valid but rate-limited':'✓ Key responded in '+d.latencyMs+'ms'):'✕ '+(d.error||'Key test failed'));await loadKeys()}catch(err){toast('Test failed: '+err.message)}}
+    const target = e.target instanceof Element ? e.target : null;
+    if(!target) return;
+    const toggleBtn = target.closest('[data-key-toggle]');
+    if(toggleBtn){
+      const keyId = toggleBtn.getAttribute('data-key-toggle');
+      if(keyId){ try{await api('/api/keys/'+encodeURIComponent(keyId)+'/toggle',{method:'PATCH'});toast('Key state persisted');await loadKeys()}catch(err){toast('Update failed: '+err.message)} }
+      return;
+    }
+    const deleteBtn = target.closest('[data-key-delete]');
+    if(deleteBtn){
+      const keyId = deleteBtn.getAttribute('data-key-delete');
+      if(keyId){ if(!confirm('Remove this managed API key?'))return;try{const d=await api('/api/keys/'+encodeURIComponent(keyId),{method:'DELETE'});toast('✓ '+(d.message||'Key removed'));await loadKeys()}catch(err){toast('Delete failed: '+err.message)} }
+      return;
+    }
+    const testBtn = target.closest('[data-key-test]');
+    if(testBtn){
+      const keyId = testBtn.getAttribute('data-key-test');
+      if(keyId){ try{const d=await api('/api/keys/'+encodeURIComponent(keyId)+'/test',{method:'POST'});toast(d.valid?(d.isRateLimited?'⚠ Key valid but rate-limited':'✓ Key responded in '+d.latencyMs+'ms'):'✕ '+(d.error||'Key test failed'));await loadKeys()}catch(err){toast('Test failed: '+err.message)} }
+      return;
+    }
   });
 
   document.addEventListener('DOMContentLoaded',()=>{

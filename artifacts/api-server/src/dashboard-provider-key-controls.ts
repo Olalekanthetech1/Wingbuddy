@@ -142,6 +142,7 @@ export function renderDashboardProviderKeyControls(): string {
               return '<div class="wb-pk-item">' +
                 '<div><b>' + esc(k.name) + '</b><div class="mono" style="font-size:11px;color:var(--muted)">' + esc(k.maskedKey) + '</div></div>' +
                 '<span class="pill ' + statusPill + '">' + esc(k.status) + '</span>' +
+                '<span class="pill">' + esc(k.source || 'env') + '</span>' +
                 '<div style="display:flex;gap:4px">' +
                   '<button data-pk-toggle="' + esc(k.id) + '" class="btn" style="padding:4px 8px;font-size:11px">' + (k.status === 'disabled' ? 'Enable' : 'Disable') + '</button>' +
                   '<button data-pk-delete="' + esc(k.id) + '" class="btn danger" style="padding:4px 8px;font-size:11px">Remove</button>' +
