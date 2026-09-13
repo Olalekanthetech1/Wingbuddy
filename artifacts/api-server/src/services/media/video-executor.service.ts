@@ -26,6 +26,23 @@ export interface VideoExecutionOutput {
   failovers: FailoverRecord[];
 }
 
+function cleanExpandedPrompt(text: string, fallback: string): string {
+  let cleaned = text.trim();
+  if ((cleaned.startsWith('"') && cleaned.endsWith('"')) || (cleaned.startsWith("'") && cleaned.endsWith("'"))) {
+    cleaned = cleaned.slice(1, -1).trim();
+  }
+  const quoteMatch = cleaned.match(/>\s*["“]([^"”]+)["”]/) || cleaned.match(/["“]([^"”]{20,300})["”]/);
+  if (quoteMatch && quoteMatch[1]) {
+    cleaned = quoteMatch[1].trim();
+  } else {
+    const lines = cleaned.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#") && !l.toLowerCase().startsWith("here are") && !l.toLowerCase().startsWith("option "));
+    if (lines.length > 0) {
+      cleaned = lines[0].replace(/^>\s*/, "").replace(/^[-*]\s*/, "").trim();
+    }
+  }
+  return cleaned.length >= 10 ? cleaned.slice(0, 300) : fallback;
+}
+
 export class VideoExecutor {
   static async enhanceDirectorPrompt(rawPrompt: string): Promise<{ prompt: string; enhancerModel?: string }> {
     const cleaned = rawPrompt.trim();
@@ -36,15 +53,16 @@ export class VideoExecutor {
     try {
       const routed = await adaptiveAIRouterService.route({
         systemInstruction:
-          "You are a cinematic director. Expand this user video concept into a descriptive prompt specifying camera motion (e.g. slow pan, drone flyover), lighting, motion physics, and cinematic mood. Output ONLY the single-paragraph prompt in English. Maximum 45 words. No quotes, no markdown.",
+          "You are a cinematic director. Expand this user video concept into a descriptive prompt specifying camera motion (e.g. slow pan, drone flyover), lighting, motion physics, and cinematic mood. Output ONLY the single-paragraph prompt in English. Maximum 40 words. No commentary, no options, no markdown.",
         messages: [{ role: "user", content: `Expand into a cinematic video prompt: "${cleaned}"` }],
         temperature: 0.7,
       });
 
       const expanded = routed.response?.text?.trim();
       if (expanded && expanded.length > 10 && !expanded.includes("I cannot")) {
+        const sanitized = cleanExpandedPrompt(expanded, cleaned);
         return {
-          prompt: expanded,
+          prompt: sanitized,
           enhancerModel: `${routed.candidate.model.provider}:${routed.candidate.model.modelId}`,
         };
       }

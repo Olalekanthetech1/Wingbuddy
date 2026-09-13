@@ -483,7 +483,7 @@ export function createTelegramBot(): TelegramBotRuntime {
     } finally { stopTyping(); }
   });
 
-  bot.command(["image", "draw", "img"], async (ctx) => {
+  bot.command(["image", "draw", "img", "imagine", "generate_image"], async (ctx) => {
     if (!(await requireAuthorized(ctx))) return;
     if (!ctx.from || !ctx.chat) return;
     await upsertUser(ctx);
@@ -519,23 +519,38 @@ export function createTelegramBot(): TelegramBotRuntime {
       await conversations.addMessage(conversationId, "user", `/image ${rawPrompt}`);
       await conversations.addMessage(conversationId, "model", `[Generated Image for: "${rawPrompt}"] Enhanced: "${mediaResult.job.enhancedPrompt}"`);
       
+      const safeRaw = rawPrompt.length > 200 ? rawPrompt.slice(0, 195) + "..." : rawPrompt;
+      const safeEnhanced = (mediaResult.job.enhancedPrompt || "").length > 220 ? mediaResult.job.enhancedPrompt.slice(0, 215) + "..." : (mediaResult.job.enhancedPrompt || "");
+      const isEnhancedDiff = safeEnhanced.toLowerCase() !== safeRaw.toLowerCase() && safeEnhanced.length > 5;
+
       const imageBadge = `<i>Engine: ${escapeHtml(mediaResult.job.actualProvider)} (${escapeHtml(mediaResult.job.actualModel)})</i>`;
       const enhancerTag = `<i>✨ AI Enhanced:</i>`;
-      const caption = [
-        `<b>🎨 Prompt:</b> ${escapeHtml(rawPrompt)}`,
-        mediaResult.job.enhancedPrompt.toLowerCase() !== rawPrompt.toLowerCase() ? `${enhancerTag} ${escapeHtml(mediaResult.job.enhancedPrompt)}` : null,
+      const htmlCaption = [
+        `<b>🎨 Prompt:</b> ${escapeHtml(safeRaw)}`,
+        isEnhancedDiff ? `${enhancerTag} ${escapeHtml(safeEnhanced)}` : null,
         imageBadge
       ].filter(Boolean).join("\n\n");
-      const safeCaption = caption.length > 1000 ? caption.slice(0, 995) + "..." : caption;
 
-      await ctx.replyWithPhoto(new InputFile(mediaResult.artifact.buffer, "image.png"), { caption: safeCaption, parse_mode: "HTML", reply_markup: feedbackKeyboard() });
+      try {
+        await ctx.replyWithPhoto(new InputFile(mediaResult.artifact.buffer, "image.png"), {
+          caption: htmlCaption,
+          parse_mode: "HTML",
+          reply_markup: feedbackKeyboard(),
+        });
+      } catch (captionErr) {
+        logger.warn({ err: String(captionErr) }, "HTML photo caption failed; retrying with plain text");
+        await ctx.replyWithPhoto(new InputFile(mediaResult.artifact.buffer, "image.png"), {
+          caption: `🎨 Prompt: ${safeRaw}\nEngine: ${mediaResult.job.actualProvider} (${mediaResult.job.actualModel})`,
+          reply_markup: feedbackKeyboard(),
+        });
+      }
     } catch (error) {
       logger.error({ stage: "image_generation", error: safeErrorMetadata(error) }, "Image generation failed");
       await ctx.reply("Sorry, I encountered an issue generating that image. Please try again or rephrase your prompt.");
     } finally { stopPresence(); }
   });
 
-  bot.command(["video", "vid", "clip"], async (ctx) => {
+  bot.command(["video", "vid", "clip", "generate_video"], async (ctx) => {
     if (!(await requireAuthorized(ctx))) return;
     if (!ctx.from || !ctx.chat) return;
     await upsertUser(ctx);
@@ -574,21 +589,48 @@ export function createTelegramBot(): TelegramBotRuntime {
       await conversations.addMessage(conversationId, "user", `/video ${rawPrompt}`);
       await conversations.addMessage(conversationId, "model", `[Generated Visual (${mediaResult.job.actualProvider}) for: "${rawPrompt}"] Enhanced: "${mediaResult.job.enhancedPrompt}"`);
       
+      const safeRaw = rawPrompt.length > 200 ? rawPrompt.slice(0, 195) + "..." : rawPrompt;
+      const safeEnhanced = (mediaResult.job.enhancedPrompt || "").length > 220 ? mediaResult.job.enhancedPrompt.slice(0, 215) + "..." : (mediaResult.job.enhancedPrompt || "");
+      const isEnhancedDiff = safeEnhanced.toLowerCase() !== safeRaw.toLowerCase() && safeEnhanced.length > 5;
+
       const providerBadge = `${escapeHtml(mediaResult.job.actualProvider)} (${escapeHtml(mediaResult.job.videoTechnique || "video_diffusion")})`;
       const enhancerTag = `<i>✨ AI Director:</i>`;
-      const caption = [
-        `<b>🎬 Prompt:</b> ${escapeHtml(rawPrompt)}`,
-        mediaResult.job.enhancedPrompt.toLowerCase() !== rawPrompt.toLowerCase() ? `${enhancerTag} ${escapeHtml(mediaResult.job.enhancedPrompt)}` : null,
+      const htmlCaption = [
+        `<b>🎬 Prompt:</b> ${escapeHtml(safeRaw)}`,
+        isEnhancedDiff ? `${enhancerTag} ${escapeHtml(safeEnhanced)}` : null,
         `<i>Engine: ${providerBadge}</i>`
       ].filter(Boolean).join("\n\n");
-      const safeCaption = caption.length > 1000 ? caption.slice(0, 995) + "..." : caption;
       
       if (progressMsg) await ctx.api.deleteMessage(ctx.chat.id, progressMsg).catch(() => {});
       
       if (mediaResult.artifact.mimeType?.includes("video") || mediaResult.job.videoTechnique !== "fallback") {
-        await ctx.replyWithVideo(new InputFile(mediaResult.artifact.buffer, "video.mp4"), { caption: safeCaption, parse_mode: "HTML", reply_markup: feedbackKeyboard() });
+        try {
+          await ctx.replyWithVideo(new InputFile(mediaResult.artifact.buffer, "video.mp4"), {
+            caption: htmlCaption,
+            parse_mode: "HTML",
+            reply_markup: feedbackKeyboard(),
+          });
+        } catch (captionErr) {
+          logger.warn({ err: String(captionErr) }, "HTML video caption failed; retrying with plain text");
+          await ctx.replyWithVideo(new InputFile(mediaResult.artifact.buffer, "video.mp4"), {
+            caption: `🎬 Prompt: ${safeRaw}\nEngine: ${mediaResult.job.actualProvider} (${mediaResult.job.videoTechnique || "video_diffusion"})`,
+            reply_markup: feedbackKeyboard(),
+          });
+        }
       } else {
-        await ctx.replyWithPhoto(new InputFile(mediaResult.artifact.buffer, "storyboard.jpg"), { caption: `${safeCaption}\n\n<i>(Rendered as a cinematic storyboard concept frame)</i>`, parse_mode: "HTML", reply_markup: feedbackKeyboard() });
+        try {
+          await ctx.replyWithPhoto(new InputFile(mediaResult.artifact.buffer, "storyboard.jpg"), {
+            caption: `${htmlCaption}\n\n<i>(Rendered as a cinematic storyboard concept frame)</i>`,
+            parse_mode: "HTML",
+            reply_markup: feedbackKeyboard(),
+          });
+        } catch (captionErr) {
+          logger.warn({ err: String(captionErr) }, "HTML storyboard caption failed; retrying with plain text");
+          await ctx.replyWithPhoto(new InputFile(mediaResult.artifact.buffer, "storyboard.jpg"), {
+            caption: `🎬 Prompt: ${safeRaw}\nEngine: ${mediaResult.job.actualProvider}`,
+            reply_markup: feedbackKeyboard(),
+          });
+        }
       }
       logger.info({ stage: "video_generation", elapsedMs: Date.now() - startedAt }, "Video generation completed via UnifiedMediaEngine");
     } catch (error) {

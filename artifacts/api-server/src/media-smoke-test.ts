@@ -112,54 +112,150 @@ async function runMediaRealtimeSmokeTest() {
   }
 
   // ----------------------------------------------------------------------------
-  // TEST 2: Gemini Direct & Multi-Tier Video Motion Engine
+  // TEST 2: Gemini Direct Video Engine (veo-3.1-lite-generate-preview)
   // ----------------------------------------------------------------------------
   console.log("\n--------------------------------------------------------------------------------");
-  console.log("2️⃣ TESTING GEMINI & MULTI-TIER VIDEO MOTION ENGINE (Veo + FFmpeg Motion Engine)");
+  console.log("2️⃣ TESTING GEMINI VEO VIDEO ENGINE (veo-3.1-lite-generate-preview)");
   console.log("--------------------------------------------------------------------------------");
-  const vidStart = Date.now();
+  const veoStart = Date.now();
   try {
-    const vidPrompt = "A dramatic drone flyover of emerald ocean waves crashing over black volcanic rock at sunrise";
-    const vidResult = await UnifiedMediaEngine.execute({
+    const veoPrompt = "A dramatic cinematic drone flyover of emerald ocean waves crashing over black volcanic rock at sunrise";
+    const veoResult = await UnifiedMediaEngine.execute({
       modality: "video",
-      prompt: vidPrompt,
+      prompt: veoPrompt,
+      providerOverride: "gemini",
+      modelOverride: "veo-3.1-lite-generate-preview",
       executionMode: "live",
       userId: 888777,
       userTier: "vip",
       sourceInterface: "telegram",
     });
 
-    const vidLatency = Date.now() - vidStart;
-    const ok = vidResult.success && Boolean(vidResult.job?.artifactUrl) && (vidResult.job?.buffer?.length || 0) > 2000;
+    const veoLatency = Date.now() - veoStart;
+    const ok = veoResult.success && Boolean(veoResult.job?.artifactUrl) && (veoResult.job?.buffer?.length || 0) > 2000;
+
+    if (ok) {
+      const currentModels = await unifiedModelRegistryService.list();
+      const existingVeo = currentModels.find(
+        (m) => m.provider === "gemini" && m.modelId === "veo-3.1-lite-generate-preview"
+      );
+      if (existingVeo) {
+        await unifiedModelRegistryService.setPrimary(existingVeo.id);
+      } else {
+        const added = await unifiedModelRegistryService.add({
+          provider: "gemini",
+          modelId: "veo-3.1-lite-generate-preview",
+          name: "Google Veo 3.1 Lite Video Preview",
+          roles: ["primary_video"],
+          capabilities: ["video_generation", "generate"],
+        });
+        await unifiedModelRegistryService.setPrimary(added.id);
+      }
+      console.log("   🌟 Dynamically registered & promoted 'veo-3.1-lite-generate-preview' as primary_video in registry!");
+    }
 
     metrics.push({
-      pipeline: "Video Generation",
-      provider: vidResult.job?.actualProvider || "local_ffmpeg_engine",
+      pipeline: "Video Generation (Veo 3.1)",
+      provider: veoResult.job?.actualProvider || "gemini",
       requestedModel: "veo-3.1-lite-generate-preview",
-      actualModel: vidResult.job?.actualModel || "synthetic_motion_renderer",
-      route: vidResult.job?.videoTechnique || "synthetic_motion",
-      latencyMs: vidLatency,
-      bufferSizeBytes: vidResult.job?.buffer?.length || 0,
-      mimeType: vidResult.job?.mimeType || "video/mp4",
-      fallbackUsed: (vidResult.job?.failovers?.length || 0) > 0,
+      actualModel: veoResult.job?.actualModel || "veo-3.1-lite-generate-preview",
+      route: veoResult.job?.videoTechnique || "direct_veo",
+      latencyMs: veoLatency,
+      bufferSizeBytes: veoResult.job?.buffer?.length || 0,
+      mimeType: veoResult.job?.mimeType || "video/mp4",
+      fallbackUsed: (veoResult.job?.failovers?.length || 0) > 0,
       status: ok ? "PASSED" : "FAILED",
-      details: `Technique: ${vidResult.job?.videoTechnique} | Video Model: ${vidResult.job?.actualModel} | Artifact: ${vidResult.job?.artifactUrl}`,
+      details: `Technique: ${veoResult.job?.videoTechnique} | Video Model: ${veoResult.job?.actualModel} | Artifact: ${veoResult.job?.artifactUrl}`,
     });
 
-    console.log(`   ✅ Video Result: ${ok ? "PASSED" : "FAILED"}`);
-    console.log(`   ⏱️  Latency: ${vidLatency}ms`);
-    console.log(`   📦 Buffer Size: ${(vidResult.job?.buffer?.length || 0).toLocaleString()} bytes (${vidResult.job?.mimeType})`);
-    console.log(`   🤖 Resolved Provider: ${vidResult.job?.actualProvider} | Model: ${vidResult.job?.actualModel}`);
-    console.log(`   🎥 Technique: ${vidResult.job?.videoTechnique}`);
+    console.log(`   ✅ Veo Video Result: ${ok ? "PASSED" : "FAILED"}`);
+    console.log(`   ⏱️  Latency: ${veoLatency}ms`);
+    console.log(`   📦 Buffer Size: ${(veoResult.job?.buffer?.length || 0).toLocaleString()} bytes (${veoResult.job?.mimeType})`);
+    console.log(`   🤖 Resolved Provider: ${veoResult.job?.actualProvider} | Model: ${veoResult.job?.actualModel}`);
   } catch (err: any) {
-    console.error("   ❌ Video Generation Error:", err.message);
+    console.error("   ❌ Veo Video Error:", err.message);
     metrics.push({
-      pipeline: "Video Generation",
-      provider: "gemini/local_ffmpeg_engine",
+      pipeline: "Video Generation (Veo 3.1)",
+      provider: "gemini",
       requestedModel: "veo-3.1-lite-generate-preview",
       actualModel: "error",
       route: "error",
-      latencyMs: Date.now() - vidStart,
+      latencyMs: Date.now() - veoStart,
+      bufferSizeBytes: 0,
+      mimeType: "none",
+      fallbackUsed: false,
+      status: "FAILED",
+      details: err.message,
+    });
+  }
+
+  // ----------------------------------------------------------------------------
+  // TEST 3: Hugging Face Video Engine (TaoLiveAIGC/TaoMate-H3)
+  // ----------------------------------------------------------------------------
+  console.log("\n--------------------------------------------------------------------------------");
+  console.log("3️⃣ TESTING HUGGING FACE VIDEO ENGINE (TaoLiveAIGC/TaoMate-H3)");
+  console.log("--------------------------------------------------------------------------------");
+  const hfVidStart = Date.now();
+  try {
+    const hfVidPrompt = "A smooth aerial camera orbit around an ancient misty mountain temple at golden hour";
+    const hfVidResult = await UnifiedMediaEngine.execute({
+      modality: "video",
+      prompt: hfVidPrompt,
+      providerOverride: "huggingface",
+      modelOverride: "TaoLiveAIGC/TaoMate-H3",
+      executionMode: "live",
+      userId: 888777,
+      userTier: "vip",
+      sourceInterface: "telegram",
+    });
+
+    const hfVidLatency = Date.now() - hfVidStart;
+    const ok = hfVidResult.success && Boolean(hfVidResult.job?.artifactUrl) && (hfVidResult.job?.buffer?.length || 0) > 2000;
+
+    if (ok) {
+      const currentModels = await unifiedModelRegistryService.list();
+      const existingTao = currentModels.find(
+        (m) => m.provider === "huggingface" && m.modelId === "TaoLiveAIGC/TaoMate-H3"
+      );
+      if (!existingTao) {
+        await unifiedModelRegistryService.add({
+          provider: "huggingface",
+          modelId: "TaoLiveAIGC/TaoMate-H3",
+          name: "TaoMate H3 Video Diffusion",
+          roles: ["fast"],
+          capabilities: ["video_generation", "generate"],
+        });
+      }
+      console.log("   🌟 Dynamically registered 'TaoLiveAIGC/TaoMate-H3' in unified model registry!");
+    }
+
+    metrics.push({
+      pipeline: "Video Generation (TaoMate-H3)",
+      provider: hfVidResult.job?.actualProvider || "huggingface",
+      requestedModel: "TaoLiveAIGC/TaoMate-H3",
+      actualModel: hfVidResult.job?.actualModel || "TaoLiveAIGC/TaoMate-H3",
+      route: hfVidResult.job?.videoTechnique || "video_diffusion",
+      latencyMs: hfVidLatency,
+      bufferSizeBytes: hfVidResult.job?.buffer?.length || 0,
+      mimeType: hfVidResult.job?.mimeType || "video/mp4",
+      fallbackUsed: (hfVidResult.job?.failovers?.length || 0) > 0,
+      status: ok ? "PASSED" : "FAILED",
+      details: `Technique: ${hfVidResult.job?.videoTechnique} | Video Model: ${hfVidResult.job?.actualModel} | Artifact: ${hfVidResult.job?.artifactUrl}`,
+    });
+
+    console.log(`   ✅ TaoMate Video Result: ${ok ? "PASSED" : "FAILED"}`);
+    console.log(`   ⏱️  Latency: ${hfVidLatency}ms`);
+    console.log(`   📦 Buffer Size: ${(hfVidResult.job?.buffer?.length || 0).toLocaleString()} bytes (${hfVidResult.job?.mimeType})`);
+    console.log(`   🤖 Resolved Provider: ${hfVidResult.job?.actualProvider} | Model: ${hfVidResult.job?.actualModel}`);
+  } catch (err: any) {
+    console.error("   ❌ TaoMate Video Error:", err.message);
+    metrics.push({
+      pipeline: "Video Generation (TaoMate-H3)",
+      provider: "huggingface",
+      requestedModel: "TaoLiveAIGC/TaoMate-H3",
+      actualModel: "error",
+      route: "error",
+      latencyMs: Date.now() - hfVidStart,
       bufferSizeBytes: 0,
       mimeType: "none",
       fallbackUsed: false,

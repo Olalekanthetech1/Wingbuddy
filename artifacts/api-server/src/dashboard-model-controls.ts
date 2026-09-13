@@ -55,14 +55,16 @@ export function renderDashboardModelControls(): string {
 
       cachedModels.forEach(m => {
         const caps = m.capabilities || [];
+        const roles = m.roles || [];
         const id = (m.modelId || '').toLowerCase();
         
-        const isImage = caps.includes("image_generation") || id.includes("flux") || id.includes("image") || id.includes("stable-diffusion") || id.includes("sdxl");
-        const isVideo = caps.includes("video_generation") || id.includes("wan") || id.includes("video") || id.includes("sora") || id.includes("kling");
+        const isImage = caps.includes("image_generation") || roles.includes("primary_image") || id.includes("flux") || id.includes("image") || id.includes("stable-diffusion") || id.includes("sdxl") || id.includes("imagen") || id.includes("dall-e");
+        const isVideo = caps.includes("video_generation") || roles.includes("primary_video") || id.includes("veo") || id.includes("wan") || id.includes("video") || id.includes("sora") || id.includes("kling") || id.includes("runway") || id.includes("taomate") || id.includes("hunyuan") || id.includes("cogvideo") || id.includes("luma");
+        const isEmbed = caps.includes("embedding") || roles.includes("embedding") || roles.includes("primary_embedding") || id.includes("embed");
         
         if (isImage) imageModels.push(m);
         else if (isVideo) videoModels.push(m);
-        else if (caps.includes("embedding") || (m.roles || []).includes("embedding") || (m.roles || []).includes("primary_embedding") || id.includes("embed")) embedModels.push(m);
+        else if (isEmbed) embedModels.push(m);
         else chatModels.push(m);
       });
 

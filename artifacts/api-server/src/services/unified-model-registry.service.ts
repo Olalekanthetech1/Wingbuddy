@@ -121,6 +121,7 @@ export class UnifiedModelRegistryService {
       { id: "gemini:gemini-3.8-flash", provider: "gemini", modelId: "gemini-3.8-flash", name: "Gemini 3.8 Flash", roles: ["primary", "primary_chat", "fast"], enabled: true, priority: 0, capabilities: ["generate", "chat", "streaming", "fast", "vision", "tool_calling", "web_search"], createdAt: now, updatedAt: now },
       { id: "gemini:gemini-3.5-flash", provider: "gemini", modelId: "gemini-3.5-flash", name: "Gemini 3.5 Flash", roles: ["fast"], enabled: true, priority: 1, capabilities: ["generate", "chat", "streaming", "fast"], createdAt: now, updatedAt: now },
       { id: "gemini:gemini-3.7-flash", provider: "gemini", modelId: "gemini-3.7-flash", name: "Gemini 3.7 Flash", roles: ["reasoning"], enabled: true, priority: 1, capabilities: ["generate", "chat", "streaming", "reasoning", "vision"], createdAt: now, updatedAt: now },
+      { id: "gemini:veo-3.1-lite-generate-preview", provider: "gemini", modelId: "veo-3.1-lite-generate-preview", name: "Google Veo 3.1 Preview", roles: ["primary_video"], enabled: true, priority: 0, capabilities: ["generate", "video_generation"], createdAt: now, updatedAt: now },
       { id: "gemini:text-embedding-004", provider: "gemini", modelId: "text-embedding-004", name: "Gemini Text Embedding 004", roles: ["embedding", "primary_embedding"], enabled: true, priority: 2, capabilities: ["embedding"], createdAt: now, updatedAt: now },
       { id: "groq:llama-3.3-70b-versatile", provider: "groq", modelId: "llama-3.3-70b-versatile", name: "Llama 3.3 70B", roles: ["fast", "reasoning"], enabled: true, priority: 1, capabilities: ["generate", "chat", "streaming", "fast", "reasoning", "tool_calling"], createdAt: now, updatedAt: now },
       { id: "groq:llama-3.1-8b-instant", provider: "groq", modelId: "llama-3.1-8b-instant", name: "Llama 3.1 8B Instant", roles: ["fast"], enabled: true, priority: 2, capabilities: ["generate", "chat", "streaming", "fast"], createdAt: now, updatedAt: now },
@@ -175,8 +176,21 @@ export class UnifiedModelRegistryService {
       const rows = await db.select({ value: systemSettingsTable.value }).from(systemSettingsTable).where(eq(systemSettingsTable.key, REGISTRY_KEY)).limit(1);
       if (rows[0]?.value) {
         const stored = normalize(JSON.parse(rows[0].value));
-        this.cache = this.enforce(stored);
+        const defaults = this.getDefaultModels();
+        const existingIds = new Set(stored.map((m) => `${m.provider}:${m.modelId}`));
+        let modified = false;
+        const merged = [...stored];
+        for (const def of defaults) {
+          if (!existingIds.has(`${def.provider}:${def.modelId}`)) {
+            merged.push(def);
+            modified = true;
+          }
+        }
+        this.cache = this.enforce(merged);
         this.cacheAt = Date.now();
+        if (modified) {
+          await this.persist(this.cache);
+        }
         return this.cache;
       }
       const legacy = await db.select({ value: systemSettingsTable.value }).from(systemSettingsTable).where(eq(systemSettingsTable.key, LEGACY_GEMINI_KEY)).limit(1);
@@ -240,9 +254,9 @@ export class UnifiedModelRegistryService {
 
     let primaryRole: UnifiedModelRole = "primary";
     const lowerId = target.modelId.toLowerCase();
-    if (target.capabilities.includes("image_generation") || lowerId.includes("flux") || lowerId.includes("image") || lowerId.includes("stable-diffusion") || lowerId.includes("sdxl")) primaryRole = "primary_image";
-    else if (target.capabilities.includes("video_generation") || lowerId.includes("wan") || lowerId.includes("video") || lowerId.includes("sora") || lowerId.includes("kling")) primaryRole = "primary_video";
-    else if (target.capabilities.includes("embedding") || target.roles.includes("embedding") || lowerId.includes("embed")) primaryRole = "primary_embedding";
+    if (target.capabilities.includes("image_generation") || target.roles.includes("primary_image") || lowerId.includes("flux") || lowerId.includes("image") || lowerId.includes("stable-diffusion") || lowerId.includes("sdxl") || lowerId.includes("imagen") || lowerId.includes("dall-e")) primaryRole = "primary_image";
+    else if (target.capabilities.includes("video_generation") || target.roles.includes("primary_video") || lowerId.includes("veo") || lowerId.includes("wan") || lowerId.includes("video") || lowerId.includes("sora") || lowerId.includes("kling") || lowerId.includes("runway") || lowerId.includes("taomate") || lowerId.includes("hunyuan")) primaryRole = "primary_video";
+    else if (target.capabilities.includes("embedding") || target.roles.includes("embedding") || target.roles.includes("primary_embedding") || lowerId.includes("embed")) primaryRole = "primary_embedding";
     else primaryRole = "primary_chat";
 
     const next = models.map((model) => {

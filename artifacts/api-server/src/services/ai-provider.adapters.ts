@@ -22,9 +22,9 @@ function inferModelCapabilities(provider: AIProviderId, modelId: string, sourceC
   const id = modelId.toLowerCase();
 
   // Media generation detection
-  if (id.includes("flux") || id.includes("stable-diffusion") || id.includes("sdxl") || id.includes("image") || id.includes("dall-e") || id.includes("midjourney")) {
+  if (id.includes("flux") || id.includes("stable-diffusion") || id.includes("sdxl") || id.includes("image") || id.includes("dall-e") || id.includes("midjourney") || id.includes("imagen")) {
     caps.add("image_generation");
-  } else if (id.includes("wan") || id.includes("video") || id.includes("sora") || id.includes("kling") || id.includes("runway")) {
+  } else if (id.includes("wan") || id.includes("video") || id.includes("sora") || id.includes("kling") || id.includes("runway") || id.includes("veo") || id.includes("taomate") || id.includes("hunyuan") || id.includes("cogvideo") || id.includes("luma")) {
     caps.add("video_generation");
   } else {
     caps.add("chat");
