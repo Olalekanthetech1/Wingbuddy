@@ -18,6 +18,8 @@ async function buildAll() {
     entryPoints: [
       path.resolve(artifactDir, "src/index.ts"),
       path.resolve(artifactDir, "src/smoke-test-runner.ts"),
+      path.resolve(artifactDir, "src/smoke-test-all-providers.ts"),
+      path.resolve(artifactDir, "src/media-smoke-test.ts"),
     ],
     platform: "node",
     bundle: true,

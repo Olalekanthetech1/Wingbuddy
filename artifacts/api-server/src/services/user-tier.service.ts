@@ -481,26 +481,54 @@ export class UserTierService {
     };
   }
 
-  async checkToolQuota(telegramUserId: number, tool: 'image' | 'video' | 'research' | 'deep_reasoning'): Promise<{ allowed: boolean, remaining: number, message?: string }> {
+  async checkToolQuota(telegramUserId: number, tool: 'image' | 'video' | 'research' | 'deep_reasoning', tierOverride?: UserTier): Promise<{ allowed: boolean, remaining: number, message?: string }> {
     const today = getUtcTodayDate();
     const policy = await this.getPolicy();
     const userResult = await db.select().from(usersTable).where(eq(usersTable.telegramUserId, telegramUserId)).limit(1);
-    const user = userResult[0];
+    let user = userResult[0];
 
-    if (!user) return { allowed: false, remaining: 0, message: "User not found." };
+    if (!user) {
+      const defaultTier = tierOverride || policy.defaultTier || "free";
+      const defaultQuota = policy.tiers[defaultTier]?.dailyQuota ?? DEFAULT_TIER_CONFIGS[defaultTier].dailyQuota;
+      try {
+        const created = await db
+          .insert(usersTable)
+          .values({
+            telegramUserId,
+            tier: defaultTier,
+            dailyQuota: defaultQuota,
+            requestsToday: 0,
+            imagesToday: 0,
+            videosToday: 0,
+            deepReasoningToday: 0,
+            researchToday: 0,
+            lastRequestDate: today,
+            totalRequests: 0,
+            status: "active",
+            lastActiveAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .returning();
+        user = created[0];
+      } catch {
+        // In case of concurrency/race condition, re-query
+        const retryResult = await db.select().from(usersTable).where(eq(usersTable.telegramUserId, telegramUserId)).limit(1);
+        user = retryResult[0];
+      }
+    }
     
     // Auto reset if new day
-    if (user.lastRequestDate !== today) {
+    if (user && user.lastRequestDate !== today) {
       user.imagesToday = 0;
       user.videosToday = 0;
       user.deepReasoningToday = 0;
       user.researchToday = 0;
     }
 
-    const currentTier = (user.tier === "vip" || user.tier === "pro" ? user.tier : "free") as UserTier;
+    const currentTier = (tierOverride || user?.tier === "vip" || user?.tier === "pro" ? (tierOverride || user?.tier) : "free") as UserTier;
     const tierConfig = policy.tiers[currentTier] || DEFAULT_TIER_CONFIGS[currentTier];
     
-    if (user.status === "suspended") {
+    if (user && user.status === "suspended") {
       return { allowed: false, remaining: 0, message: "Account suspended." };
     }
 
@@ -511,25 +539,25 @@ export class UserTierService {
     switch (tool) {
       case 'image':
         quota = tierConfig.dailyImageQuota ?? DEFAULT_TIER_CONFIGS[currentTier].dailyImageQuota ?? 0;
-        used = user.imagesToday;
+        used = user?.imagesToday || 0;
         label = "Image Generation";
         if (!tierConfig.allowedFeatures.imageGen) quota = 0;
         break;
       case 'video':
         quota = tierConfig.dailyVideoQuota ?? DEFAULT_TIER_CONFIGS[currentTier].dailyVideoQuota ?? 0;
-        used = user.videosToday;
+        used = user?.videosToday || 0;
         label = "Video Generation";
         if (!tierConfig.allowedFeatures.videoGen) quota = 0;
         break;
       case 'deep_reasoning':
         quota = tierConfig.dailyDeepReasoningQuota ?? DEFAULT_TIER_CONFIGS[currentTier].dailyDeepReasoningQuota ?? 0;
-        used = user.deepReasoningToday;
+        used = user?.deepReasoningToday || 0;
         label = "Deep Reasoning";
         if (!tierConfig.allowedFeatures.deepReasoning) quota = 0;
         break;
       case 'research':
         quota = tierConfig.dailyResearchQuota ?? DEFAULT_TIER_CONFIGS[currentTier].dailyResearchQuota ?? 0;
-        used = user.researchToday;
+        used = user?.researchToday || 0;
         label = "Web Research";
         if (!tierConfig.allowedFeatures.webResearch) quota = 0;
         break;
@@ -540,7 +568,7 @@ export class UserTierService {
     if (!isUnlimited && used >= quota) {
       return { 
         allowed: false, 
-        remaining: 0,
+        remaining: 0, 
         message: `⏳ You have reached your daily limit of ${quota} for ${label}. Please upgrade your tier for higher limits.`
       };
     }

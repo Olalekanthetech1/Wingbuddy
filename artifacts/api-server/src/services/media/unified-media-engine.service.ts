@@ -29,7 +29,7 @@ export class UnifiedMediaEngine {
     let quotaCheck = { allowed: true, remaining: 5, message: undefined as string | undefined };
     try {
       if (request.userId) {
-        quotaCheck = await userTierService.checkToolQuota(userIdNum, modality === "video" ? "video" : "image");
+        quotaCheck = await userTierService.checkToolQuota(userIdNum, modality === "video" ? "video" : "image", userTier as any);
       }
     } catch {
       quotaCheck = { allowed: true, remaining: 5, message: undefined };
@@ -120,7 +120,7 @@ export class UnifiedMediaEngine {
     let quotaCheck = { allowed: true, remaining: 5, message: undefined as string | undefined };
     if (request.userId) {
       try {
-        quotaCheck = await userTierService.checkToolQuota(userIdNum, modality === "video" ? "video" : "image");
+        quotaCheck = await userTierService.checkToolQuota(userIdNum, modality === "video" ? "video" : "image", userTier as any);
       } catch {
         quotaCheck = { allowed: true, remaining: 5, message: undefined };
       }
@@ -296,6 +296,8 @@ export class UnifiedMediaEngine {
         latencyMs: totalLatency,
         failovers,
       })!;
+
+      (updatedJob as any).buffer = artifactBuffer;
 
       updatedJob.quotaDecision = {
         allowed: true,

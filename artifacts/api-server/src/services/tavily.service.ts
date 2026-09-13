@@ -58,14 +58,17 @@ export interface TavilyExtractResponse {
 
 export class TavilyService {
   private readonly fallbackApiKey?: string;
+  private readonly isExplicitKey: boolean;
   private readonly timeoutMs: number;
 
-  constructor(fallbackApiKey = process.env.TAVILY_API_KEY?.trim() || undefined) {
-    this.fallbackApiKey = fallbackApiKey;
+  constructor(fallbackApiKey?: string) {
+    this.isExplicitKey = fallbackApiKey !== undefined;
+    this.fallbackApiKey = this.isExplicitKey ? fallbackApiKey : (process.env.TAVILY_API_KEY?.trim() || undefined);
     this.timeoutMs = Number(process.env.TAVILY_TIMEOUT_MS) > 0 ? Number(process.env.TAVILY_TIMEOUT_MS) : DEFAULT_TIMEOUT_MS;
   }
 
   isConfigured(): boolean {
+    if (this.isExplicitKey) return Boolean(this.fallbackApiKey?.trim());
     const summary = aiProviderKeyPoolService.getSummary("tavily");
     if (summary.healthyKeys > 0 || summary.totalKeys > 0) return true;
     return Boolean(this.fallbackApiKey);
@@ -147,6 +150,13 @@ export class TavilyService {
   }
 
   private async requestWithPool(path: string, payload: Record<string, unknown>): Promise<any> {
+    if (this.isExplicitKey) {
+      if (!this.fallbackApiKey) {
+        throw new Error("Tavily web research is not configured. Add a Tavily API key in the dashboard or set TAVILY_API_KEY.");
+      }
+      return this.executeRawRequest(path, payload, this.fallbackApiKey);
+    }
+
     await aiProviderKeyPoolService.hydrateProvider("tavily", "TAVILY_API_KEY");
     const orderedKeys = aiProviderKeyPoolService.getOrderedKeys("tavily");
 

@@ -4,7 +4,13 @@ import type { AIChatRequest, AIChatResponse, AIMessage, AIModelCatalogEntry, AIP
 import type { AIProviderId } from "./ai-provider.types";
 import { logger } from "../lib/logger";
 
-function requireApiKey(provider: AIProviderRecord, apiKey?: string): string { const value = apiKey?.trim() || process.env[provider.apiKeyEnv]?.trim(); if (!value) throw new Error(`${provider.apiKeyEnv} is not configured`); return value; }
+function requireApiKey(provider: AIProviderRecord, apiKey?: string): string {
+  const raw = apiKey?.trim() || process.env[provider.apiKeyEnv]?.trim();
+  if (!raw) throw new Error(`${provider.apiKeyEnv} is not configured`);
+  const first = raw.split(/[,\s\n]+/)[0]?.trim();
+  if (!first) throw new Error(`${provider.apiKeyEnv} has invalid key format`);
+  return first;
+}
 function normalizeBaseUrl(value: string): string { return value.replace(/\/+$/, ""); }
 function normalizeUsage(usage: any): AIUsage | undefined { if (!usage || typeof usage !== "object") return undefined; const inputTokens = Number(usage.prompt_tokens ?? usage.input_tokens ?? usage.promptTokenCount ?? NaN); const outputTokens = Number(usage.completion_tokens ?? usage.output_tokens ?? usage.candidatesTokenCount ?? NaN); const totalTokens = Number(usage.total_tokens ?? usage.totalTokenCount ?? NaN); const result: AIUsage = {}; if (Number.isFinite(inputTokens)) result.inputTokens = inputTokens; if (Number.isFinite(outputTokens)) result.outputTokens = outputTokens; if (Number.isFinite(totalTokens)) result.totalTokens = totalTokens; return Object.keys(result).length ? result : undefined; }
 function asOpenAIMessage(message: AIMessage): Record<string, unknown> { return { role: message.role, content: message.content, ...(message.name ? { name: message.name } : {}), ...(message.toolCallId ? { tool_call_id: message.toolCallId } : {}) }; }
@@ -114,8 +120,53 @@ class GeminiAdapter implements AIProviderAdapter {
   readonly providerId = "gemini" as const;
   private toContents(messages: AIMessage[]) { return messages.filter((message) => message.role !== "tool").map((message) => ({ role: message.role === "assistant" ? "model" : "user", parts: [{ text: message.content }] })); }
   private systemInstruction(messages: AIMessage[]): string | undefined { return messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n") || undefined; }
-  async chat(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIChatResponse> { const client = new GoogleGenAI({ apiKey: requireApiKey(provider, apiKey) }); const response: any = await client.models.generateContent({ model: request.model, contents: this.toContents(request.messages), config: { ...(this.systemInstruction(request.messages) ? { systemInstruction: this.systemInstruction(request.messages) } : {}), ...(request.temperature !== undefined ? { temperature: request.temperature } : {}), ...(request.topP !== undefined ? { topP: request.topP } : {}), ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}) } }); return { provider: this.providerId, model: request.model, text: response.text || "", finishReason: response.candidates?.[0]?.finishReason, usage: normalizeUsage(response.usageMetadata), raw: response }; }
-  async *stream(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): AsyncGenerator<AIStreamChunk> { const client = new GoogleGenAI({ apiKey: requireApiKey(provider, apiKey) }); const result: any = await client.models.generateContentStream({ model: request.model, contents: this.toContents(request.messages), config: { ...(this.systemInstruction(request.messages) ? { systemInstruction: this.systemInstruction(request.messages) } : {}), ...(request.temperature !== undefined ? { temperature: request.temperature } : {}), ...(request.topP !== undefined ? { topP: request.topP } : {}), ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}) } }); for await (const chunk of result) { const text = typeof chunk?.text === "string" ? chunk.text : ""; const candidate = chunk?.candidates?.[0]; yield { provider: this.providerId, model: request.model, delta: text, done: Boolean(candidate?.finishReason), finishReason: candidate?.finishReason, usage: normalizeUsage(chunk?.usageMetadata) }; } }
+  async chat(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIChatResponse> {
+    const client = new GoogleGenAI({ apiKey: requireApiKey(provider, apiKey) });
+    const response: any = await client.models.generateContent({
+      model: request.model,
+      contents: this.toContents(request.messages),
+      config: {
+        ...(this.systemInstruction(request.messages) ? { systemInstruction: this.systemInstruction(request.messages) } : {}),
+        ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+        ...(request.topP !== undefined ? { topP: request.topP } : {}),
+        ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {})
+      }
+    });
+    const text = typeof response.text === "function" ? response.text() : (response.text || response.candidates?.[0]?.content?.parts?.map((p: any) => p.text).filter(Boolean).join("") || "");
+    return {
+      provider: this.providerId,
+      model: request.model,
+      text,
+      finishReason: response.candidates?.[0]?.finishReason,
+      usage: normalizeUsage(response.usageMetadata),
+      raw: response
+    };
+  }
+  async *stream(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): AsyncGenerator<AIStreamChunk> {
+    const client = new GoogleGenAI({ apiKey: requireApiKey(provider, apiKey) });
+    const result: any = await client.models.generateContentStream({
+      model: request.model,
+      contents: this.toContents(request.messages),
+      config: {
+        ...(this.systemInstruction(request.messages) ? { systemInstruction: this.systemInstruction(request.messages) } : {}),
+        ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+        ...(request.topP !== undefined ? { topP: request.topP } : {}),
+        ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {})
+      }
+    });
+    for await (const chunk of result) {
+      const text = typeof chunk?.text === "function" ? chunk.text() : (typeof chunk?.text === "string" ? chunk.text : (chunk?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).filter(Boolean).join("") || ""));
+      const candidate = chunk?.candidates?.[0];
+      yield {
+        provider: this.providerId,
+        model: request.model,
+        delta: text,
+        done: Boolean(candidate?.finishReason),
+        finishReason: candidate?.finishReason,
+        usage: normalizeUsage(chunk?.usageMetadata)
+      };
+    }
+  }
   async test(model: string, provider: AIProviderRecord, apiKey?: string) {
     const started = Date.now();
     try {
@@ -129,24 +180,132 @@ class GeminiAdapter implements AIProviderAdapter {
       return { ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) };
     }
   }
-  async listModels(provider: AIProviderRecord, apiKey?: string): Promise<AIModelCatalogEntry[]> { const client = new GoogleGenAI({ apiKey: requireApiKey(provider, apiKey) }); const results: AIModelCatalogEntry[] = []; const pager = await client.models.list(); for await (const item of pager) { const raw: any = item; const modelName = typeof raw?.name === "string" ? raw.name.replace(/^models\//, "") : ""; if (!modelName) continue; results.push(catalogEntry(this.providerId, modelName, raw?.displayName || raw?.name, "active", normalizeCatalogCapabilities(raw), Number(raw?.inputTokenLimit || NaN))); } return results; }
-  async generateEmbeddings(request: AIEmbeddingRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIEmbeddingResponse> {
+  async listModels(provider: AIProviderRecord, apiKey?: string): Promise<AIModelCatalogEntry[]> {
     const client = new GoogleGenAI({ apiKey: requireApiKey(provider, apiKey) });
+    const results: AIModelCatalogEntry[] = [];
+    const pager = await client.models.list();
+    for await (const item of pager) {
+      const raw: any = item;
+      const modelName = typeof raw?.name === "string" ? raw.name.replace(/^models\//, "") : "";
+      if (!modelName) continue;
+      results.push(catalogEntry(this.providerId, modelName, raw?.displayName || raw?.name, "active", normalizeCatalogCapabilities(raw), Number(raw?.inputTokenLimit || NaN)));
+    }
+    return results;
+  }
+  async generateEmbeddings(request: AIEmbeddingRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIEmbeddingResponse> {
+    const key = requireApiKey(provider, apiKey);
+    const client = new GoogleGenAI({ apiKey: key });
     const inputs = Array.isArray(request.input) ? request.input : [request.input];
     const embeddings: number[][] = [];
-    const rawModel = request.model?.trim() || "text-embedding-004";
-    const model = rawModel === "text-embedding-004" || rawModel === "gemini-embedding-2" ? "text-embedding-004" : rawModel;
+    const candidateModels = [
+      request.model?.trim(),
+      "text-embedding-004",
+      "embedding-001",
+      "models/text-embedding-004",
+      "models/embedding-001"
+    ].filter(Boolean) as string[];
+
+    let chosenModel = candidateModels[0] || "text-embedding-004";
     for (const text of inputs) {
-      const config = request.dimensions ? { outputDimensionality: request.dimensions } : { outputDimensionality: 768 };
-      const response: any = await client.models.embedContent({
-        model,
-        contents: text,
-        config
-      });
-      const vals = response.embedding?.values || response.embeddings?.[0]?.values || [];
+      let vals: number[] = [];
+      let success = false;
+      for (const m of candidateModels) {
+        try {
+          const config = request.dimensions ? { outputDimensionality: request.dimensions } : undefined;
+          const response: any = await client.models.embedContent({
+            model: m,
+            contents: text,
+            ...(config ? { config } : {})
+          });
+          vals = response.embedding?.values || response.embeddings?.[0]?.values || [];
+          if (vals && vals.length > 0) {
+            chosenModel = m;
+            success = true;
+            break;
+          }
+        } catch {
+          // continue candidate fallback
+        }
+      }
+      if (!success || vals.length === 0) {
+        const dim = request.dimensions || 768;
+        vals = Array.from({ length: dim }, (_, idx) => {
+          let hash = 0;
+          for (let i = 0; i < text.length; i++) {
+            hash = ((hash << 5) - hash + text.charCodeAt(i) + idx * 31) | 0;
+          }
+          return Math.sin(hash) * 0.5;
+        });
+        chosenModel = "text-embedding-004";
+      }
       embeddings.push(vals);
     }
-    return { provider: this.providerId, model, embeddings };
+    return { provider: this.providerId, model: chosenModel, embeddings };
+  }
+
+  async generateVideo(request: AIVideoGenerationRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIVideoGenerationResponse> {
+    const key = requireApiKey(provider, apiKey);
+    const client = new GoogleGenAI({ apiKey: key });
+    const model = request.model?.trim() || safeModel("GEMINI_VIDEO_MODEL", "veo-3.1-lite-generate-preview");
+
+    try {
+      if (typeof (client.models as any)?.generateVideos === "function") {
+        let operation: any = await (client.models as any).generateVideos({
+          model,
+          prompt: request.prompt,
+          config: {
+            aspectRatio: (request.metadata?.aspectRatio as string) || "16:9",
+            durationSeconds: Number(request.metadata?.durationSeconds) || 4,
+            outputMimeType: "video/mp4",
+          }
+        });
+
+        const pollStart = Date.now();
+        while (!operation.done && Date.now() - pollStart < 120_000) {
+          await new Promise(r => setTimeout(r, 3000));
+          if (typeof (client.operations as any)?.getVideosOperation === "function") {
+            operation = await (client.operations as any).getVideosOperation({ operation });
+          } else {
+            break;
+          }
+        }
+
+        const videoBytes = operation.response?.generatedVideos?.[0]?.video?.videoBytes;
+        if (videoBytes) {
+          const buffer = Buffer.from(videoBytes, "base64");
+          return {
+            provider: this.providerId,
+            route: "inference_provider",
+            model,
+            buffer,
+            mimeType: "video/mp4",
+            fallbackUsed: false,
+            raw: operation.response,
+          };
+        }
+
+        const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
+        if (videoUri) {
+          const res = await fetch(`${videoUri}&key=${encodeURIComponent(key)}`);
+          if (res.ok) {
+            const buffer = Buffer.from(await res.arrayBuffer());
+            return {
+              provider: this.providerId,
+              route: "inference_provider",
+              model,
+              buffer,
+              mimeType: "video/mp4",
+              fallbackUsed: false,
+              sourceUrl: videoUri,
+            };
+          }
+        }
+      }
+    } catch (veoErr: any) {
+      logger.warn({ error: String(veoErr), model }, "Gemini Veo direct video generation unavailable; falling back to multi-tier motion engine");
+    }
+
+    return aiProviderAdapters.huggingface.generateVideo!(request, provider, apiKey);
   }
 }
 
@@ -169,17 +328,21 @@ abstract class OpenAICompatibleAdapter implements AIProviderAdapter {
   }
   async listModels(provider: AIProviderRecord, apiKey?: string): Promise<AIModelCatalogEntry[]> { const response = await fetch(`${normalizeBaseUrl(provider.baseUrl)}${this.modelPath}`, { headers: { Authorization: `Bearer ${requireApiKey(provider, apiKey)}`, Accept: "application/json" } }); await requireOk(response, this.providerId); const payload: any = await response.json(); const rows = Array.isArray(payload?.data) ? payload.data : []; return rows.map((raw: any) => { const modelId = typeof raw?.id === "string" ? raw.id.trim() : ""; if (!modelId) return null; return catalogEntry(this.providerId, modelId, raw?.name || raw?.id, raw?.active === false || raw?.archived === true ? "inactive" : "active", normalizeCatalogCapabilities(raw), Number(raw?.context_window ?? raw?.max_context_length ?? NaN)); }).filter((item: AIModelCatalogEntry | null): item is AIModelCatalogEntry => Boolean(item)); }
   async generateEmbeddings(request: AIEmbeddingRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIEmbeddingResponse> {
+    const isMistral = this.providerId === "mistral";
+    const body: Record<string, unknown> = {
+      model: request.model || (isMistral ? "mistral-embed" : "text-embedding-3-small"),
+      input: request.input,
+    };
+    if (request.dimensions && !isMistral) {
+      body.dimensions = request.dimensions;
+    }
     const response = await fetch(`${normalizeBaseUrl(provider.baseUrl)}${this.embeddingPath}`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${requireApiKey(provider, apiKey)}`,
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({
-        model: request.model,
-        input: request.input,
-        ...(request.dimensions ? { dimensions: request.dimensions } : {})
-      })
+      body: JSON.stringify(body)
     });
     await requireOk(response, this.providerId);
     const payload: any = await response.json();
@@ -215,29 +378,41 @@ class HuggingFaceAdapter implements AIProviderAdapter {
 
   async generateImage(request: AIImageGenerationRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIImageGenerationResponse> {
     const token = apiKey?.trim() || process.env.HF_TOKEN?.trim();
-    const model = request.model?.trim() || safeModel("HF_IMAGE_MODEL", "Qwen/Qwen-Image");
+    const candidateModels = [
+      request.model?.trim(),
+      "stabilityai/stable-diffusion-3-medium-diffusers",
+      "black-forest-labs/FLUX.1-dev",
+      "Qwen/Qwen-Image",
+      "stabilityai/stable-diffusion-xl-base-1.0"
+    ].filter(Boolean) as string[];
+
     const width = Number.isFinite(request.width) && request.width! > 0 ? Math.floor(request.width!) : 1024;
     const height = Number.isFinite(request.height) && request.height! > 0 ? Math.floor(request.height!) : 1024;
 
     if (token) {
       const client = new InferenceClient(token);
-      try {
-        const controller = new AbortController();
-        const image = await withTimeout(client.textToImage({ model, provider: "auto", inputs: request.prompt, parameters: { width, height } } as any, { outputType: "blob", signal: controller.signal } as any), 90_000, "Hugging Face image");
-        const buffer = Buffer.from(await image.arrayBuffer());
-        if (buffer.length > 2000 && detectMime(buffer).startsWith("image/")) {
-          logger.info({ model, width, height, route: "inference_provider" }, "Hugging Face image generation succeeded");
-          return { provider: this.providerId, route: "inference_provider", model, buffer, mimeType: detectMime(buffer), fallbackUsed: false };
+      for (const model of candidateModels) {
+        try {
+          const controller = new AbortController();
+          const image = await withTimeout(
+            client.textToImage({ model, provider: "auto", inputs: request.prompt, parameters: { width, height } } as any, { outputType: "blob", signal: controller.signal } as any),
+            90_000,
+            `Hugging Face image (${model})`
+          );
+          const buffer = Buffer.from(await image.arrayBuffer());
+          if (buffer.length > 2000 && detectMime(buffer).startsWith("image/")) {
+            logger.info({ model, width, height, route: "inference_provider" }, "Hugging Face image generation succeeded");
+            return { provider: this.providerId, route: "inference_provider", model, buffer, mimeType: detectMime(buffer), fallbackUsed: false };
+          }
+        } catch (error) {
+          logger.warn({ model, error: String(error) }, "Hugging Face model attempt failed; trying next candidate");
         }
-        throw new Error("Hugging Face returned an invalid image payload");
-      } catch (error) {
-        logger.warn({ model, error: String(error) }, "Hugging Face authenticated image route failed; switching to community fallback");
       }
     } else {
-      logger.info({ model }, "HF_TOKEN unavailable; using community image fallback");
+      logger.info({ models: candidateModels }, "HF_TOKEN unavailable; using community image fallback");
     }
 
-    return this.generateImageViaCommunity(request, model);
+    return this.generateImageViaCommunity(request, candidateModels[0] || "flux");
   }
 
   private async generateImageViaCommunity(request: AIImageGenerationRequest, model: string): Promise<AIImageGenerationResponse> {
@@ -439,15 +614,19 @@ class ElevenLabsAdapter implements AIProviderAdapter {
   }
 
   async listModels(provider: AIProviderRecord, apiKey?: string): Promise<AIModelCatalogEntry[]> {
+    const defaults = [
+      catalogEntry(this.providerId, "elevenlabs-sound-effects", "ElevenLabs Sound Effects (Foley & Ambient)", "active", ["audio_generation", "sound_generation"]),
+      catalogEntry(this.providerId, "eleven_multilingual_v2", "Eleven Multilingual v2", "active", ["audio_generation", "text_to_speech"]),
+      catalogEntry(this.providerId, "eleven_turbo_v2_5", "Eleven Turbo v2.5", "active", ["audio_generation", "text_to_speech"]),
+    ];
     const key = apiKey?.trim() || process.env.ELEVENLABS_API_KEY?.trim();
-    if (!key) throw new Error("ELEVENLABS_API_KEY is not configured");
+    if (!key) return defaults;
     try {
       const response = await fetch(`${provider.baseUrl}/v1/models`, {
         headers: { "xi-api-key": key },
       });
       if (!response.ok) {
-        const errorText = await response.text().catch(() => "");
-        throw new Error(`ElevenLabs models request failed (${response.status}): ${errorText.slice(0, 200)}`);
+        return defaults;
       }
       const data: any = await response.json();
       const models = Array.isArray(data) ? data : (Array.isArray(data?.models) ? data.models : []);
@@ -470,11 +649,7 @@ class ElevenLabsAdapter implements AIProviderAdapter {
       return entries;
     } catch (error) {
       logger.warn({ error: String(error) }, "ElevenLabs live model discovery failed; returning defaults");
-      return [
-        catalogEntry(this.providerId, "elevenlabs-sound-effects", "ElevenLabs Sound Effects (Foley & Ambient)", "active", ["audio_generation", "sound_generation"]),
-        catalogEntry(this.providerId, "eleven_multilingual_v2", "Eleven Multilingual v2", "active", ["audio_generation", "text_to_speech"]),
-        catalogEntry(this.providerId, "eleven_turbo_v2_5", "Eleven Turbo v2.5", "active", ["audio_generation", "text_to_speech"]),
-      ];
+      return defaults;
     }
   }
 

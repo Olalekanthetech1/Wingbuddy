@@ -215,7 +215,10 @@ export class ApiKeyPoolService {
       } catch (error) { logger.error({ id: asText(row.id), error: error instanceof Error ? error.message : String(error) }, "Failed to decrypt managed Gemini API key"); }
     }
     this.keys = next; this.currentIndex = 0;
-    const joined = Array.from(this.keys.values()).map((item) => item.key).join(","); if (joined) process.env.GEMINI_API_KEY = joined;
+    const firstHealthy = Array.from(this.keys.values()).find((item) => item.status === "healthy")?.key || Array.from(this.keys.values())[0]?.key;
+    if (firstHealthy && (!process.env.GEMINI_API_KEY?.trim() || process.env.GEMINI_API_KEY.includes(","))) {
+      process.env.GEMINI_API_KEY = firstHealthy;
+    }
     logger.info({ totalKeys: this.keys.size }, "Managed Gemini API-key registry hydrated from PostgreSQL");
   }
 
