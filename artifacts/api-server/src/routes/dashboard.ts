@@ -17,6 +17,8 @@ import {
 import { count, desc, eq } from "drizzle-orm";
 import { ReminderService } from "../services/reminder.service";
 import { ConversationService } from "../services/conversation.service";
+import { onboardingService } from "../services/onboarding.service";
+import { timezoneService } from "../services/timezone.service";
 import { apiKeyPoolService } from "../services/api-key-pool.service";
 import { GeminiService } from "../gemini/gemini.service";
 import { getConfig } from "../config/env";
@@ -431,6 +433,8 @@ router.get("/dashboard/user-settings", async (req: Request, res: Response) => {
       .where(eq(usersTable.telegramUserId, targetUserId))
       .limit(1);
 
+    const tzInfo = await timezoneService.getUserTimezoneInfo(targetUserId);
+
     if (existing[0]) {
       res.json({
         telegramUserId: Number(existing[0].telegramUserId),
@@ -438,6 +442,10 @@ router.get("/dashboard/user-settings", async (req: Request, res: Response) => {
         mode: existing[0].mode || "general",
         username: existing[0].username,
         firstName: existing[0].firstName,
+        timezone: tzInfo.timezone,
+        utcOffsetMinutes: tzInfo.utcOffsetMinutes,
+        offsetFormatted: tzInfo.offsetFormatted,
+        localTime: tzInfo.localTime,
       });
     } else {
       const personality = await conversationService.getUserPersonality(targetUserId);
@@ -446,6 +454,10 @@ router.get("/dashboard/user-settings", async (req: Request, res: Response) => {
         telegramUserId: targetUserId,
         personality,
         mode,
+        timezone: tzInfo.timezone,
+        utcOffsetMinutes: tzInfo.utcOffsetMinutes,
+        offsetFormatted: tzInfo.offsetFormatted,
+        localTime: tzInfo.localTime,
       });
     }
   } catch (err) {
@@ -456,7 +468,7 @@ router.get("/dashboard/user-settings", async (req: Request, res: Response) => {
 
 router.post("/dashboard/user-settings", async (req: Request, res: Response) => {
   try {
-    const { userId, personality, mode } = req.body;
+    const { userId, personality, mode, timezone } = req.body;
     if (!userId) {
       res.status(400).json({ error: "Missing required 'userId'" });
       return;
@@ -469,11 +481,39 @@ router.post("/dashboard/user-settings", async (req: Request, res: Response) => {
     if (mode) {
       await conversationService.setUserMode(targetUserId, mode);
     }
+    if (timezone) {
+      await timezoneService.setUserTimezone(targetUserId, String(timezone).trim(), "dashboard_admin");
+      const existingProfile = await onboardingService.get(targetUserId);
+      const chatId = existingProfile?.chatId || targetUserId;
+      await onboardingService.save(targetUserId, chatId, { timezone: String(timezone).trim() });
+    }
+
+    const updatedTzInfo = await timezoneService.getUserTimezoneInfo(targetUserId);
 
     res.json({
       message: "User settings updated successfully",
       personality: await conversationService.getUserPersonality(targetUserId),
       mode: await conversationService.getUserMode(targetUserId),
+      timezone: updatedTzInfo.timezone,
+      utcOffsetMinutes: updatedTzInfo.utcOffsetMinutes,
+      offsetFormatted: updatedTzInfo.offsetFormatted,
+      localTime: updatedTzInfo.localTime,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
+  }
+});
+
+router.get("/dashboard/timezones", async (_req: Request, res: Response) => {
+  try {
+    const list = await timezoneService.listAll();
+    const systemNow = new Date();
+    res.json({
+      systemClockUtc: systemNow.toISOString(),
+      systemTimezone: "UTC",
+      totalRegistered: list.length,
+      timezones: list,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

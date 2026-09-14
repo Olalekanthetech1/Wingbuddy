@@ -8,6 +8,8 @@ export type SemanticTaskIntent =
   | "COMPLETE_TASK"
   | "CANCEL_TASK"
   | "VIEW_TASKS"
+  | "SNOOZE_TASK"
+  | "RUN_TASK_NOW"
   | "NO_TASK";
 
 export type PromptType =
@@ -55,6 +57,7 @@ export interface SemanticInteractionDecision {
   taskIdHint?: number;
   taskSteps?: string[];
   cronExpression?: string;
+  snoozeMinutes?: number;
   /** Semantic evidence that the user explicitly requires durable/persistent work. */
   durabilityEvidence?: string[];
   conversationOperation?: string;

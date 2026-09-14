@@ -179,7 +179,24 @@ export class UnifiedModelRegistryService {
         const defaults = this.getDefaultModels();
         const existingIds = new Set(stored.map((m) => `${m.provider}:${m.modelId}`));
         let modified = false;
-        const merged = [...stored];
+        const merged = stored.map(model => {
+          // Sync missing capabilities and roles for known defaults
+          const def = defaults.find(d => d.provider === model.provider && d.modelId === model.modelId);
+          if (def) {
+            const hasNewRoles = def.roles.some(r => !model.roles.includes(r));
+            const hasNewCaps = def.capabilities.some(c => !model.capabilities.includes(c));
+            if (hasNewRoles || hasNewCaps) {
+              modified = true;
+              return { 
+                ...model, 
+                roles: Array.from(new Set([...model.roles, ...def.roles])),
+                capabilities: Array.from(new Set([...model.capabilities, ...def.capabilities]))
+              };
+            }
+          }
+          return model;
+        });
+        
         for (const def of defaults) {
           if (!existingIds.has(`${def.provider}:${def.modelId}`)) {
             merged.push(def);
@@ -198,7 +215,18 @@ export class UnifiedModelRegistryService {
         const migrated = normalize(JSON.parse(legacy[0].value)).map((model) => ({ ...model, provider: "gemini" as const, id: makeId("gemini", model.modelId) }));
         const defaults = this.getDefaultModels();
         const existingIds = new Set(migrated.map((m) => `${m.provider}:${m.modelId}`));
-        const merged = [...migrated];
+        const merged = migrated.map(model => {
+          const def = defaults.find(d => d.provider === model.provider && d.modelId === model.modelId);
+          if (def) {
+            return { 
+              ...model, 
+              roles: Array.from(new Set([...model.roles, ...def.roles])),
+              capabilities: Array.from(new Set([...model.capabilities, ...def.capabilities]))
+            };
+          }
+          return model;
+        });
+        
         for (const def of defaults) {
           if (!existingIds.has(`${def.provider}:${def.modelId}`)) {
             merged.push(def);

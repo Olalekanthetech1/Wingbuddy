@@ -161,43 +161,122 @@ app.post("/api/payments/webhook", async (req: Request, res: Response) => {
   try {
     let userIdStr: string | undefined;
     let amount = 0;
+    let explicitTier: "vip" | "pro" | undefined;
+    let sessionMeta: Record<string, any> = {};
 
     // Stripe & Coinbase Commerce
     if (payload.type === "checkout.session.completed" || payload.event?.type === "charge:confirmed") {
       const session = payload.data?.object || payload.event?.data;
-      userIdStr = session?.client_reference_id || session?.metadata?.client_reference_id;
+      userIdStr = session?.client_reference_id || session?.metadata?.client_reference_id || session?.metadata?.telegramUserId || session?.metadata?.userId || session?.metadata?.user_id;
       amount = session?.amount_total || session?.pricing?.local?.amount || 0;
+      sessionMeta = session?.metadata || {};
     }
     // Paystack & Flutterwave
     else if (payload.event === "charge.success" || payload.event === "charge.completed") {
       const reference = payload.data?.reference || payload.data?.tx_ref;
-      if (reference && reference.startsWith("tg_")) {
-        userIdStr = reference.split("_")[1];
+      if (reference) {
+        if (reference.startsWith("tg_")) {
+          userIdStr = reference.split("_")[1];
+        } else if (/^\d+$/.test(reference)) {
+          userIdStr = reference;
+        }
+      }
+      if (!userIdStr && payload.data?.metadata) {
+        userIdStr = payload.data.metadata.telegramUserId || payload.data.metadata.userId || payload.data.metadata.client_reference_id;
       }
       amount = payload.data?.amount || 0;
+      sessionMeta = payload.data?.metadata || {};
     }
     // NOWPayments
     else if (payload.payment_status === "finished" || payload.payment_status === "waiting") {
-      // NOWPayments sends the order_id which we can pass as the reference
       const orderId = payload.order_id || payload.order_description;
-      if (orderId && orderId.startsWith("tg_")) {
-        userIdStr = orderId.split("_")[1];
+      if (orderId) {
+        if (orderId.startsWith("tg_")) {
+          userIdStr = orderId.split("_")[1];
+        } else if (/^\d+$/.test(orderId)) {
+          userIdStr = orderId;
+        }
       }
       amount = payload.price_amount || 0;
+      sessionMeta = { description: payload.order_description, orderId: payload.order_id };
+    }
+
+    // Direct payload fallbacks
+    if (!userIdStr) {
+      userIdStr = payload.telegramUserId || payload.userId || payload.user_id || payload.client_reference_id;
     }
 
     if (userIdStr) {
-      const userId = parseInt(userIdStr, 10);
-      // We look at amount or metadata to determine the tier.
-      // For simplicity, upgrade to VIP if amount is large, else PRO
-      const targetTier = amount > 15000 ? "vip" : "pro";
-      
-      await userTierService.updateUserAccess(userId, { tier: targetTier, status: "active" });
-      logger.info({ userId, targetTier }, "Upgraded user tier via external payment webhook");
+      // Strip any "tg_" prefix if still present
+      const cleanUserIdStr = String(userIdStr).replace(/^tg_/, "").split("_")[0];
+      const userId = parseInt(cleanUserIdStr, 10);
+
+      if (isNaN(userId) || userId <= 0) {
+        logger.warn({ userIdStr, cleanUserIdStr }, "Invalid Telegram userId extracted from payment webhook");
+        res.json({ received: true, error: "invalid_user_id" });
+        return;
+      }
+
+      // Check metadata for tier
+      const metaTier = String(sessionMeta.tier || sessionMeta.plan || sessionMeta.targetTier || sessionMeta.tierName || "").toLowerCase();
+      if (metaTier.includes("vip")) {
+        explicitTier = "vip";
+      } else if (metaTier.includes("pro")) {
+        explicitTier = "pro";
+      }
+
+      // Check order description or overall payload text for VIP keywords
+      if (!explicitTier) {
+        const rawPayloadStr = JSON.stringify(payload).toLowerCase();
+        if (
+          rawPayloadStr.includes('"vip"') ||
+          rawPayloadStr.includes("vip pass") ||
+          rawPayloadStr.includes("vip tier") ||
+          rawPayloadStr.includes("tier_upgrade_vip") ||
+          rawPayloadStr.includes("vip_tier")
+        ) {
+          explicitTier = "vip";
+        }
+      }
+
+      // Amount-based evaluation if not explicit
+      let targetTier: "vip" | "pro" = explicitTier || "pro";
+      if (!explicitTier) {
+        const numAmount = Number(amount) || 0;
+        // VIP prices: $24.99 (2499 cents or 24.99 USD) or NGN 15,000+
+        // PRO prices: $9.99 (999 cents or 9.99 USD)
+        if (numAmount >= 2000 && numAmount < 10000) {
+          targetTier = "vip"; // Stripe cents for $20-$99.99
+        } else if (numAmount >= 20 && numAmount < 500) {
+          targetTier = "vip"; // USD units for $20-$499
+        } else if (numAmount >= 15000) {
+          targetTier = "vip"; // High-value fiat denominations (NGN, etc.)
+        }
+      }
+
+      const updatedUser = await userTierService.updateUserAccess(userId, { tier: targetTier, status: "active" });
+      logger.info({ userId, targetTier, updatedUser }, "Successfully applied user tier upgrade and renewed quota via payment webhook");
       
       try {
+        const policy = await userTierService.getPolicy();
+        const tierCfg = policy.tiers[targetTier];
         const tierName = targetTier === "vip" ? "👑 VIP Pass" : "⚡ PRO Pass";
-        await telegramRuntime.bot?.api.sendMessage(userId, `🎉 <b>Payment Successful!</b>\n\nYour account has been upgraded to <b>${tierName}</b> with immediate effect.\n\nUse /persona to select unlocked specialist agents or /tier to view your renewed quotas!`, { parse_mode: "HTML" });
+        const videoLimit = tierCfg?.dailyVideoQuota ?? (targetTier === "vip" ? 10 : 3);
+        const imageLimit = tierCfg?.dailyImageQuota ?? (targetTier === "vip" ? 60 : 20);
+
+        const welcomeMessage = [
+          `🎉 <b>Payment Confirmed! Welcome to ${tierName}!</b>`,
+          "",
+          `Your daily quotas and capabilities have been immediately activated:`,
+          `• <b>Chat Messages:</b> ${tierCfg?.dailyQuota ?? 500}/day`,
+          `• <b>Authentic Video Generation:</b> ${videoLimit}/day`,
+          `• <b>High-Resolution Image Generation:</b> ${imageLimit}/day`,
+          `• <b>Deep Reasoning & Research:</b> Unlocked ✨`,
+          "",
+          `Try /video or /image now to test your new capabilities, or /tier to view your renewed quota balance!`,
+        ].join("\n");
+
+        await telegramRuntime.bot?.api.sendMessage(userId, welcomeMessage, { parse_mode: "HTML" });
       } catch (e) {
         logger.warn({ error: safeErrorMetadata(e) }, "Failed to send confirmation message to user after webhook");
       }

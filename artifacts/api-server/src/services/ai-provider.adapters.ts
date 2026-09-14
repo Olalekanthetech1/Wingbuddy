@@ -122,15 +122,21 @@ class GeminiAdapter implements AIProviderAdapter {
   private systemInstruction(messages: AIMessage[]): string | undefined { return messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n") || undefined; }
   async chat(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIChatResponse> {
     const client = new GoogleGenAI({ apiKey: requireApiKey(provider, apiKey) });
+    const thinkingConfig: any = {};
+    if (request.thinkingBudget !== undefined) {
+      thinkingConfig.thinkingBudget = request.thinkingBudget;
+    }
+    const config: any = {
+      ...(this.systemInstruction(request.messages) ? { systemInstruction: this.systemInstruction(request.messages) } : {}),
+      ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+      ...(request.topP !== undefined ? { topP: request.topP } : {}),
+      ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
+      ...(Object.keys(thinkingConfig).length > 0 ? { thinkingConfig } : {}),
+    };
     const response: any = await client.models.generateContent({
       model: request.model,
       contents: this.toContents(request.messages),
-      config: {
-        ...(this.systemInstruction(request.messages) ? { systemInstruction: this.systemInstruction(request.messages) } : {}),
-        ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
-        ...(request.topP !== undefined ? { topP: request.topP } : {}),
-        ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {})
-      }
+      config,
     });
     const text = typeof response.text === "function" ? response.text() : (response.text || response.candidates?.[0]?.content?.parts?.map((p: any) => p.text).filter(Boolean).join("") || "");
     return {
@@ -144,15 +150,21 @@ class GeminiAdapter implements AIProviderAdapter {
   }
   async *stream(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): AsyncGenerator<AIStreamChunk> {
     const client = new GoogleGenAI({ apiKey: requireApiKey(provider, apiKey) });
+    const thinkingConfig: any = {};
+    if (request.thinkingBudget !== undefined) {
+      thinkingConfig.thinkingBudget = request.thinkingBudget;
+    }
+    const config: any = {
+      ...(this.systemInstruction(request.messages) ? { systemInstruction: this.systemInstruction(request.messages) } : {}),
+      ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+      ...(request.topP !== undefined ? { topP: request.topP } : {}),
+      ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
+      ...(Object.keys(thinkingConfig).length > 0 ? { thinkingConfig } : {}),
+    };
     const result: any = await client.models.generateContentStream({
       model: request.model,
       contents: this.toContents(request.messages),
-      config: {
-        ...(this.systemInstruction(request.messages) ? { systemInstruction: this.systemInstruction(request.messages) } : {}),
-        ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
-        ...(request.topP !== undefined ? { topP: request.topP } : {}),
-        ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {})
-      }
+      config,
     });
     for await (const chunk of result) {
       const text = typeof chunk?.text === "function" ? chunk.text() : (typeof chunk?.text === "string" ? chunk.text : (chunk?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).filter(Boolean).join("") || ""));
@@ -302,10 +314,11 @@ class GeminiAdapter implements AIProviderAdapter {
         }
       }
     } catch (veoErr: any) {
-      logger.warn({ error: String(veoErr), model }, "Gemini Veo direct video generation unavailable; falling back to multi-tier motion engine");
+      logger.warn({ error: String(veoErr), model }, "Gemini Veo direct video generation failed");
+      throw veoErr;
     }
 
-    return aiProviderAdapters.huggingface.generateVideo!(request, provider, apiKey);
+    throw new Error(`Gemini Veo direct video generation for model ${model} did not return valid video payload`);
   }
 }
 
@@ -450,74 +463,12 @@ class HuggingFaceAdapter implements AIProviderAdapter {
         }
         throw new Error("Hugging Face returned an invalid video payload");
       } catch (error) {
-        logger.warn({ model, error: String(error) }, "Hugging Face video generation attempt failed; switching to community motion fallback");
+        logger.warn({ model, error: String(error) }, "Hugging Face video generation attempt failed");
+        throw error;
       }
-    } else {
-      logger.info({ model }, "HF_TOKEN unavailable; using community motion fallback");
     }
 
-    return this.generateVideoViaCommunity(request, model);
-  }
-
-  private async generateVideoViaCommunity(request: AIVideoGenerationRequest, model: string): Promise<AIVideoGenerationResponse> {
-    const fs = await import("node:fs/promises");
-    const os = await import("node:os");
-    const path = await import("node:path");
-    const crypto = await import("node:crypto");
-    const { execFile } = await import("node:child_process");
-
-    const imageRequest: AIImageGenerationRequest = {
-      prompt: request.prompt,
-      width: 1024,
-      height: 576,
-      metadata: request.metadata,
-    };
-    const imageResponse = await this.generateImageViaCommunity(imageRequest, model);
-    const uniqueId = crypto.randomUUID();
-    const tmpInputImage = path.join(os.tmpdir(), `wingbuddy_vframe_${uniqueId}.png`);
-    const tmpOutputVideo = path.join(os.tmpdir(), `wingbuddy_vout_${uniqueId}.mp4`);
-
-    try {
-      await fs.writeFile(tmpInputImage, imageResponse.buffer);
-
-      const ffmpegArgs = [
-        "-y",
-        "-loop", "1",
-        "-i", tmpInputImage,
-        "-vf", "zoompan=z=\x27min(zoom+0.0012,1.18)\x27:d=96:x=\x27iw/2-(iw/zoom/2)\x27:y=\x27ih/2-(ih/zoom/2)\x27:s=1024x576,fps=24",
-        "-c:v", "libx264",
-        "-t", "4",
-        "-pix_fmt", "yuv420p",
-        "-movflags", "+faststart",
-        tmpOutputVideo,
-      ];
-
-      await new Promise<void>((resolve, reject) => {
-        execFile("ffmpeg", ffmpegArgs, (error) => {
-          if (error) reject(error);
-          else resolve();
-        });
-      });
-
-      const videoBuffer = await fs.readFile(tmpOutputVideo);
-      const mimeType = detectMime(videoBuffer);
-      if (videoBuffer.length > 2000 && mimeType === "video/mp4") {
-        logger.info({ model, route: "community", size: videoBuffer.length }, "Synthesized cinematic motion video via community route");
-        return {
-          provider: this.providerId,
-          route: "community",
-          model: `${model}+cinematic-motion`,
-          buffer: videoBuffer,
-          mimeType,
-          sourceUrl: imageResponse.sourceUrl,
-          fallbackUsed: true,
-        };
-      }
-      throw new Error("Community video synthesis did not yield a valid MP4 stream");
-    } finally {
-      await fs.unlink(tmpInputImage).catch(() => {});
-      await fs.unlink(tmpOutputVideo).catch(() => {});
-    }
+    throw new Error("HF_TOKEN unavailable and authentic text-to-video diffusion is required (synthetic motion fallback disabled)");
   }
 
   async test(model: string, provider: AIProviderRecord, apiKey?: string) {

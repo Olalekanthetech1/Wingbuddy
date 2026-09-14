@@ -64,6 +64,8 @@ const TASK_INTENTS: SemanticTaskIntent[] = [
   "COMPLETE_TASK",
   "CANCEL_TASK",
   "VIEW_TASKS",
+  "SNOOZE_TASK",
+  "RUN_TASK_NOW",
   "NO_TASK",
 ];
 
@@ -123,7 +125,7 @@ function jsonOnlyPrompt(
     "- durable: persistent, trackable work, scheduled work, multi-stage external side effects, or workflows that must survive turns require a durable task/graph.",
     "- clarification: material information is missing or ambiguity makes safe execution unreliable.",
     "- unknown: classification confidence is too low to safely choose another profile.",
-    "Task intent semantics: NEW_TASK is for a standard one-off background task. SCHEDULE_TASK is used specifically when the user wants to schedule something recurrently or in the future (like 'remind me every day at 8am', 'send me a digest every Friday'). In this case, you MUST provide a standard unix 'cronExpression' (e.g. '0 8 * * *' for 8 AM daily). Other task-management intents are reserved for persistent, trackable work.",
+    "Task intent semantics: NEW_TASK is for a standard one-off background task. SCHEDULE_TASK is used specifically when the user wants to schedule a reminder, routine, or recurring briefing (e.g., 'remind me in 15 mins to check deploy', 'remind me tomorrow at 8am', 'send me a digest every Friday'). In this case, provide a unix 'cronExpression' if recurring. SNOOZE_TASK is used when the user wants to snooze or delay an active/recent reminder (e.g. 'snooze 15m', 'delay for an hour', 'snooze'). If a duration is requested, provide 'snoozeMinutes' (e.g. 15, 60). COMPLETE_TASK is when the user indicates a task or reminder is finished (e.g. 'done', 'mark done', 'completed'). VIEW_TASKS is when the user asks to see their tasks, reminders, or scheduled routines. RUN_TASK_NOW is when the user asks to run an existing task immediately. PAUSE_TASK is to pause/disable. CANCEL_TASK is to cancel/delete. CONTINUE_TASK is to resume. NO_TASK is for regular conversation or questions without task lifecycle changes.",
     "Durability evidence semantics: durabilityEvidence MUST be empty unless the user explicitly requests persistence, scheduling, recurrence, background execution, continuation of an existing tracked task, multi-turn workflow state, or explicit task tracking. Prompt complexity, ZERO_SHOT, CONSTRAINT_DRIVEN, MULTI_STEP, file generation, media generation, dimensions, style, quality, or output count are NOT durability evidence by themselves.",
     "For image_generation and video_generation specifically, an immediate generation request is one_shot by default. Use durable only when concrete durability evidence is present in the user's request or an actual continuation/scheduling context exists.",
     "When an active task exists, CONTINUE_TASK is valid only when the current request is actually about that tracked task. Do not inherit unrelated active work.",
@@ -131,7 +133,7 @@ function jsonOnlyPrompt(
     `Persistent mode: ${persistentMode}`,
     `Recent conversation:\n${recent || "(none)"}`,
     `Current request:\n${request}`,
-    "JSON schema: { intent, promptTypes, primaryPromptType, executionProfile, effectiveMode, requiredCapabilities, enableSearch, thinkingLevel, isModeSwitch, requestedMode, cleanedPrompt, isGreeting, complexity, confidence, taskIntent, taskTitle, taskGoal, taskIdHint, taskSteps, cronExpression, durabilityEvidence, conversationOperation, conversationTargetHistoryIndices, unresolvedReference }",
+    "JSON schema: { intent, promptTypes, primaryPromptType, executionProfile, effectiveMode, requiredCapabilities, enableSearch, thinkingLevel, isModeSwitch, requestedMode, cleanedPrompt, isGreeting, complexity, confidence, taskIntent, taskTitle, taskGoal, taskIdHint, taskSteps, cronExpression, snoozeMinutes, durabilityEvidence, conversationOperation, conversationTargetHistoryIndices, unresolvedReference }",
     "Do not authorize tools, external actions, approvals, destructive actions, or persistent storage from this classifier. It only resolves the semantic request profile; execution policy is enforced downstream.",
     `Available mode profiles:\n${modeProfiles}`,
   ].join("\n\n");
@@ -184,8 +186,12 @@ function sanitizeDecision(raw: unknown, fallbackMode: ModeKey): SemanticInteract
     : "NO_TASK";
   const taskTitle = typeof data.taskTitle === "string" && data.taskTitle.trim() ? data.taskTitle.trim().slice(0, 500) : undefined;
   const taskGoal = typeof data.taskGoal === "string" && data.taskGoal.trim() ? data.taskGoal.trim().slice(0, 2000) : undefined;
-  const taskIntent = artifactFollowUp ? "NO_TASK" : (candidateTaskIntent !== "NO_TASK" && taskTitle ? candidateTaskIntent : "NO_TASK");
+  const needsTitle = candidateTaskIntent === "NEW_TASK";
+  const taskIntent = artifactFollowUp ? "NO_TASK" : (candidateTaskIntent !== "NO_TASK" && (!needsTitle || taskTitle) ? candidateTaskIntent : "NO_TASK");
   const taskIdHint = Number.isInteger(Number(data.taskIdHint)) ? Number(data.taskIdHint) : undefined;
+  const snoozeMinutes = Number.isInteger(Number(data.snoozeMinutes)) && Number(data.snoozeMinutes) > 0
+    ? Number(data.snoozeMinutes)
+    : undefined;
   const taskSteps = Array.isArray(data.taskSteps)
     ? data.taskSteps.filter((step): step is string => typeof step === "string" && step.trim().length > 0).map((step) => step.trim()).slice(0, 20)
     : undefined;
@@ -233,6 +239,7 @@ function sanitizeDecision(raw: unknown, fallbackMode: ModeKey): SemanticInteract
     taskIdHint: taskIntent === "NO_TASK" ? undefined : taskIdHint,
     taskSteps: taskIntent === "NO_TASK" ? undefined : taskSteps,
     cronExpression: typeof data.cronExpression === "string" ? data.cronExpression.trim() : undefined,
+    snoozeMinutes,
     durabilityEvidence: artifactFollowUp ? [] : durabilityEvidence,
     conversationOperation: rawConversationOperation,
     conversationTargetHistoryIndices,

@@ -1,4 +1,5 @@
 import { getPool } from "@workspace/db";
+import { timezoneService } from "./timezone.service";
 
 export type OnboardingStep = "welcome" | "migration" | "personality" | "mode" | "proactivity" | "memory" | "about_you" | "timezone" | "ready";
 export type ProactivityPreference = "never" | "occasional" | "proactive";
@@ -153,6 +154,13 @@ export class OnboardingService {
 
     const saved = await this.get(telegramUserId);
     if (!saved) throw new Error("Onboarding state could not be persisted.");
+
+    try {
+      await timezoneService.setUserTimezone(telegramUserId, timezone, "onboarding");
+    } catch {
+      // Non-blocking sync failure safeguard
+    }
+
     return saved;
   }
 

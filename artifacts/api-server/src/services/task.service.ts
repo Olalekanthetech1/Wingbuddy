@@ -13,12 +13,13 @@ export type TaskStatus = "pending" | "active" | "paused" | "waiting" | "complete
 export type StepStatus = "pending" | "running" | "completed" | "failed" | "skipped";
 
 export interface TaskIntentResult {
-  intent: "NEW_TASK" | "SCHEDULE_TASK" | "CONTINUE_TASK" | "PAUSE_TASK" | "COMPLETE_TASK" | "CANCEL_TASK" | "VIEW_TASKS" | "NO_TASK";
+  intent: "NEW_TASK" | "SCHEDULE_TASK" | "CONTINUE_TASK" | "PAUSE_TASK" | "COMPLETE_TASK" | "CANCEL_TASK" | "VIEW_TASKS" | "SNOOZE_TASK" | "RUN_TASK_NOW" | "NO_TASK";
   taskTitle?: string;
   taskGoal?: string;
   taskIdHint?: number;
   steps?: string[];
   cronExpression?: string;
+  snoozeMinutes?: number;
 }
 
 export class TaskService {
@@ -226,6 +227,7 @@ export class TaskService {
       taskIdHint: decision.taskIdHint,
       steps: decision.taskSteps,
       cronExpression: decision.cronExpression,
+      snoozeMinutes: decision.snoozeMinutes,
     };
   }
 }

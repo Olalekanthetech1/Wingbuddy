@@ -325,6 +325,19 @@ export async function ensureDatabaseSchema(pgPool?: pg.Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS execution_approvals_user_idx ON execution_approvals(telegram_user_id);
     CREATE INDEX IF NOT EXISTS execution_approvals_graph_node_idx ON execution_approvals(graph_id, plan_revision, node_id);
     CREATE INDEX IF NOT EXISTS execution_approvals_status_idx ON execution_approvals(status);
+
+    CREATE TABLE IF NOT EXISTS user_timezones (
+      id SERIAL PRIMARY KEY,
+      telegram_user_id BIGINT NOT NULL,
+      timezone TEXT NOT NULL DEFAULT 'UTC',
+      utc_offset_minutes INTEGER NOT NULL DEFAULT 0,
+      source TEXT NOT NULL DEFAULT 'user_preference',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS user_timezones_telegram_user_id_idx ON user_timezones(telegram_user_id);
+    CREATE INDEX IF NOT EXISTS user_timezones_tz_idx ON user_timezones(timezone);
+
     -- CDC PostgreSQL Trigger for reminders
     CREATE OR REPLACE FUNCTION notify_reminders_cdc() RETURNS trigger AS $$
     BEGIN

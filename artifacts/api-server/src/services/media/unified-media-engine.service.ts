@@ -1,4 +1,4 @@
-import { userTierService } from "../user-tier.service";
+import { userTierService, DEFAULT_TIER_CONFIGS } from "../user-tier.service";
 import { cloudinaryMediaStorageService } from "../cloudinary-media-storage.service";
 import { universalArtifactService } from "../universal-artifact.service";
 import { mediaArtifactContextService } from "../media-artifact-context.service";
@@ -23,13 +23,13 @@ export class UnifiedMediaEngine {
     const startTime = Date.now();
     const modality: MediaModality = request.modality;
     const userIdNum = typeof request.userId === "number" ? request.userId : Number(request.userId) || 999999;
-    const userTier = request.userTier || "free";
+    const userTier = request.userTier || (request.userId ? await userTierService.getUserTier(userIdNum) : "free");
 
     // 1. Quota check simulation
     let quotaCheck = { allowed: true, remaining: 5, message: undefined as string | undefined };
     try {
       if (request.userId) {
-        quotaCheck = await userTierService.checkToolQuota(userIdNum, modality === "video" ? "video" : "image", userTier as any);
+        quotaCheck = await userTierService.checkToolQuota(userIdNum, modality === "video" ? "video" : "image", request.userTier);
       }
     } catch {
       quotaCheck = { allowed: true, remaining: 5, message: undefined };
@@ -74,11 +74,15 @@ export class UnifiedMediaEngine {
       isPlannedPrediction: true,
     });
 
+    const policy = await userTierService.getPolicy();
+    const tierCfg = policy.tiers[userTier] || DEFAULT_TIER_CONFIGS[userTier];
+    const dailyLimit = modality === "video" ? (tierCfg?.dailyVideoQuota ?? 10) : (tierCfg?.dailyImageQuota ?? 60);
+
     job.latencyMs = latencyMs;
     job.quotaDecision = {
       allowed: quotaCheck.allowed,
       remaining: quotaCheck.remaining,
-      dailyLimit: userTier === "vip" ? 999 : userTier === "pro" ? 50 : 5,
+      dailyLimit,
       tier: userTier.toUpperCase(),
     };
 
@@ -114,13 +118,13 @@ export class UnifiedMediaEngine {
     const startTime = Date.now();
     const modality: MediaModality = request.modality;
     const userIdNum = typeof request.userId === "number" ? request.userId : Number(request.userId) || 999999;
-    const userTier = request.userTier || "free";
+    const userTier = request.userTier || (request.userId ? await userTierService.getUserTier(userIdNum) : "free");
 
     // 1. Quota Enforcement
     let quotaCheck = { allowed: true, remaining: 5, message: undefined as string | undefined };
     if (request.userId) {
       try {
-        quotaCheck = await userTierService.checkToolQuota(userIdNum, modality === "video" ? "video" : "image", userTier as any);
+        quotaCheck = await userTierService.checkToolQuota(userIdNum, modality === "video" ? "video" : "image", request.userTier);
       } catch {
         quotaCheck = { allowed: true, remaining: 5, message: undefined };
       }
@@ -299,10 +303,14 @@ export class UnifiedMediaEngine {
 
       (updatedJob as any).buffer = artifactBuffer;
 
+      const policy = await userTierService.getPolicy();
+      const tierCfg = policy.tiers[userTier] || DEFAULT_TIER_CONFIGS[userTier];
+      const dailyLimit = modality === "video" ? (tierCfg?.dailyVideoQuota ?? 10) : (tierCfg?.dailyImageQuota ?? 60);
+
       updatedJob.quotaDecision = {
         allowed: true,
         remaining: Math.max(0, quotaCheck.remaining - 1),
-        dailyLimit: userTier === "vip" ? 999 : userTier === "pro" ? 50 : 5,
+        dailyLimit,
         tier: userTier.toUpperCase(),
       };
 

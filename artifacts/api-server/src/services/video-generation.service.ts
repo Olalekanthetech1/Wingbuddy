@@ -100,107 +100,156 @@ export class VideoGenerationService {
     const enhancerName = enhancement.enhancerName;
     const preferredModel = process.env.HF_VIDEO_MODEL?.trim() || undefined;
     const allModels = await unifiedModelRegistryService.list();
-    const primaryVideo = allModels.find(m => m.enabled && m.roles.includes("primary_video"));
+    const primaryVideo = allModels.find(m => m.enabled && m.roles.includes("primary_video")) 
+      || allModels.find(m => m.enabled && m.capabilities.includes("video_generation") && m.provider !== "huggingface")
+      || allModels.find(m => m.enabled && m.modelId.toLowerCase().includes("veo"));
     
-    let targetProvider = "huggingface";
-    let targetModel = "";
-    let orderedModels: string[] = [];
-    let discovery = false;
-    let preferredAvail = false;
-
+    // Assemble candidate pool with primary engine first, then Hugging Face candidates
+    const candidates: Array<{ provider: string; model: string; discovery: boolean; preferredAvailable: boolean }> = [];
     if (primaryVideo) {
-      targetProvider = primaryVideo.provider;
-      targetModel = primaryVideo.modelId;
-      orderedModels = [targetModel];
-      preferredAvail = true;
-    } else {
-      const capability = await huggingFaceCapabilityService.resolveModel("text-to-video", preferredModel);
-      discovery = capability.discovered;
-      preferredAvail = capability.preferredAvailable;
-      
-      const discoveredModels = capability.candidates.map((candidate) => candidate.id).filter(Boolean);
-      orderedModels = [
-        capability.model,
-        ...discoveredModels,
-      ].filter((model, index, all) => Boolean(model) && all.indexOf(model) === index).slice(0, 6);
+      candidates.push({
+        provider: primaryVideo.provider,
+        model: primaryVideo.modelId,
+        discovery: false,
+        preferredAvailable: true,
+      });
     }
 
-    if (!orderedModels.length) throw new Error("No live Hugging Face text-to-video model is available");
-    let lastError: unknown;
-    for (const model of orderedModels) {
-      try {
-        logger.info({ originalPrompt, enhancedPrompt, model, discovered: discovery, preferredAvailable: preferredAvail }, "Generating video through adaptive model selection");
-        const execution = await aiProviderGatewayService.generateVideo(targetProvider as any, {
-          model,
-          prompt: enhancedPrompt,
-          metadata: { originalPrompt, capabilityDiscovery: discovery, preferredModelAvailable: preferredAvail },
+    try {
+      const capability = await huggingFaceCapabilityService.resolveModel("text-to-video", preferredModel);
+      if (capability.model && !candidates.some(c => c.provider === "huggingface" && c.model === capability.model)) {
+        candidates.push({
+          provider: "huggingface",
+          model: capability.model,
+          discovery: capability.discovered,
+          preferredAvailable: capability.preferredAvailable,
         });
-        const result = execution.result;
-        const media = detectMediaType(result.buffer);
-        if (!media.isVideo) throw new Error(`Hugging Face model ${model} returned a non-video payload (${media.mimeType})`);
-
-        let finalBuffer = result.buffer;
-        try {
-          finalBuffer = await ElevenLabsSoundService.attachAudioToVideo(result.buffer, originalPrompt);
-        } catch (soundErr) {
-          logger.warn({ error: String(soundErr) }, "ElevenLabs audio multiplexing failed; using video stream without sound");
+      }
+      for (const candidate of capability.candidates) {
+        if (candidate.id && !candidates.some(c => c.provider === "huggingface" && c.model === candidate.id)) {
+          candidates.push({
+            provider: "huggingface",
+            model: candidate.id,
+            discovery: capability.discovered,
+            preferredAvailable: false,
+          });
         }
+      }
+    } catch (capErr) {
+      logger.warn({ error: String(capErr) }, "Failed resolving Hugging Face video fallback candidates");
+    }
 
-        const provider = result.route === "community" || result.provider === "community" ? "community" : "huggingface";
-        let deliveryUrl = result.sourceUrl || `video://${encodeURIComponent(result.model)}`;
-        let storageProvider: GeneratedVideoResult["storageProvider"] = "source";
-        let cloudinaryPublicId: string | undefined;
+    if (!candidates.length) throw new Error("No live video generation diffusion engines are available");
 
-        if (cloudinaryMediaStorageService.isConfigured()) {
+    let lastError: unknown;
+    const maxCandidateTries = Math.min(candidates.length, 4);
+
+    for (let i = 0; i < maxCandidateTries; i++) {
+      const candidate = candidates[i];
+      const maxRetries = 2;
+
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          logger.info({
+            originalPrompt,
+            enhancedPrompt,
+            provider: candidate.provider,
+            model: candidate.model,
+            attempt,
+            maxRetries,
+            discovered: candidate.discovery,
+            preferredAvailable: candidate.preferredAvailable,
+          }, "Generating video through adaptive model selection with retry & backoff");
+
+          const execution = await aiProviderGatewayService.generateVideo(candidate.provider as any, {
+            model: candidate.model,
+            prompt: enhancedPrompt,
+            metadata: { originalPrompt, capabilityDiscovery: candidate.discovery, preferredModelAvailable: candidate.preferredAvailable },
+          });
+
+          const result = execution.result;
+          if (result.fallbackUsed || result.route === "community") {
+            throw new Error("Synthetic motion fallback rejected; only authentic video diffusion is permitted");
+          }
+          const media = detectMediaType(result.buffer);
+          if (!media.isVideo) throw new Error(`Model ${candidate.model} returned a non-video payload (${media.mimeType})`);
+
+          let finalBuffer = result.buffer;
           try {
-            const uploaded = await cloudinaryMediaStorageService.uploadGeneratedMedia(finalBuffer, {
-              resourceType: "video",
-              mimeType: media.mimeType,
-            });
-            if (isPublicHttpsUrl(uploaded.secureUrl)) {
-              deliveryUrl = uploaded.secureUrl;
-              storageProvider = "cloudinary";
-              cloudinaryPublicId = uploaded.publicId;
+            finalBuffer = await ElevenLabsSoundService.attachAudioToVideo(result.buffer, originalPrompt);
+          } catch (soundErr) {
+            logger.warn({ error: String(soundErr) }, "ElevenLabs audio multiplexing failed; using video stream without sound");
+          }
+
+          const provider = result.provider || candidate.provider;
+          let deliveryUrl = result.sourceUrl || `video://${encodeURIComponent(result.model)}`;
+          let storageProvider: GeneratedVideoResult["storageProvider"] = "source";
+          let cloudinaryPublicId: string | undefined;
+
+          if (cloudinaryMediaStorageService.isConfigured()) {
+            try {
+              const uploaded = await cloudinaryMediaStorageService.uploadGeneratedMedia(finalBuffer, {
+                resourceType: "video",
+                mimeType: media.mimeType,
+              });
+              if (isPublicHttpsUrl(uploaded.secureUrl)) {
+                deliveryUrl = uploaded.secureUrl;
+                storageProvider = "cloudinary";
+                cloudinaryPublicId = uploaded.publicId;
+              }
+            } catch (cloudErr) {
+              logger.warn({ error: String(cloudErr), model: result.model }, "Cloudinary video storage failed; retaining generation source delivery");
             }
-          } catch (cloudErr) {
-            logger.warn({ error: String(cloudErr), model: result.model }, "Cloudinary video storage failed; retaining generation source delivery");
+          }
+
+          mediaArtifactContextService.remember({
+            type: "video",
+            prompt: originalPrompt,
+            publicUrl: deliveryUrl,
+            provider,
+            storageProvider,
+            publicId: cloudinaryPublicId,
+            model: result.model,
+          });
+
+          logger.info({ model: candidate.model, provider, storageProvider, cloudinaryPublicId, publicUrl: deliveryUrl, attempt }, "Adaptive video generation and persistence succeeded");
+
+          return {
+            buffer: finalBuffer,
+            url: deliveryUrl,
+            originalPrompt,
+            enhancedPrompt,
+            enhancerName,
+            provider,
+            route: result.route,
+            model: result.model,
+            fallbackUsed: result.fallbackUsed,
+            isVideo: true,
+            mimeType: media.mimeType,
+            storageProvider,
+            cloudinaryPublicId,
+          };
+        } catch (error) {
+          lastError = error;
+          const isTransient = String(error).includes("429") || String(error).includes("503") || String(error).includes("timeout") || String(error).includes("rate");
+          logger.warn({
+            provider: candidate.provider,
+            model: candidate.model,
+            attempt,
+            isTransient,
+            error: String(error),
+          }, "Video diffusion candidate attempt failed");
+
+          if (attempt < maxRetries && isTransient) {
+            const backoffMs = attempt * 1500;
+            logger.info({ backoffMs, model: candidate.model }, "Applying exponential backoff before video retry");
+            await new Promise((resolve) => setTimeout(resolve, backoffMs));
           }
         }
-
-        mediaArtifactContextService.remember({
-          type: "video",
-          prompt: originalPrompt,
-          publicUrl: deliveryUrl,
-          provider,
-          storageProvider,
-          publicId: cloudinaryPublicId,
-          model: result.model,
-        });
-
-        logger.info({ model, provider, storageProvider, cloudinaryPublicId, publicUrl: deliveryUrl, fallbackUsed: result.fallbackUsed }, "Adaptive video generation and persistence succeeded");
-
-        return {
-          buffer: finalBuffer,
-          url: deliveryUrl,
-          originalPrompt,
-          enhancedPrompt,
-          enhancerName,
-          provider,
-          route: result.route,
-          model: result.model,
-          fallbackUsed: result.fallbackUsed,
-          isVideo: true,
-          mimeType: media.mimeType,
-          storageProvider,
-          cloudinaryPublicId,
-        };
-      } catch (error) {
-        lastError = error;
-        logger.warn({ model, error: String(error) }, "Adaptive Hugging Face video model attempt failed; trying next discovered candidate");
       }
     }
 
-    throw new Error(`Hugging Face video generation failed after ${orderedModels.length} adaptive model attempts. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+    throw new Error(`Generative video diffusion engines are currently experiencing high demand or transient provider rate limits after ${maxCandidateTries} attempts. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
   }
 
   static extractVideoPrompt(rawText: string): string {

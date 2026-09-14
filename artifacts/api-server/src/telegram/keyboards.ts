@@ -100,10 +100,10 @@ export function tasksKeyboard(
 
   for (const t of displayTasks) {
     const statusIcon = t.status === "active" ? "▶️" : t.status === "paused" ? "⏸️" : "⏳";
-    const shortTitle = t.title.length > 18 ? t.title.slice(0, 15) + "..." : t.title;
+    const shortTitle = t.title.length > 26 ? t.title.slice(0, 24) + "…" : t.title;
     keyboard
       .text(`${statusIcon} #${t.id}: ${shortTitle}`, `task:view:${t.id}`)
-      .text("❌", `task:cancel:${t.id}`)
+      .text("❌ Cancel", `task:cancel:${t.id}`)
       .row();
   }
 
@@ -111,7 +111,7 @@ export function tasksKeyboard(
     keyboard.text("➕ Start New Task", "menu:chat").row();
   }
 
-  return keyboard.text("◀️ Back", "menu:main");
+  return keyboard.text("◀️ Main Menu", "menu:main");
 }
 
 export function taskDisambiguationKeyboard(

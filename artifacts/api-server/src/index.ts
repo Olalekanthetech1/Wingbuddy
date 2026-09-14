@@ -15,6 +15,7 @@ import { aiObservabilityService } from "./services/ai-observability.service";
 import { proactiveAssistantService } from "./services/proactive-assistant.service";
 import { onboardingService } from "./services/onboarding.service";
 import { knowledgeVaultService } from "./services/knowledge-vault.service";
+import { timezoneService } from "./services/timezone.service";
 
 const port = 3000;
 let startupStateReady = false;
@@ -25,6 +26,8 @@ const server = app.listen(port, "0.0.0.0", async () => {
     const pool = getPool();
     await ensureDatabaseSchema(pool);
     logger.info("Database schema verification and initialization completed");
+    await timezoneService.initialize();
+    logger.info("User timezone registry initialized and synchronized");
     await hydrateEnvFromDatabase();
     await geminiKeyRecoveryService.recover();
     await apiKeyPoolService.initializeDb();

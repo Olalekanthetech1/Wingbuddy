@@ -173,7 +173,15 @@ export function renderDashboardUserAccess(): string {
         '<td>' + statusBadge + '</td>' +
         '<td>' +
           '<div style="font-size:12px"><strong>' + (u.totalRequests || 0) + '</strong> reqs</div>' +
-          '<div style="font-size:11px;color:var(--muted)">' + (new Date(u.lastActiveAt).toLocaleDateString()) + '</div>' +
+          '<div style="font-size:11px;color:var(--muted)" title="Last active timestamp">' +
+            (() => {
+              try {
+                const d = new Date(u.lastActiveAt);
+                if (isNaN(d.getTime())) return '—';
+                return d.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+              } catch (_) { return '—'; }
+            })() +
+          '</div>' +
         '</td>' +
         '<td>' +
           '<div style="display:flex;gap:4px;flex-wrap:wrap">' +

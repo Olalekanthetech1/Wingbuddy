@@ -1,3 +1,5 @@
+import { timezoneService } from "./timezone.service";
+
 export type TimeOfDay = "morning" | "afternoon" | "evening" | "night";
 
 export interface TemporalContext {
@@ -66,6 +68,11 @@ export class TemporalContextService {
       dayOfWeek: parts.weekday ?? "",
       timeOfDay: resolveTimeOfDay(hour),
     };
+  }
+
+  static async resolveForUser(telegramUserId: number | bigint, now = new Date()): Promise<TemporalContext> {
+    const userTz = await timezoneService.getUserTimezone(telegramUserId);
+    return this.resolve(now, userTz);
   }
 
   static buildPromptInstruction(context: TemporalContext): string {

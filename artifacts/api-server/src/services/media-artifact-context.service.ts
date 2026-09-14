@@ -87,4 +87,17 @@ class MediaArtifactContextService {
   }
 }
 
+export function stripMediaArtifactMetadata(text: string): string {
+  if (!text) return "";
+  let cleaned = text.replace(/\[MEDIA_ARTIFACT\][\s\S]*?(?=(\n\n|$))/gi, "").trim();
+  cleaned = cleaned.replace(/\[MEDIA_ARTIFACT\][\s\S]*/gi, "").trim();
+  
+  const generatedMatch = cleaned.match(/^\[Generated (?:Image|Video|Visual)[^\]]*for:\s*["']([\s\S]*?)["']\](?:\s*Enhanced:\s*["']([\s\S]*?)["'])?/i);
+  if (generatedMatch) {
+    const original = generatedMatch[1];
+    cleaned = `[A visual asset was generated and delivered for "${original}"]`;
+  }
+  return cleaned;
+}
+
 export const mediaArtifactContextService = new MediaArtifactContextService();

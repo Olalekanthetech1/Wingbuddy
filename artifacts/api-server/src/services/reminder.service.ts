@@ -3,37 +3,171 @@ import { db, remindersTable, usersTable, type Reminder, cdcService, type Reminde
 import { logger } from "../lib/logger";
 import { safeErrorMetadata } from "../utils/safe-error";
 import { formatTelegramMessage } from "../utils/telegram-formatter";
-import type { Bot } from "grammy";
+import { InlineKeyboard, type Bot } from "grammy";
+import cronParser from "cron-parser";
+const { parseExpression } = cronParser;
+import { timezoneService } from "./timezone.service";
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+export type ReminderCategory = "Work Routine" | "Research Digest" | "Personal Reminder" | "Simple Alert";
+
+export interface ReminderClassification {
+  category: ReminderCategory;
+  icon: string;
+  greeting: string;
+}
 
 export interface ParsedReminder {
   isReminder: boolean;
   prompt: string;
   dueAt: Date;
   humanReadableTime: string;
+  isRecurring?: boolean;
+  cronExpression?: string;
+  cadenceDescription?: string;
+  category?: ReminderCategory;
+  icon?: string;
+  contextualGreeting?: string;
 }
 
 export class ReminderService {
   /**
+   * Formats a Date object into standard "YYYY-MM-DD HH:mm:ss UTC"
+   */
+  static formatUtcTimestamp(date: Date): string {
+    const y = date.getUTCFullYear();
+    const m = String(date.getUTCMonth() + 1).padStart(2, "0");
+    const d = String(date.getUTCDate()).padStart(2, "0");
+    const hh = String(date.getUTCHours()).padStart(2, "0");
+    const mm = String(date.getUTCMinutes()).padStart(2, "0");
+    const ss = String(date.getUTCSeconds()).padStart(2, "0");
+    return `${y}-${m}-${d} ${hh}:${mm}:${ss} UTC`;
+  }
+
+  /**
+   * Intelligently classifies a task into Work Routine, Research Digest, Personal, or Simple Alert,
+   * and provides a tailored contextual greeting based on type and time of day.
+   */
+  static classifyReminderType(text: string, hourUtc?: number): ReminderClassification {
+    const lower = text.toLowerCase();
+
+    const isResearch =
+      /job|search|vacanc|career|linkedin|internship|hiring|digest|briefing|research|market|competitor|leads|news|trends/i.test(
+        lower,
+      );
+
+    const isWork =
+      /admin|dashboard|meeting|call|deploy|review|work|client|email|standup|task|project|code|invoice|report|sync|jira|github|pr\b|pull request|metrics|analytics|presentation|budget|contract|sprint/i.test(
+        lower,
+      );
+
+    const isPersonal =
+      /medicine|pill|water|lunch|dinner|breakfast|workout|gym|exercise|sleep|bed|mom|dad|family|wife|husband|kid|buy|groceries|dog|walk|break|rest|breathe|meditat|health|doctor|dentist/i.test(
+        lower,
+      );
+
+    let category: ReminderCategory = "Simple Alert";
+    let icon = "🔔";
+
+    if (isResearch) {
+      category = "Research Digest";
+      icon = "🌍";
+    } else if (isWork) {
+      category = "Work Routine";
+      icon = "📊";
+    } else if (isPersonal) {
+      category = "Personal Reminder";
+      icon = "🔔";
+    }
+
+    // Determine Contextual Greeting
+    let greeting = "Got it! 🎉";
+    if (hourUtc !== undefined && hourUtc >= 5 && hourUtc <= 11) {
+      greeting = isWork ? "Good morning 🌅, here’s your dashboard check." : "Good morning 🌅!";
+    } else if (isWork) {
+      greeting = "All set 💼!";
+    } else if (isPersonal) {
+      greeting = "Don’t worry ❤️, I’ll remind you.";
+    }
+
+    return { category, icon, greeting };
+  }
+
+  /**
+   * Generates the Refined Reminder Confirmation Card
+   */
+  static formatReminderConfirmationCard(params: {
+    greeting?: string;
+    title: string;
+    when: string;
+    nextTrigger: Date;
+    category: ReminderCategory;
+    icon: string;
+    isRecurring?: boolean;
+  }): string {
+    const greeting = params.greeting || "All set 💼!";
+    const nextTriggerStr = this.formatUtcTimestamp(params.nextTrigger);
+    const frequencyLabel = params.isRecurring ? "daily" : "notification";
+
+    return [
+      `<b>${greeting}</b>`,
+      ``,
+      `✅ <b>Reminder set:</b> “${escapeHtml(params.title)}”`,
+      `📅 <b>When:</b> ${escapeHtml(params.when)}`,
+      `🕒 <b>Next trigger:</b> <code>${nextTriggerStr}</code>`,
+      `${params.icon} <b>Type:</b> ${params.category}`,
+      ``,
+      `You’ll get a ${frequencyLabel} notification with quick actions:`,
+    ].join("\n");
+  }
+
+  /**
+   * Quick actions keyboard attached to Reminder Confirmations and Triggered Alerts
+   */
+  static reminderActionsKeyboard(targetId: number, targetType: "rem" | "sched" = "rem"): InlineKeyboard {
+    const prefix = targetType === "sched" ? "sched" : "rem";
+    return new InlineKeyboard()
+      .text("⏰ Snooze 15m", `${prefix}_snooze:${targetId}:15`)
+      .text("⏰ Snooze 1h", `${prefix}_snooze:${targetId}:60`)
+      .text("✅ Mark Done", `${prefix}_done:${targetId}`)
+      .row()
+      .text("✏️ Edit Time", `${prefix}_edit:${targetId}`)
+      .text("❌ Cancel", `${prefix}_cancel:${targetId}`);
+  }
+
+  /**
    * Intelligently parses natural language text for reminder intents and due dates.
-   * Handles relative durations ("in 15 mins", "in 2 hours"), specific clock times
-   * ("at 4:30 pm", "tomorrow at 9am"), days of the week, and keywords.
+   * Handles recurring patterns ("every day at 9 AM", "daily at 9am", "every weekday at 9am"),
+   * relative durations ("in 15 mins", "in 2 hours"), specific clock times
+   * ("at 4:30 pm", "tomorrow at 9am"), and keywords.
    */
   static parseNaturalReminder(
     text: string,
     now: Date = new Date(),
+    timezone: string = "UTC",
   ): ParsedReminder | null {
     const trimmed = text.trim();
 
     // 1. Check for reminder trigger prefixes
     const triggerMatch = trimmed.match(
-      /^(?:\/remind(?:er)?\b\s*|remind\s+me\s+(?:to\s+|about\s+|that\s+)?|set\s+(?:a\s+)?reminder\s+(?:to\s+|for\s+)?|reminder:\s*)/i,
+      /^(?:\/remind(?:er)?\b\s*|remind\s+me\s+(?:to\s+|about\s+|that\s+)?|set\s+(?:a\s+)?reminder\s*(?::\s*|\s+(?:to\s+|for\s+)?)|reminder:\s*)/i,
     );
 
     const isCommand = /^\/remind(?:er)?\b/i.test(trimmed);
     if (!triggerMatch && !isCommand) {
-      // Also check for embedded "remind me in X to Y"
+      // Also check for embedded "remind me in X to Y" or "remind me every day at X to Y"
       const embeddedMatch = trimmed.match(/\bremind\s+me\s+/i);
-      if (!embeddedMatch) return null;
+      if (!embeddedMatch) {
+        // Also check if text begins with "every day at ..." or "daily at ..."
+        const directRecurringMatch = trimmed.match(/^(?:every\s+day|daily|every\s+morning|every\s+weekday|every\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday))\s+at\s+/i);
+        if (!directRecurringMatch) return null;
+      }
     }
 
     // Clean body after trigger
@@ -48,7 +182,176 @@ export class ReminderService {
       }
     }
 
+    // Remove wrapping quotes if present
+    body = body.replace(/^["“](.*?)["”]/, "$1").trim();
+
     if (!body) return null;
+
+    // Pattern R1: "every day at 9am [task]" or "[task] every day at 9am" or "daily at 9am [task]"
+    const dailyMatch =
+      body.match(
+        /^(?:every\s+day\s+at\s+|daily\s+at\s+)(\d{1,2})(?::(\d{2}))?\s*(am|pm)?(?:\s+(?:to\s+|about\s+|that\s+)?(.*))?$/i,
+      ) ||
+      body.match(
+        /^(.*?)\s+(?:every\s+day\s+at\s+|daily\s+at\s+)(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i,
+      );
+
+    if (dailyMatch) {
+      const isPrefix = /^(?:every\s+day|daily)/i.test(body);
+      const rawHour = parseInt(isPrefix ? dailyMatch[1] : dailyMatch[2], 10);
+      const rawMin = parseInt(isPrefix ? dailyMatch[2] || "0" : dailyMatch[3] || "0", 10);
+      const meridiem = (isPrefix ? dailyMatch[3] : dailyMatch[4])?.toLowerCase();
+      let prompt = (isPrefix ? dailyMatch[4] : dailyMatch[1]) || "Check Admin Dashboard";
+      prompt = prompt.replace(/^(?:to|about|that)\s+/i, "").replace(/^["“]|["”]$/g, "").trim() || "Reminder";
+
+      let hour = rawHour;
+      if (meridiem === "pm" && hour < 12) hour += 12;
+      if (meridiem === "am" && hour === 12) hour = 0;
+
+      const cronExpression = `${rawMin} ${hour} * * *`;
+      let dueAt = new Date(now);
+      try {
+        const interval = parseExpression(cronExpression, { currentDate: now, tz: timezone });
+        dueAt = interval.next().toDate();
+      } catch {
+        dueAt = timezoneService.calculateNextOccurrenceUtc(`${String(hour).padStart(2, "0")}:${String(rawMin).padStart(2, "0")}`, timezone, now);
+      }
+
+      const hour12 = hour % 12 === 0 ? 12 : hour % 12;
+      const ampm = hour >= 12 ? "PM" : "AM";
+      const minStr = rawMin > 0 ? `:${String(rawMin).padStart(2, "0")}` : "";
+      const cadenceDescription = `Every day at ${hour12}${minStr} ${ampm}`;
+
+      const classification = ReminderService.classifyReminderType(prompt, hour);
+
+      return {
+        isReminder: true,
+        prompt,
+        dueAt,
+        humanReadableTime: cadenceDescription,
+        isRecurring: true,
+        cronExpression,
+        cadenceDescription,
+        category: classification.category,
+        icon: classification.icon,
+        contextualGreeting: classification.greeting,
+      };
+    }
+
+    // Pattern R2: "every weekday at 9am [task]" or "[task] every weekday at 9am"
+    const weekdayMatch =
+      body.match(
+        /^(?:every\s+weekday\s+at\s+)(\d{1,2})(?::(\d{2}))?\s*(am|pm)?(?:\s+(?:to\s+|about\s+|that\s+)?(.*))?$/i,
+      ) ||
+      body.match(
+        /^(.*?)\s+(?:every\s+weekday\s+at\s+)(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i,
+      );
+
+    if (weekdayMatch) {
+      const isPrefix = /^every\s+weekday/i.test(body);
+      const rawHour = parseInt(isPrefix ? weekdayMatch[1] : weekdayMatch[2], 10);
+      const rawMin = parseInt(isPrefix ? weekdayMatch[2] || "0" : weekdayMatch[3] || "0", 10);
+      const meridiem = (isPrefix ? weekdayMatch[3] : weekdayMatch[4])?.toLowerCase();
+      let prompt = (isPrefix ? weekdayMatch[4] : weekdayMatch[1]) || "Task";
+      prompt = prompt.replace(/^(?:to|about|that)\s+/i, "").replace(/^["“]|["”]$/g, "").trim() || "Reminder";
+
+      let hour = rawHour;
+      if (meridiem === "pm" && hour < 12) hour += 12;
+      if (meridiem === "am" && hour === 12) hour = 0;
+
+      const cronExpression = `${rawMin} ${hour} * * 1-5`;
+      let dueAt = new Date(now);
+      try {
+        const interval = parseExpression(cronExpression, { currentDate: now, tz: timezone });
+        dueAt = interval.next().toDate();
+      } catch {
+        dueAt = new Date(now.getTime() + 86400000);
+      }
+
+      const hour12 = hour % 12 === 0 ? 12 : hour % 12;
+      const ampm = hour >= 12 ? "PM" : "AM";
+      const minStr = rawMin > 0 ? `:${String(rawMin).padStart(2, "0")}` : "";
+      const cadenceDescription = `Every weekday at ${hour12}${minStr} ${ampm}`;
+
+      const classification = ReminderService.classifyReminderType(prompt, hour);
+
+      return {
+        isReminder: true,
+        prompt,
+        dueAt,
+        humanReadableTime: cadenceDescription,
+        isRecurring: true,
+        cronExpression,
+        cadenceDescription,
+        category: classification.category,
+        icon: classification.icon,
+        contextualGreeting: classification.greeting,
+      };
+    }
+
+    // Pattern R3: "every [day of week] at 9am [task]"
+    const dayOfWeekMatch =
+      body.match(
+        /^(?:every\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+)(\d{1,2})(?::(\d{2}))?\s*(am|pm)?(?:\s+(?:to\s+|about\s+|that\s+)?(.*))?$/i,
+      ) ||
+      body.match(
+        /^(.*?)\s+(?:every\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+)(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i,
+      );
+
+    if (dayOfWeekMatch) {
+      const isPrefix = /^every\s+(?:mon|tue|wed|thu|fri|sat|sun)/i.test(body);
+      const dayName = (isPrefix ? dayOfWeekMatch[1] : dayOfWeekMatch[2]).toLowerCase();
+      const rawHour = parseInt(isPrefix ? dayOfWeekMatch[2] : dayOfWeekMatch[3], 10);
+      const rawMin = parseInt(isPrefix ? dayOfWeekMatch[3] || "0" : dayOfWeekMatch[4] || "0", 10);
+      const meridiem = (isPrefix ? dayOfWeekMatch[4] : dayOfWeekMatch[5])?.toLowerCase();
+      let prompt = (isPrefix ? dayOfWeekMatch[5] : dayOfWeekMatch[1]) || "Weekly Task";
+      prompt = prompt.replace(/^(?:to|about|that)\s+/i, "").replace(/^["“]|["”]$/g, "").trim() || "Reminder";
+
+      let hour = rawHour;
+      if (meridiem === "pm" && hour < 12) hour += 12;
+      if (meridiem === "am" && hour === 12) hour = 0;
+
+      const dayMap: Record<string, number> = {
+        sunday: 0,
+        monday: 1,
+        tuesday: 2,
+        wednesday: 3,
+        thursday: 4,
+        friday: 5,
+        saturday: 6,
+      };
+      const dayNum = dayMap[dayName] ?? 1;
+
+      const cronExpression = `${rawMin} ${hour} * * ${dayNum}`;
+      let dueAt = new Date(now);
+      try {
+        const interval = parseExpression(cronExpression, { currentDate: now, tz: timezone });
+        dueAt = interval.next().toDate();
+      } catch {
+        dueAt = new Date(now.getTime() + 7 * 86400000);
+      }
+
+      const capitalizedDay = dayName.charAt(0).toUpperCase() + dayName.slice(1);
+      const hour12 = hour % 12 === 0 ? 12 : hour % 12;
+      const ampm = hour >= 12 ? "PM" : "AM";
+      const minStr = rawMin > 0 ? `:${String(rawMin).padStart(2, "0")}` : "";
+      const cadenceDescription = `Every ${capitalizedDay} at ${hour12}${minStr} ${ampm}`;
+
+      const classification = ReminderService.classifyReminderType(prompt, hour);
+
+      return {
+        isReminder: true,
+        prompt,
+        dueAt,
+        humanReadableTime: cadenceDescription,
+        isRecurring: true,
+        cronExpression,
+        cadenceDescription,
+        category: classification.category,
+        icon: classification.icon,
+        contextualGreeting: classification.greeting,
+      };
+    }
 
     // Pattern A: "in X minutes/hours/days to [task]" or "[task] in X minutes/hours"
     const relativeMatch =
@@ -97,11 +400,15 @@ export class ReminderService {
       }
 
       const dueAt = new Date(now.getTime() + amount * multiplierMs);
+      const classification = ReminderService.classifyReminderType(prompt, dueAt.getUTCHours());
       return {
         isReminder: true,
         prompt,
         dueAt,
         humanReadableTime: `in ${amount} ${unitLabel} (${dueAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})`,
+        category: classification.category,
+        icon: classification.icon,
+        contextualGreeting: classification.greeting,
       };
     }
 
@@ -126,15 +433,20 @@ export class ReminderService {
       if (meridiem === "pm" && hour < 12) hour += 12;
       if (meridiem === "am" && hour === 12) hour = 0;
 
-      const dueAt = new Date(now);
-      dueAt.setDate(dueAt.getDate() + 1);
-      dueAt.setHours(hour, rawMin, 0, 0);
+      const timeHHMM = `${String(hour).padStart(2, "0")}:${String(rawMin).padStart(2, "0")}`;
+      const tomorrowRef = new Date(now.getTime() + 86400000);
+      const dueAt = timezoneService.calculateNextOccurrenceUtc(timeHHMM, timezone, tomorrowRef);
+
+      const classification = ReminderService.classifyReminderType(prompt, hour);
 
       return {
         isReminder: true,
         prompt,
         dueAt,
-        humanReadableTime: `tomorrow at ${dueAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+        humanReadableTime: `tomorrow at ${timeHHMM}`,
+        category: classification.category,
+        icon: classification.icon,
+        contextualGreeting: classification.greeting,
       };
     }
 
@@ -157,19 +469,19 @@ export class ReminderService {
       if (meridiem === "pm" && hour < 12) hour += 12;
       if (meridiem === "am" && hour === 12) hour = 0;
 
-      const dueAt = new Date(now);
-      dueAt.setHours(hour, rawMin, 0, 0);
+      const timeHHMM = `${String(hour).padStart(2, "0")}:${String(rawMin).padStart(2, "0")}`;
+      const dueAt = timezoneService.calculateNextOccurrenceUtc(timeHHMM, timezone, now);
 
-      // If time has already passed today, roll over to tomorrow
-      if (dueAt.getTime() <= now.getTime()) {
-        dueAt.setDate(dueAt.getDate() + 1);
-      }
+      const classification = ReminderService.classifyReminderType(prompt, hour);
 
       return {
         isReminder: true,
         prompt,
         dueAt,
-        humanReadableTime: `${dueAt.getDate() === now.getDate() ? "today" : "tomorrow"} at ${dueAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+        humanReadableTime: `at ${timeHHMM}`,
+        category: classification.category,
+        icon: classification.icon,
+        contextualGreeting: classification.greeting,
       };
     }
 
@@ -178,17 +490,18 @@ export class ReminderService {
       let prompt = body.replace(/\btonight(?:\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?)?/i, "").trim();
       prompt = prompt.replace(/^(?:to|about|that)\s+/i, "").trim() || "Reminder";
 
-      const dueAt = new Date(now);
-      dueAt.setHours(20, 0, 0, 0); // 8:00 PM default
-      if (dueAt.getTime() <= now.getTime()) {
-        dueAt.setHours(dueAt.getHours() + 2); // 2 hours later if already past 8pm
-      }
+      const dueAt = timezoneService.calculateNextOccurrenceUtc("20:00", timezone, now);
+
+      const classification = ReminderService.classifyReminderType(prompt, 20);
 
       return {
         isReminder: true,
         prompt,
         dueAt,
-        humanReadableTime: `tonight at ${dueAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+        humanReadableTime: "tonight at 20:00",
+        category: classification.category,
+        icon: classification.icon,
+        contextualGreeting: classification.greeting,
       };
     }
 
@@ -442,25 +755,27 @@ export class ReminderScheduler {
             hour: "2-digit",
             minute: "2-digit",
           });
+          const nowUtc = ReminderService.formatUtcTimestamp(new Date());
+          const classification = ReminderService.classifyReminderType(reminder.prompt);
+          const historyLine =
+            reminder.snoozeCount > 0
+              ? `📈 <b>Run History:</b> Snoozed ${reminder.snoozeCount}x • Last trigger: ${timeFormatted}`
+              : `📈 <b>Run History:</b> Fired 1 time this week`;
 
-          const formattedPrompt = formatTelegramMessage(reminder.prompt);
-          const text =
-            `⏰ <b>Reminder Notification!</b>\n\n` +
-            `📌 <b>Task:</b> ${formattedPrompt}\n` +
-            `🕒 <b>Scheduled for:</b> ${timeFormatted}` +
-            (reminder.snoozeCount > 0 ? ` <i>(Snoozed ${reminder.snoozeCount}x)</i>` : "");
+          const text = [
+            `⏰ <b>Reminder Alert: “${escapeHtml(reminder.prompt)}”</b>`,
+            ``,
+            `📅 <b>Scheduled:</b> ${timeFormatted}`,
+            `🕒 <b>Triggered:</b> <code>${nowUtc}</code>`,
+            `${classification.icon} <b>Type:</b> ${classification.category}`,
+            historyLine,
+            ``,
+            `<b>Actions:</b>`,
+          ].join("\n");
 
           await bot.api.sendMessage(reminder.chatId, text, {
             parse_mode: "HTML",
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  { text: "✅ Done", callback_data: `rem_done:${reminder.id}` },
-                  { text: "⏰ Snooze 10m", callback_data: `rem_snooze:${reminder.id}:10` },
-                  { text: "⏰ Snooze 1h", callback_data: `rem_snooze:${reminder.id}:60` },
-                ],
-              ],
-            },
+            reply_markup: ReminderService.reminderActionsKeyboard(reminder.id, "rem"),
           });
 
           logger.info(

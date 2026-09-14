@@ -212,6 +212,56 @@ export const generateVideoTool: AssistantTool = {
   },
 };
 
+export const snoozeReminderTool: AssistantTool = {
+  name: "snooze_reminder",
+  description: "Snoozes an active or pending reminder by a specified number of minutes (e.g. 15, 60). Defaults to 15 minutes.",
+  policy: { sideEffect: true, destructive: false, confirmationRequired: false, idempotent: false, requiredCapabilities: [], timeoutMs: 15000 },
+  execute: async (input: unknown, context) => {
+    const record = asRecord(input);
+    const minutes = typeof record.minutes === "number" && record.minutes > 0 ? record.minutes : 15;
+    let reminderId = typeof record.reminderId === "number" ? record.reminderId : undefined;
+    if (!reminderId) {
+      const reminders = await reminderService.getActiveUserReminders(context.telegramUserId);
+      if (reminders.length > 0) reminderId = reminders[0].id;
+    }
+    if (!reminderId) throw new Error("No active reminder found to snooze.");
+    const updated = await reminderService.snoozeReminder(reminderId, minutes, context.telegramUserId);
+    if (!updated) throw new Error(`Could not snooze reminder #${reminderId}.`);
+    return { reminderId: updated.id, prompt: updated.prompt, dueAt: updated.dueAt.toISOString(), snoozedMinutes: minutes };
+  },
+};
+
+export const completeReminderTool: AssistantTool = {
+  name: "complete_reminder",
+  description: "Marks an active or pending reminder as completed.",
+  policy: { sideEffect: true, destructive: false, confirmationRequired: false, idempotent: true, requiredCapabilities: [], timeoutMs: 15000 },
+  execute: async (input: unknown, context) => {
+    const record = asRecord(input);
+    let reminderId = typeof record.reminderId === "number" ? record.reminderId : undefined;
+    if (!reminderId) {
+      const reminders = await reminderService.getActiveUserReminders(context.telegramUserId);
+      if (reminders.length > 0) reminderId = reminders[0].id;
+    }
+    if (!reminderId) throw new Error("No active reminder found to complete.");
+    const success = await reminderService.completeReminder(reminderId, context.telegramUserId);
+    return { reminderId, completed: success };
+  },
+};
+
+export const listTasksTool: AssistantTool = {
+  name: "list_tasks",
+  description: "Lists the user's active tasks, background workflows, and reminders.",
+  policy: { sideEffect: false, destructive: false, confirmationRequired: false, idempotent: true, requiredCapabilities: [], timeoutMs: 15000 },
+  execute: async (_input: unknown, context) => {
+    const activeTasks = await taskService.getActiveTasksForUser(context.telegramUserId);
+    const activeReminders = await reminderService.getActiveUserReminders(context.telegramUserId);
+    return {
+      activeTasks: activeTasks.map((t) => ({ id: t.id, title: t.title, goal: t.goal, status: t.status })),
+      activeReminders: activeReminders.map((r) => ({ id: r.id, prompt: r.prompt, dueAt: r.dueAt.toISOString() })),
+    };
+  },
+};
+
 export const deleteUserSessionTool: AssistantTool = {
   name: "delete_user_session",
   description: "Permanently deletes user session data and cached records. Destructive operation requiring approval.",
@@ -237,6 +287,9 @@ export function getProductionToolRegistry(): ToolRegistry {
     registry.register(fetchUserMemoryTool);
     registry.register(createTaskTool);
     registry.register(createReminderTool);
+    registry.register(snoozeReminderTool);
+    registry.register(completeReminderTool);
+    registry.register(listTasksTool);
     registry.register(generateImageTool);
     registry.register(generateVideoTool);
     registry.register(deleteUserSessionTool);

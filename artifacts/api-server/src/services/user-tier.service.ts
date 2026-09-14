@@ -525,7 +525,8 @@ export class UserTierService {
       user.researchToday = 0;
     }
 
-    const currentTier = (tierOverride || user?.tier === "vip" || user?.tier === "pro" ? (tierOverride || user?.tier) : "free") as UserTier;
+    const dbTier = (user?.tier === "vip" || user?.tier === "pro" ? user.tier : "free") as UserTier;
+    const currentTier = (tierOverride || dbTier) as UserTier;
     const tierConfig = policy.tiers[currentTier] || DEFAULT_TIER_CONFIGS[currentTier];
     
     if (user && user.status === "suspended") {
@@ -534,7 +535,7 @@ export class UserTierService {
 
     let quota = 0;
     let used = 0;
-    let label = tool;
+    let label: string = tool;
 
     switch (tool) {
       case 'image':
@@ -563,7 +564,7 @@ export class UserTierService {
         break;
     }
 
-    const isUnlimited = currentTier === "vip" || quota < 0 || quota >= 999999;
+    const isUnlimited = quota < 0 || quota >= 999999;
     
     if (!isUnlimited && used >= quota) {
       return { 
@@ -699,13 +700,22 @@ export class UserTierService {
     }
   ): Promise<TrackedUserSummary | null> {
     const policy = await this.getPolicy();
-    const updateData: Record<string, any> = { updatedAt: new Date() };
+    const updateData: Record<string, any> = { updatedAt: new Date(), lastActiveAt: new Date() };
 
     if (patch.tier !== undefined) {
       updateData.tier = patch.tier;
-      // If user hasn't set custom daily quota, assign tier's default
+      // If user hasn't set custom daily quota, assign tier's default (VIP: 500, Pro: 150, Free: 30)
       if (patch.dailyQuota === undefined) {
-        updateData.dailyQuota = policy.tiers[patch.tier]?.dailyQuota ?? 30;
+        updateData.dailyQuota = policy.tiers[patch.tier]?.dailyQuota ?? (patch.tier === "vip" ? 500 : patch.tier === "pro" ? 150 : 30);
+      }
+      // On tier upgrade to VIP or PRO, grant immediate quota relief by resetting today's counters
+      if (patch.tier === "vip" || patch.tier === "pro") {
+        updateData.requestsToday = 0;
+        updateData.imagesToday = 0;
+        updateData.videosToday = 0;
+        updateData.deepReasoningToday = 0;
+        updateData.researchToday = 0;
+        updateData.lastRequestDate = getUtcTodayDate();
       }
     }
     if (patch.dailyQuota !== undefined) {
@@ -718,10 +728,41 @@ export class UserTierService {
       updateData.status = patch.status;
     }
 
-    await db
-      .update(usersTable)
-      .set(updateData)
-      .where(eq(usersTable.telegramUserId, telegramUserId));
+    const existing = await db
+      .select()
+      .from(usersTable)
+      .where(eq(usersTable.telegramUserId, telegramUserId))
+      .limit(1);
+
+    if (!existing.length) {
+      const defaultTier = patch.tier || policy.defaultTier || "free";
+      const targetDailyQuota =
+        patch.dailyQuota ??
+        policy.tiers[defaultTier]?.dailyQuota ??
+        (defaultTier === "vip" ? 500 : defaultTier === "pro" ? 150 : 30);
+
+      await db.insert(usersTable).values({
+        telegramUserId,
+        tier: defaultTier,
+        dailyQuota: targetDailyQuota,
+        status: patch.status || "active",
+        customModelOverride: patch.customModelOverride || null,
+        requestsToday: 0,
+        imagesToday: 0,
+        videosToday: 0,
+        deepReasoningToday: 0,
+        researchToday: 0,
+        lastRequestDate: getUtcTodayDate(),
+        totalRequests: 0,
+        lastActiveAt: new Date(),
+        updatedAt: new Date(),
+      });
+    } else {
+      await db
+        .update(usersTable)
+        .set(updateData)
+        .where(eq(usersTable.telegramUserId, telegramUserId));
+    }
 
     const updated = await this.listUsers();
     return updated.find((u) => u.telegramUserId === telegramUserId) || null;
@@ -732,6 +773,10 @@ export class UserTierService {
       .update(usersTable)
       .set({
         requestsToday: 0,
+        imagesToday: 0,
+        videosToday: 0,
+        deepReasoningToday: 0,
+        researchToday: 0,
         lastRequestDate: getUtcTodayDate(),
         updatedAt: new Date(),
       })

@@ -15,6 +15,7 @@ import {
 } from "@workspace/db";
 import { logger } from "../lib/logger";
 import { semanticInteractionCache } from "./semantic-interaction-cache.service";
+import { stripMediaArtifactMetadata } from "./media-artifact-context.service";
 
 export interface AssembledContext {
   effectiveSystemPrompt: string;
@@ -210,12 +211,17 @@ export class ContextManagerService {
       semanticUnresolvedReference: Boolean(semanticState?.unresolvedReference),
     }, "CONTEXT_ASSEMBLED_WITH_PRECEDENCE");
 
+    const sanitizedHistory = rawHistory.map((item) => ({
+      role: item.role,
+      content: stripMediaArtifactMetadata(item.content),
+    }));
+
     return {
       effectiveSystemPrompt: fullSystemPrompt,
       formattedMemories,
       formattedTaskContext,
       conversationSummary,
-      history: rawHistory,
+      history: sanitizedHistory,
       tokenCountEstimate,
       isTruncated,
     };

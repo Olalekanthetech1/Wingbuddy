@@ -56,6 +56,7 @@ export interface AIChatRequest {
   topP?: number;
   enableSearch?: boolean;
   thinkingLevel?: string;
+  thinkingBudget?: number;
   attachments?: AIChatAttachment[];
   metadata?: Record<string, unknown>;
 }

@@ -328,6 +328,23 @@ export const executionApprovalsTable = pgTable(
   ],
 );
 
+export const userTimezonesTable = pgTable(
+  "user_timezones",
+  {
+    id: serial("id").primaryKey(),
+    telegramUserId: bigint("telegram_user_id", { mode: "number" }).notNull(),
+    timezone: text("timezone").default("UTC").notNull(),
+    utcOffsetMinutes: integer("utc_offset_minutes").default(0).notNull(),
+    source: text("source").default("user_preference").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("user_timezones_telegram_user_id_idx").on(table.telegramUserId),
+    index("user_timezones_tz_idx").on(table.timezone),
+  ],
+);
+
 export type User = typeof usersTable.$inferSelect;
 export type Conversation = typeof conversationsTable.$inferSelect;
 export type Message = typeof messagesTable.$inferSelect;
@@ -343,4 +360,5 @@ export type ExecutionSessionRecord = typeof executionSessionsTable.$inferSelect;
 export type NodeExecutionRecord = typeof nodeExecutionsTable.$inferSelect;
 export type ExecutionLeaseRecord = typeof executionLeasesTable.$inferSelect;
 export type ExecutionApprovalRecord = typeof executionApprovalsTable.$inferSelect;
+export type UserTimezone = typeof userTimezonesTable.$inferSelect;
 
