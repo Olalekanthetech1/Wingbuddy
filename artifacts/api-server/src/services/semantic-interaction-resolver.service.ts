@@ -279,40 +279,134 @@ export class SemanticInteractionResolverService {
       durabilityEvidence: [],
     };
 
-    try {
-      let raw = "";
-      if (params.gemini && typeof params.gemini.generateReply === "function") {
-        raw = await params.gemini.generateReply(
-          [],
-          jsonOnlyPrompt(params.text, params.persistentMode, history),
-          "Return the classification JSON only. Do not add explanations.",
-          { isExtraction: true, mode: "auto" },
-        );
-      } else {
-        const routed = await adaptiveAIRouterService.route({
-          systemInstruction: "Return the classification JSON only. Do not add explanations.",
-          messages: [{ role: "user", content: jsonOnlyPrompt(params.text, params.persistentMode, history) }],
-        }, {
-          isExtraction: true,
-          mode: "auto",
-          isSystemTask: true,
-        });
-        raw = routed.response.text || "";
-      }
-      const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
-      const parsed = JSON.parse(cleaned);
-      const decision = sanitizeDecision(parsed, params.persistentMode);
-      semanticInteractionCache.set(params.text, params.persistentMode, history, decision);
-      logger.info({ intent: decision.intent, promptTypes: decision.promptTypes, primaryPromptType: decision.primaryPromptType, executionProfile: decision.executionProfile, complexity: decision.complexity, confidence: decision.confidence, durabilityEvidence: decision.durabilityEvidence, conversationOperation: decision.conversationOperation }, "PROMPT_INTENT_PROFILE_RESOLVED");
-      return decision;
-    } catch (error) {
-      logger.warn(
-        { error: safeErrorMetadata(error) },
-        "Semantic interaction resolution unavailable; using conservative mode-policy fallback",
-      );
-      semanticInteractionCache.set(params.text, params.persistentMode, history, fallback);
-      return fallback;
+    // FAST PATTERN RECOGNITION (0ms latency, eliminates background LLM classification round)
+    const trimmed = params.text.trim();
+    const lower = trimmed.toLowerCase();
+
+    // 1. Greetings & Pleasantries
+    const isGreeting = /^(hi|hello|hey|good\s*(morning|afternoon|evening|day)|yo|howdy|sup|greetings)(\s+there|\s+bot|\s+olalekan|\s+ai)?[\s!.]*$/i.test(lower);
+    if (isGreeting) {
+      const fastDecision: SemanticInteractionDecision = {
+        ...fallback,
+        intent: "greeting",
+        promptTypes: ["CONVERSATIONAL"],
+        primaryPromptType: "CONVERSATIONAL",
+        executionProfile: "conversational",
+        isGreeting: true,
+        confidence: 1.0,
+        complexity: "simple",
+      };
+      semanticInteractionCache.set(params.text, params.persistentMode, history, fastDecision);
+      return fastDecision;
     }
+
+    // 2. Affirmations & Acknowledgements
+    const isAffirmation = /^(thanks|thank\s*you|ok|okay|sure|great|awesome|cool|got\s*it|yes|no|yep|nope|nice|alright|perfect|cheers)[\s!.]*$/i.test(lower);
+    if (isAffirmation) {
+      const fastDecision: SemanticInteractionDecision = {
+        ...fallback,
+        intent: "general",
+        promptTypes: ["CONVERSATIONAL"],
+        primaryPromptType: "CONVERSATIONAL",
+        executionProfile: "conversational",
+        confidence: 1.0,
+        complexity: "simple",
+      };
+      semanticInteractionCache.set(params.text, params.persistentMode, history, fastDecision);
+      return fastDecision;
+    }
+
+    // 3. Task Management Commands
+    if (/^(show|view|list|my)\s+(tasks|reminders|scheduled)\b/i.test(lower)) {
+      const decision: SemanticInteractionDecision = {
+        ...fallback,
+        intent: "task_management",
+        taskIntent: "VIEW_TASKS",
+        executionProfile: "conversational",
+        confidence: 1.0,
+      };
+      semanticInteractionCache.set(params.text, params.persistentMode, history, decision);
+      return decision;
+    }
+
+    if (/^(snooze|delay|postpone)\b/i.test(lower)) {
+      const matchMin = lower.match(/(\d+)\s*(?:m|min|minute)/i);
+      const snoozeMinutes = matchMin ? parseInt(matchMin[1], 10) : 15;
+      const decision: SemanticInteractionDecision = {
+        ...fallback,
+        intent: "task_management",
+        taskIntent: "SNOOZE_TASK",
+        snoozeMinutes,
+        executionProfile: "conversational",
+        confidence: 1.0,
+      };
+      semanticInteractionCache.set(params.text, params.persistentMode, history, decision);
+      return decision;
+    }
+
+    if (/^(done|complete|finish|mark\s*(?:as\s*)?done)\b/i.test(lower)) {
+      const decision: SemanticInteractionDecision = {
+        ...fallback,
+        intent: "task_management",
+        taskIntent: "COMPLETE_TASK",
+        executionProfile: "conversational",
+        confidence: 1.0,
+      };
+      semanticInteractionCache.set(params.text, params.persistentMode, history, decision);
+      return decision;
+    }
+
+    if (/^(cancel|delete|stop|abort)\s+(?:task|reminder|schedule|#?\d+)/i.test(lower)) {
+      const idMatch = lower.match(/#?(\d+)/);
+      const decision: SemanticInteractionDecision = {
+        ...fallback,
+        intent: "task_management",
+        taskIntent: "CANCEL_TASK",
+        taskIdHint: idMatch ? parseInt(idMatch[1], 10) : undefined,
+        executionProfile: "conversational",
+        confidence: 1.0,
+      };
+      semanticInteractionCache.set(params.text, params.persistentMode, history, decision);
+      return decision;
+    }
+
+    if (/^(remind\s+me|schedule|set\s+a\s+reminder|every\s+(?:day|week|month|monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b/i.test(lower)) {
+      const decision: SemanticInteractionDecision = {
+        ...fallback,
+        intent: "task_management",
+        taskIntent: "SCHEDULE_TASK",
+        taskTitle: trimmed,
+        taskGoal: trimmed,
+        executionProfile: "durable",
+        confidence: 0.95,
+      };
+      semanticInteractionCache.set(params.text, params.persistentMode, history, decision);
+      return decision;
+    }
+
+    // 4. Web Search Intent
+    const needsSearch = /^(search|look\s*up|google|find\s*out|latest\s*news|current\s*(?:price|weather|score|news))\b/i.test(lower) ||
+      /\b(who\s*won|latest|today|this\s*week|current\s*events)\b/i.test(lower);
+
+    // 5. Direct Media Intent
+    const isVideo = /\b(generate|create|make)\s+(?:a\s+)?video\b/i.test(lower) || /\bvideo\s+of\b/i.test(lower);
+    const isImage = /\b(generate|create|make|draw|paint)\s+(?:a\s+|an\s+)?(?:image|photo|picture|drawing|illustration)\b/i.test(lower) || /\bpicture\s+of\b/i.test(lower);
+
+    const intent = isVideo ? "video_generation" : isImage ? "image_generation" : "general";
+    const executionProfile: RequestExecutionProfile = "conversational";
+
+    const fastDecision: SemanticInteractionDecision = {
+      ...fallback,
+      intent,
+      executionProfile,
+      enableSearch: needsSearch,
+      confidence: 0.95,
+      complexity: "simple",
+    };
+
+    semanticInteractionCache.set(params.text, params.persistentMode, history, fastDecision);
+    logger.info({ intent: fastDecision.intent, text: trimmed, enableSearch: fastDecision.enableSearch }, "PROMPT_INTENT_RESOLVED_DIRECT");
+    return fastDecision;
   }
 
   static getCached(text: string, persistentMode: ModeKey, history: Array<{ role: string; content: string }> = []): SemanticInteractionDecision | undefined {

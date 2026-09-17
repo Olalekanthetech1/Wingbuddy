@@ -22,6 +22,7 @@ import { renderDashboardUserAccess } from "./dashboard-user-access";
 import { renderDashboardPersonas } from "./dashboard-personas";
 import { renderDashboardWebResearchControlPlane } from "./dashboard-web-research-control-plane";
 import { renderDashboardExecutionVisualizer } from "./dashboard-execution-visualizer";
+import { renderDashboardDiagnostics } from "./dashboard-diagnostics";
 import { apiKeyPoolService } from "./services/api-key-pool.service";
 import { aiProviderRegistryService } from "./services/ai-provider-registry.service";
 import { aiProviderKeyPoolService } from "./services/ai-provider-key-pool.service";
@@ -337,7 +338,7 @@ app.use("/api", router);
 
 const serveDashboard = (_req: Request, res: Response): void => {
   const html = renderDashboardHtml();
-  const injected = `${renderDashboardModelControls()}${renderDashboardControlPlane()}${renderDashboardBotSimulator()}${renderDashboardResponsiveLayer()}${renderDashboardAIRoutingControls()}${renderDashboardProviderKeyControls()}${renderDashboardWebResearchControlPlane()}${renderDashboardProactiveAssistant()}${renderDashboardKnowledgeBase()}${renderDashboardMediaStorage()}${renderDashboardUserAccess()}${renderDashboardPersonas()}${renderDashboardExecutionVisualizer()}${renderDashboardThemeLayer()}</body>`;
+  const injected = `${renderDashboardModelControls()}${renderDashboardControlPlane()}${renderDashboardBotSimulator()}${renderDashboardResponsiveLayer()}${renderDashboardAIRoutingControls()}${renderDashboardProviderKeyControls()}${renderDashboardWebResearchControlPlane()}${renderDashboardProactiveAssistant()}${renderDashboardKnowledgeBase()}${renderDashboardMediaStorage()}${renderDashboardUserAccess()}${renderDashboardPersonas()}${renderDashboardExecutionVisualizer()}${renderDashboardDiagnostics()}${renderDashboardThemeLayer()}</body>`;
   const enhanced = html.replace("</body>", () => injected);
   res.type("html").send(enhanced);
 };

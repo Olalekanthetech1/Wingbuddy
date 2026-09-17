@@ -27,53 +27,9 @@ export interface GeneratedImageResult {
 }
 
 export class ImageGenerationService {
-  static async enhancePrompt(rawPrompt: string, geminiService?: GeminiService): Promise<PromptEnhancementResult> {
+  static async enhancePrompt(rawPrompt: string, _geminiService?: GeminiService): Promise<PromptEnhancementResult> {
+    // Fast-path: Send user prompt directly to the image generation model without 4-8 second LLM expansion
     const cleaned = rawPrompt.trim();
-    if (cleaned.length > 280) return { prompt: cleaned };
-
-    const systemInstruction = "You are an expert prompt engineer for modern text-to-image models. Expand the user's idea into a single, visually striking, highly descriptive prompt detailing subjects, lighting, artistic style, composition, colors, and camera angle. Output ONLY the final image generation prompt in English. No explanations, no preamble, no quotes, no markdown formatting.";
-    const promptRequest = `Expand this idea into a vivid image generation prompt: "${cleaned}"`;
-
-    // 1. Primary path: Unified model registry & adaptive router (routes across Groq, Mistral, Gemini, etc.)
-    try {
-      const routedPromise = adaptiveAIRouterService.route({
-        messages: [
-          { role: "system", content: systemInstruction },
-          { role: "user", content: promptRequest },
-        ],
-        temperature: 0.7,
-        maxTokens: 140,
-      }, { mode: "prompt_enhancement" });
-
-      const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Adaptive router prompt enhancement timeout")), 4500));
-      const routed = await Promise.race([routedPromise, timeoutPromise]);
-      const text = routed.response.text || "";
-      const result = text.replace(/^[“"']+|[”"']+$/g, "").replace(/^Prompt:\s*/i, "").trim();
-      if (result.length > 10) {
-        const enhancerName = routed.candidate.model.name || routed.candidate.model.modelId || routed.candidate.model.provider;
-        logger.info({ originalPrompt: cleaned, enhancedPrompt: result, enhancerName, provider: routed.candidate.model.provider }, "Image prompt enhanced via unified registry routing");
-        return { prompt: result, enhancerName };
-      }
-    } catch (routeErr) {
-      logger.warn({ routeErr: routeErr instanceof Error ? routeErr.message : String(routeErr), originalPrompt: cleaned }, "Adaptive router prompt enhancement failed; falling back if available");
-    }
-
-    // 2. Secondary fallback: direct Gemini service if provided
-    if (geminiService) {
-      try {
-        const enhancePromise = geminiService.generateReply([], promptRequest, { modeInstruction: systemInstruction }, { thinkingLevel: undefined, enableSearch: false });
-        const timeoutPromise = new Promise<string>((_, reject) => setTimeout(() => reject(new Error("Direct Gemini prompt enhancement timeout")), 4000));
-        const enhanced = await Promise.race([enhancePromise, timeoutPromise]);
-        const result = enhanced.replace(/^[“"']+|[”"']+$/g, "").replace(/^Prompt:\s*/i, "").trim();
-        if (result.length > 10) {
-          logger.info({ originalPrompt: cleaned, enhancedPrompt: result }, "Image prompt enhanced via secondary Gemini fallback");
-          return { prompt: result, enhancerName: "Google Gemini" };
-        }
-      } catch (geminiErr) {
-        logger.warn({ geminiErr: geminiErr instanceof Error ? geminiErr.message : String(geminiErr), originalPrompt: cleaned }, "Direct Gemini prompt enhancement fallback failed");
-      }
-    }
-
     return { prompt: cleaned };
   }
 

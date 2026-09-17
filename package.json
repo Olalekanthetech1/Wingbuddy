@@ -11,7 +11,7 @@
     "dev": "npm run dev --workspace=@workspace/api-server",
     "postinstall": "npm run prisma:generate",
     "build": "npm run prisma:generate && tsc --build && npm run build --workspace=@workspace/api-server",
-    "start": "node --enable-source-maps artifacts/api-server/dist/index.mjs",
+    "start": "node server.ts",
     "lint": "tsc --build",
     "typecheck:libs": "tsc --build",
     "typecheck": "tsc --build && npm run typecheck --workspace=@workspace/api-server",

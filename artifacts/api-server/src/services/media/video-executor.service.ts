@@ -38,31 +38,8 @@ function cleanExpandedPrompt(text: string, fallback: string): string {
 
 export class VideoExecutor {
   static async enhanceDirectorPrompt(rawPrompt: string): Promise<{ prompt: string; enhancerModel?: string }> {
+    // Fast-path: Send user prompt directly to avoid 11+ second expansion latency
     const cleaned = rawPrompt.trim();
-    if (cleaned.length > 250) {
-      return { prompt: cleaned };
-    }
-
-    try {
-      const routed = await adaptiveAIRouterService.route({
-        systemInstruction:
-          "You are a cinematic director. Expand this user video concept into a descriptive prompt specifying camera motion (e.g. slow pan, drone flyover), lighting, motion physics, and cinematic mood. Output ONLY the single-paragraph prompt in English. Maximum 40 words. No commentary, no options, no markdown.",
-        messages: [{ role: "user", content: `Expand into a cinematic video prompt: "${cleaned}"` }],
-        temperature: 0.7,
-      });
-
-      const expanded = routed.response?.text?.trim();
-      if (expanded && expanded.length > 10 && !expanded.includes("I cannot")) {
-        const sanitized = cleanExpandedPrompt(expanded, cleaned);
-        return {
-          prompt: sanitized,
-          enhancerModel: `${routed.candidate.model.provider}:${routed.candidate.model.modelId}`,
-        };
-      }
-    } catch (err) {
-      logger.warn({ err: String(err) }, "Director prompt expansion failed; using original prompt");
-    }
-
     return { prompt: cleaned };
   }
 

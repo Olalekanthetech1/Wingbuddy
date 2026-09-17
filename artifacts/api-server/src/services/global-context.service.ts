@@ -78,31 +78,41 @@ export class GlobalContextService {
     let memoryRecallSource: "vector" | "lexical" | "none" = "none";
     let knowledgeVaultResults: KnowledgeSearchResult[] = [];
 
+    // For short messages (< 20 chars like greetings or simple affirmations), use fast lexical search to avoid embedding delay
     if (query.length > 3) {
       try {
-        let queryVec: number[] = [];
-        if (geminiService && typeof geminiService.embedText === "function") {
-          queryVec = await geminiService.embedText(query);
-        }
-        knowledgeVaultResults = await knowledgeVaultService.searchSimilar(telegramUserId.toString(), query, 3);
-        if (queryVec.length > 0) {
-          memories = await chatDatabaseService.searchSimilarMemories(telegramUserId, queryVec);
-          memoryRecallSource = memories.length > 0 ? "vector" : "none";
-        } else {
-          memories = await chatDatabaseService.searchMemories(telegramUserId, query);
+        const isQuickQuery = query.length < 20 || /^(hi|hello|hey|thanks|thank you|ok|okay|yes|no|cool|great|awesome)\b/i.test(query);
+
+        if (isQuickQuery) {
+          // Fast-path: instant lexical lookup without blocking on embedText
+          const [quickMemories, quickVault] = await Promise.all([
+            chatDatabaseService.searchMemories(telegramUserId, query),
+            knowledgeVaultService.searchSimilar(telegramUserId.toString(), query, 2).catch(() => []),
+          ]);
+          memories = quickMemories;
+          knowledgeVaultResults = quickVault;
           memoryRecallSource = memories.length > 0 ? "lexical" : "none";
-        }
-        const historicalCandidates = await chatDatabaseService.searchHistoricalDialogue(telegramUserId, query, conversationId, 5);
-        if (historicalCandidates.length > 0) {
-          if (queryVec.length > 0 && geminiService) {
-            const scored = await Promise.all(historicalCandidates.map(async (cand) => {
-              const candVec = await geminiService.embedText(cand.content);
-              const score = candVec.length > 0 ? cosineSimilarity(queryVec, candVec) : 0.5;
-              return { cand, score };
-            }));
-            scored.sort((a, b) => b.score - a.score);
-            semanticRecall = scored.slice(0, 3).map(({ cand }) => ({ role: cand.role, content: cand.content }));
+        } else {
+          // Parallel embedding and knowledge search
+          const [queryVecRes, vaultRes] = await Promise.all([
+            geminiService && typeof geminiService.embedText === "function"
+              ? geminiService.embedText(query).catch(() => [] as number[])
+              : Promise.resolve([] as number[]),
+            knowledgeVaultService.searchSimilar(telegramUserId.toString(), query, 3).catch(() => []),
+          ]);
+          knowledgeVaultResults = vaultRes;
+          const queryVec = queryVecRes || [];
+
+          if (queryVec.length > 0) {
+            memories = await chatDatabaseService.searchSimilarMemories(telegramUserId, queryVec);
+            memoryRecallSource = memories.length > 0 ? "vector" : "none";
           } else {
+            memories = await chatDatabaseService.searchMemories(telegramUserId, query);
+            memoryRecallSource = memories.length > 0 ? "lexical" : "none";
+          }
+
+          const historicalCandidates = await chatDatabaseService.searchHistoricalDialogue(telegramUserId, query, conversationId, 3);
+          if (historicalCandidates.length > 0) {
             semanticRecall = historicalCandidates.slice(0, 3).map((c) => ({ role: c.role, content: c.content }));
           }
         }

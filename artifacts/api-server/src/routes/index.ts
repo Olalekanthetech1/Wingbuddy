@@ -15,6 +15,7 @@ import mediaStorageRouter from "./media-storage";
 import knowledgeRouter from "./knowledge";
 import userAccessRouter from "./user-access";
 import personasRouter from "./personas";
+import diagnosticsRouter from "./diagnostics";
 
 const router: IRouter = Router();
 
@@ -34,5 +35,6 @@ router.use(mediaStorageRouter);
 router.use(knowledgeRouter);
 router.use(userAccessRouter);
 router.use(personasRouter);
+router.use(diagnosticsRouter);
 
 export default router;

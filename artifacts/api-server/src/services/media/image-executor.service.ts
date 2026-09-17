@@ -38,31 +38,8 @@ function cleanExpandedImagePrompt(text: string, fallback: string): string {
 
 export class ImageExecutor {
   static async enhancePrompt(rawPrompt: string): Promise<{ prompt: string; enhancerModel?: string }> {
+    // Fast-path: Send user prompt directly to avoid expansion latency
     const cleaned = rawPrompt.trim();
-    if (cleaned.length > 250) {
-      return { prompt: cleaned };
-    }
-
-    try {
-      const routed = await adaptiveAIRouterService.route({
-        systemInstruction:
-          "You are an expert prompt artist. Expand this image concept into a rich, detailed visual description specifying artistic style, lighting, composition, and fine textures. Output ONLY the single prompt string in English with no commentary, options, or markdown.",
-        messages: [{ role: "user", content: `Expand into an image prompt: "${cleaned}"` }],
-        temperature: 0.7,
-      });
-
-      const expanded = routed.response?.text?.trim();
-      if (expanded && expanded.length > 10 && !expanded.includes("I cannot")) {
-        const sanitized = cleanExpandedImagePrompt(expanded, cleaned);
-        return {
-          prompt: sanitized,
-          enhancerModel: `${routed.candidate.model.provider}:${routed.candidate.model.modelId}`,
-        };
-      }
-    } catch (err) {
-      logger.warn({ err: String(err) }, "Adaptive prompt enhancement failed; using original prompt");
-    }
-
     return { prompt: cleaned };
   }
 

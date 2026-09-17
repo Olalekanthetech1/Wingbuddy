@@ -136,6 +136,20 @@ export class AIProviderGatewayService {
     }
     throw new Error(`All configured ${providerId} API keys failed for embeddings. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
   }
+
+  async test(providerId: AIProviderId, _modelId?: string): Promise<{ ok: boolean; error?: unknown }> {
+    try {
+      const provider = await aiProviderRegistryService.get(providerId);
+      if (!provider.enabled) return { ok: false, error: new Error(`Provider ${providerId} is disabled`) };
+      const keys = await orderedKeys(provider);
+      if (!keys.length && providerId !== "huggingface") {
+        return { ok: false, error: new Error(`No API key configured for ${providerId}`) };
+      }
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err };
+    }
+  }
 }
 
 export const aiProviderGatewayService = new AIProviderGatewayService();

@@ -43,53 +43,9 @@ function isPublicHttpsUrl(value: unknown): value is string {
 }
 
 export class VideoGenerationService {
-  static async enhanceVideoPrompt(rawPrompt: string, geminiService?: GeminiService): Promise<VideoPromptEnhancementResult> {
+  static async enhanceVideoPrompt(rawPrompt: string, _geminiService?: GeminiService): Promise<VideoPromptEnhancementResult> {
+    // Fast-path: Send user prompt directly without 5-11s director prompt expander delay
     const cleaned = rawPrompt.trim();
-    if (cleaned.length > 280) return { prompt: cleaned };
-
-    const systemInstruction = "You are an expert director and prompt engineer for modern AI video generation models. Expand the user's prompt into a single descriptive video prompt specifying subject, cinematic camera movement, motion dynamics, atmosphere, and lighting. Output ONLY the final video prompt in English. Maximum 50 words. No explanations, no quotes, no markdown.";
-    const promptRequest = `Expand this idea into a cinematic video generation prompt: "${cleaned}"`;
-
-    // 1. Primary path: Unified model registry & adaptive router (routes across Groq, Mistral, Gemini, etc.)
-    try {
-      const routedPromise = adaptiveAIRouterService.route({
-        messages: [
-          { role: "system", content: systemInstruction },
-          { role: "user", content: promptRequest },
-        ],
-        temperature: 0.7,
-        maxTokens: 120,
-      }, { mode: "video_prompt_enhancement" });
-
-      const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Adaptive router video prompt enhancement timeout")), 4500));
-      const routed = await Promise.race([routedPromise, timeoutPromise]);
-      const text = routed.response.text || "";
-      const result = text.replace(/^[“"']+|[”"']+$/g, "").replace(/^Prompt:\s*/i, "").trim();
-      if (result.length > 10) {
-        const enhancerName = routed.candidate.model.name || routed.candidate.model.modelId || routed.candidate.model.provider;
-        logger.info({ originalPrompt: cleaned, enhancedPrompt: result, enhancerName, provider: routed.candidate.model.provider }, "Video prompt enhanced via unified registry routing");
-        return { prompt: result, enhancerName };
-      }
-    } catch (routeErr) {
-      logger.warn({ routeErr: routeErr instanceof Error ? routeErr.message : String(routeErr), originalPrompt: cleaned }, "Adaptive router video prompt enhancement failed; falling back if available");
-    }
-
-    // 2. Secondary fallback: direct Gemini service if provided
-    if (geminiService) {
-      try {
-        const enhancePromise = geminiService.generateReply([], promptRequest, { modeInstruction: systemInstruction }, { thinkingLevel: undefined, enableSearch: false });
-        const timeoutPromise = new Promise<string>((_, reject) => setTimeout(() => reject(new Error("Direct Gemini video prompt enhancement timeout")), 4000));
-        const enhanced = await Promise.race([enhancePromise, timeoutPromise]);
-        const result = enhanced.replace(/^[“"']+|[”"']+$/g, "").replace(/^Prompt:\s*/i, "").trim();
-        if (result.length > 10) {
-          logger.info({ originalPrompt: cleaned, enhancedPrompt: result }, "Video prompt enhanced via secondary Gemini fallback");
-          return { prompt: result, enhancerName: "Google Gemini" };
-        }
-      } catch (geminiErr) {
-        logger.warn({ geminiErr: geminiErr instanceof Error ? geminiErr.message : String(geminiErr), originalPrompt: cleaned }, "Direct Gemini video prompt enhancement fallback failed");
-      }
-    }
-
     return { prompt: cleaned };
   }
 
