@@ -118,11 +118,7 @@ export class RetryEngine {
 
     // Recoverable state? (Timeout/Transient errors on nodes with no side effects)
     if (!error.retryable) {
-      // Replan if the error is due to something that might be fixed by different reasoning
-      if (error.category === "validation" || error.category === "unknown") {
-         return { type: "RECOVER", reason: `Attempting recovery for category "${error.category}".` };
-      }
-      return { type: "ABORT", reason: `Error category "${error.category}" is non-retryable.` };
+      return { type: "ABORT", reason: `Error category "${error.category}" is non-retryable (${error.code || error.message}).` };
     }
 
     // Rule 3: No automatic retries for destructive tools

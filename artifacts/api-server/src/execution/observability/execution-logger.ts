@@ -98,7 +98,7 @@ export class ExecutionObservabilityService {
         executionId: payload.executionId,
         graphId: payload.graphId,
         nodeId: payload.nodeId,
-        eventType: payload.event as any,
+        eventType: payload.event,
         actor: "system",
         metadata: sanitizedDetails as Record<string, unknown> | undefined,
       }).catch(err => {

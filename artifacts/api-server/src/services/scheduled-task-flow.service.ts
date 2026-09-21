@@ -10,6 +10,14 @@ import { chatDatabaseService } from "@workspace/db";
 import { getDefaultGeminiService } from "../gemini/gemini.service";
 import { ReminderService } from "./reminder.service";
 import { timezoneService } from "./timezone.service";
+import { adaptiveAIRouterService } from "./adaptive-ai-router.service";
+import { tavilyService } from "./tavily.service";
+import {
+  getUtcWeekdayName,
+  getUtcWeekdayIndex,
+  computeNextUtcRun,
+  formatDynamicScheduleDescription,
+} from "../utils/cron-date-utils";
 
 function escapeHtml(str: string): string {
   return (str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -175,17 +183,11 @@ export class ScheduledTaskFlowService {
     }
 
     // 2. Weekly patterns
-    const dayMap: Record<string, number> = {
-      sunday: 0,
-      monday: 1,
-      tuesday: 2,
-      wednesday: 3,
-      thursday: 4,
-      friday: 5,
-      saturday: 6,
-    };
+    for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
+      const sampleDate = new Date(Date.UTC(2026, 0, 4 + dayOffset, 12, 0, 0));
+      const dayName = getUtcWeekdayName(sampleDate).toLowerCase();
+      const dayNum = sampleDate.getUTCDay();
 
-    for (const [dayName, dayNum] of Object.entries(dayMap)) {
       if (lower.includes(`every ${dayName}`) || lower.includes(`on ${dayName}`)) {
         let hour = 9; // Default 9 AM
         if (lower.includes("noon") || lower.includes("12 pm")) hour = 12;
@@ -201,9 +203,13 @@ export class ScheduledTaskFlowService {
     }
 
     if (lower.includes("weekly") || lower.includes("every week")) {
+      const now = new Date();
+      const currentDay = now.getUTCDay();
+      const currentHour = now.getUTCHours();
+      const currentDayName = getUtcWeekdayName(now);
       return {
-        cronExpression: "0 9 * * 1", // Monday 9 AM default
-        scheduleDescription: "Every Monday at 09:00 UTC (Weekly)",
+        cronExpression: `0 ${currentHour} * * ${currentDay}`,
+        scheduleDescription: `Every ${currentDayName} at ${String(currentHour).padStart(2, "0")}:00 UTC (Weekly)`,
         cadence: "weekly",
       };
     }
@@ -231,11 +237,12 @@ export class ScheduledTaskFlowService {
       };
     }
 
-    // Default fallback: Weekly on Monday 9 AM
+    // If no recurring cadence is specified in the text, treat as an immediate single execution
     return {
-      cronExpression: "0 9 * * 1",
-      scheduleDescription: "Every Monday at 09:00 UTC (Weekly)",
-      cadence: "weekly",
+      cronExpression: null,
+      scheduleDescription: "Single execution (Immediate / On demand)",
+      cadence: "once",
+      targetDate: new Date(),
     };
   }
 
@@ -455,6 +462,12 @@ export class ScheduledTaskFlowService {
 
     try {
       // 1. Plan & execute with Agent Planner
+      const isResearchTask =
+        metadata.category === "Jobs & Career" ||
+        metadata.category === "News & Research" ||
+        metadata.type === "digest" ||
+        /\b(search|job|opening|news|digest|market|remote|career|find|hire|opportunity|opportunities|growth|sales|operations)\b/i.test(`${task.goal} ${task.title}`);
+
       const planResult = await agentPlannerService.planAndCompile({
         telegramUserId: Number(task.telegramUserId),
         goal: task.goal,
@@ -462,6 +475,10 @@ export class ScheduledTaskFlowService {
         context: {
           activeTask: { id: task.id, title: task.title, goal: task.goal },
           isBackgroundTask: true,
+          isConditionalWatcher: false,
+          mode: isResearchTask ? "research" : undefined,
+          requiresExternalEvidence: isResearchTask,
+          capabilities: isResearchTask ? ["web_research", "search"] : [],
         },
       });
 
@@ -476,6 +493,16 @@ export class ScheduledTaskFlowService {
             telegramUserId: Number(task.telegramUserId),
             chatId: Number(task.telegramUserId),
             conversationId: task.conversationId || undefined,
+            availableCapabilities: [
+              "web_research",
+              "search",
+              "web_search",
+              "memory",
+              "reminders",
+              "tasks",
+              "code_execution",
+              "analytics",
+            ],
           },
         });
 
@@ -508,39 +535,92 @@ export class ScheduledTaskFlowService {
         }
       }
 
-      // Fallback to Gemini if autonomous graph didn't produce string output
+      // Execute live dynamic research and synthesis under Zero-Fallback Policy if graph produced no final text output
       if (!rawOutput) {
+        let liveSearchFindings = "";
+
+        if (isResearchTask && tavilyService.isConfigured()) {
+          try {
+            const queryClean = (task.goal || task.title)
+              .replace(/^(daily|weekly|scheduled)\s+/i, "")
+              .replace(/search and curated report of\s+/i, "")
+              .trim();
+            const searchRes = await tavilyService.search({
+              query: queryClean.slice(0, 300),
+              searchDepth: "advanced",
+              maxResults: 6,
+            });
+            if (searchRes.results && searchRes.results.length > 0) {
+              liveSearchFindings = searchRes.results
+                .map((r, i) => `[Result ${i + 1}]: ${r.title}\nURL: ${r.url}\nPublished: ${r.publishedDate || "Recent"}\nSnippet: ${r.content}`)
+                .join("\n\n");
+            }
+          } catch (tavilyErr) {
+            logger.warn({ error: tavilyErr, taskId: task.id }, "Scheduled task Tavily search attempt failed");
+          }
+        }
+
         const systemPrompt = [
           `You are executing a scheduled standing instruction for the user: "${task.title}".`,
           `Category: ${metadata.category}`,
-          `Format: ${metadata.previewFormat}. Make it high-signal, ranked, with concrete opportunities, actionable takeaways, and direct links where available.`,
-          `Avoid generic filler. Produce top 3-5 structured items.`,
-        ].join("\n");
+          `Format: ${metadata.previewFormat || "Digest"}. Make it high-signal, ranked, with concrete opportunities, actionable takeaways, requirements, and direct application links where available.`,
+          `ZERO-FALLBACK POLICY: Do not output generic filler, boilerplate system checks ("All systems normal"), or simulated responses. Ground all recommendations strictly in the verified live data provided.`,
+          liveSearchFindings ? `\n--- VERIFIED LIVE SEARCH FINDINGS ---\n${liveSearchFindings}\n--- END LIVE FINDINGS ---` : ""
+        ].filter(Boolean).join("\n");
 
+        let generationError: string | null = null;
+        const userPrompt = `${task.goal}\n\nDeliver the ranked, curated report based strictly on the live findings above. Include genuine job titles, company/platform names, key requirements, match rationale, and direct links.`;
+
+        // 1. Try Adaptive AI Router across healthy registered providers
         try {
-          const geminiService = getDefaultGeminiService();
-          rawOutput = await geminiService.generateReply(
-            [],
-            task.goal,
-            { modeInstruction: systemPrompt },
-            { enableSearch: true }
-          );
-        } catch (geminiErr) {
-          logger.warn({ error: geminiErr }, "Default Gemini service not initialized or failed, using fallback summary");
-          rawOutput = `Completed automated check for: <b>${escapeHtml(task.title)}</b>.\n\nInstruction executed: <i>${escapeHtml(metadata.standingInstruction || task.goal)}</i>\n\nNo unexpected anomalies or urgent alerts found. All systems normal.`;
+          const routed = await adaptiveAIRouterService.route({
+            model: "gemini-2.5-flash",
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: userPrompt },
+            ],
+          }, {
+            mode: "research",
+          });
+          if (routed.response?.text && routed.response.text.trim()) {
+            rawOutput = routed.response.text.trim();
+          }
+        } catch (routerErr: any) {
+          logger.warn({ error: routerErr }, "Scheduled task adaptive router attempt failed, trying direct Gemini");
+          generationError = routerErr?.message || String(routerErr);
+        }
+
+        // 2. Try direct Gemini if router failed or returned empty
+        if (!rawOutput) {
+          try {
+            const geminiService = getDefaultGeminiService();
+            rawOutput = await geminiService.generateReply(
+              [],
+              userPrompt,
+              { modeInstruction: systemPrompt },
+              { enableSearch: true }
+            );
+            generationError = null;
+          } catch (geminiErr: any) {
+            logger.warn({ error: geminiErr }, "Scheduled task Gemini execution failed");
+            generationError = geminiErr?.message || generationError || String(geminiErr);
+          }
+        }
+
+        if (!rawOutput) {
+          rawOutput = `⚠️ <b>Automated Task Execution Diagnostic</b>\n\nTask: <b>${escapeHtml(task.title)}</b>\nGoal: <i>${escapeHtml(metadata.standingInstruction || task.goal)}</i>\n\nExecution could not complete due to live provider unavailability: <code>${escapeHtml(generationError || "No active AI provider responded successfully")}</code>. Please verify provider health in the Control Center.`;
         }
       }
 
-      // Calculate next run date if recurring
+      // Calculate next run date dynamically based on system's UTC time
       let nextRunAt: Date | null = null;
-      if (task.isRecurring && task.cronExpression) {
-        try {
-          const interval = parseExpression(task.cronExpression, {
-            currentDate: new Date(),
-            tz: task.timezone || "UTC",
-          });
-          nextRunAt = interval.next().toDate();
-        } catch {}
+      if (task.isRecurring) {
+        nextRunAt = computeNextUtcRun({
+          cronExpression: task.cronExpression,
+          isRecurring: true,
+          timezone: task.timezone || "UTC",
+          baseDate: new Date(),
+        });
       }
 
       // Update task record with persistent run history
@@ -576,7 +656,13 @@ export class ScheduledTaskFlowService {
 
       if (!isDigest) {
         // Triggered Reminder Delivery Card format
-        const scheduleDisplay = metadata.scheduleDescription || "Daily at 9:00 AM";
+        const scheduleDisplay = formatDynamicScheduleDescription({
+          cronExpression: task.cronExpression,
+          isRecurring: task.isRecurring,
+          cadenceDescription: metadata.scheduleDescription,
+          nextRunAt: task.nextRunAt,
+          baseDate: new Date(),
+        });
         const lastRunFormatted = task.lastRunAt
           ? ReminderService.formatUtcTimestamp(new Date(task.lastRunAt))
           : nowUtc;
@@ -596,7 +682,13 @@ export class ScheduledTaskFlowService {
         ].join("\n");
       } else {
         // Triggered Digest Delivery Card format
-        const scheduleDisplay = metadata.scheduleDescription || "Every Monday at 09:00 AM";
+        const scheduleDisplay = formatDynamicScheduleDescription({
+          cronExpression: task.cronExpression,
+          isRecurring: task.isRecurring,
+          cadenceDescription: metadata.scheduleDescription,
+          nextRunAt: task.nextRunAt,
+          baseDate: new Date(),
+        });
 
         formattedMessage = [
           `⏰ <b>Scheduled Run: ${escapeHtml(task.title)}</b>`,
@@ -809,14 +901,13 @@ export class ScheduledTaskFlowService {
       if (!task) return { success: false, error: "Task not found" };
 
       let nextRunAt: Date | null = null;
-      if (task.isRecurring && task.cronExpression) {
-        try {
-          const interval = parseExpression(task.cronExpression, {
-            currentDate: new Date(),
-            tz: task.timezone || "UTC",
-          });
-          nextRunAt = interval.next().toDate();
-        } catch {}
+      if (task.isRecurring) {
+        nextRunAt = computeNextUtcRun({
+          cronExpression: task.cronExpression,
+          isRecurring: true,
+          timezone: task.timezone || "UTC",
+          baseDate: new Date(),
+        });
       }
 
       await prisma.agentTask.update({

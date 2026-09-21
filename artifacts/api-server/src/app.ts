@@ -32,6 +32,12 @@ import { aiObservabilityService } from "./services/ai-observability.service";
 import { proactiveAssistantService } from "./services/proactive-assistant.service";
 import { cronTaskService } from "./services/cron-task.service";
 import { tavilyService } from "./services/tavily.service";
+import { userTierService, type UserTier } from "./services/user-tier.service";
+import { isExecutionEngineEnabled } from "./execution/config";
+
+function escapeHtml(str: string): string {
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
 
 const app: Express = express();
 app.use(
@@ -126,6 +132,8 @@ export const telegramRuntime = {
   async stop() {
     if (realTelegramRuntime) {
       proactiveAssistantService.detachBot(realTelegramRuntime.bot);
+      cronTaskService.detachBot();
+      cronTaskService.stopPolling();
       await realTelegramRuntime.stop();
     }
   },
@@ -218,40 +226,80 @@ app.post("/api/payments/webhook", async (req: Request, res: Response) => {
         return;
       }
 
-      // Check metadata for tier
-      const metaTier = String(sessionMeta.tier || sessionMeta.plan || sessionMeta.targetTier || sessionMeta.tierName || "").toLowerCase();
-      if (metaTier.includes("vip")) {
-        explicitTier = "vip";
-      } else if (metaTier.includes("pro")) {
-        explicitTier = "pro";
+      // Fetch authoritative user access policy and existing subscription state directly from PostgreSQL
+      const [policy, existingUser] = await Promise.all([
+        userTierService.getPolicy(),
+        userTierService.getUser(userId),
+      ]);
+
+      let targetTier: UserTier | undefined;
+
+      // 1. Check metadata explicitly provided by the payment gateway or checkout session
+      const metaTier = String(sessionMeta.tier || sessionMeta.plan || sessionMeta.targetTier || sessionMeta.tierName || "").toLowerCase().trim();
+      if (metaTier === "vip" || metaTier === "pro") {
+        targetTier = metaTier;
       }
 
-      // Check order description or overall payload text for VIP keywords
-      if (!explicitTier) {
-        const rawPayloadStr = JSON.stringify(payload).toLowerCase();
-        if (
-          rawPayloadStr.includes('"vip"') ||
-          rawPayloadStr.includes("vip pass") ||
-          rawPayloadStr.includes("vip tier") ||
-          rawPayloadStr.includes("tier_upgrade_vip") ||
-          rawPayloadStr.includes("vip_tier")
-        ) {
-          explicitTier = "vip";
+      // 2. Check if checkout session reference or order description matches database-configured checkout URLs
+      if (!targetTier) {
+        const orderRef = String(sessionMeta.orderId || sessionMeta.description || "").toLowerCase();
+        for (const [tierKey, config] of Object.entries(policy.tiers) as [UserTier, (typeof policy.tiers)[UserTier]][]) {
+          if (tierKey === "free") continue;
+          if (config.checkoutUrl && orderRef && orderRef.includes(config.checkoutUrl.toLowerCase())) {
+            targetTier = tierKey;
+            break;
+          }
+          if (config.cryptoCheckoutUrl && orderRef && orderRef.includes(config.cryptoCheckoutUrl.toLowerCase())) {
+            targetTier = tierKey;
+            break;
+          }
         }
       }
 
-      // Amount-based evaluation if not explicit
-      let targetTier: "vip" | "pro" = explicitTier || "pro";
-      if (!explicitTier) {
-        const numAmount = Number(amount) || 0;
-        // VIP prices: $24.99 (2499 cents or 24.99 USD) or NGN 15,000+
-        // PRO prices: $9.99 (999 cents or 9.99 USD)
-        if (numAmount >= 2000 && numAmount < 10000) {
-          targetTier = "vip"; // Stripe cents for $20-$99.99
-        } else if (numAmount >= 20 && numAmount < 500) {
-          targetTier = "vip"; // USD units for $20-$499
-        } else if (numAmount >= 15000) {
-          targetTier = "vip"; // High-value fiat denominations (NGN, etc.)
+      // 3. Match payment amount dynamically against live database policy tier pricing (stars or priceLabel)
+      if (!targetTier && amount > 0) {
+        const numAmount = Number(amount);
+        for (const [tierKey, config] of Object.entries(policy.tiers) as [UserTier, (typeof policy.tiers)[UserTier]][]) {
+          if (tierKey === "free") continue;
+
+          // Match configured stars amount in database policy
+          if (config.starsAmount && config.starsAmount > 0 && numAmount === config.starsAmount) {
+            targetTier = tierKey;
+            break;
+          }
+
+          // Match numeric price in database policy priceLabel (e.g., "$9.99 / month" -> 9.99 or 999 cents)
+          if (config.priceLabel) {
+            const priceMatch = config.priceLabel.match(/(\d+(?:\.\d+)?)/);
+            if (priceMatch) {
+              const parsedPrice = parseFloat(priceMatch[1]);
+              const centsPrice = Math.round(parsedPrice * 100);
+              if (numAmount === parsedPrice || numAmount === centsPrice) {
+                targetTier = tierKey;
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      // 4. Resolve against actual user subscription state in the database
+      // If the user already has an active paid subscription tier in the database, treat incoming payment as a renewal/quota recharge
+      if (!targetTier && existingUser?.tier && (existingUser.tier === "vip" || existingUser.tier === "pro")) {
+        targetTier = existingUser.tier;
+      }
+
+      // 5. Enforce Zero-Fallback: do not simulate an arbitrary tier if cannot be authoritatively resolved
+      if (!targetTier) {
+        if (policy.defaultTier && policy.defaultTier !== "free") {
+          targetTier = policy.defaultTier;
+        } else {
+          logger.warn(
+            { userId, sessionMeta, amount, existingUserTier: existingUser?.tier },
+            "Unable to dynamically resolve payment tier from database policy or user subscription state; rejecting simulated tier assignment"
+          );
+          res.json({ received: true, error: "unresolved_payment_tier" });
+          return;
         }
       }
 
@@ -259,20 +307,27 @@ app.post("/api/payments/webhook", async (req: Request, res: Response) => {
       logger.info({ userId, targetTier, updatedUser }, "Successfully applied user tier upgrade and renewed quota via payment webhook");
       
       try {
-        const policy = await userTierService.getPolicy();
         const tierCfg = policy.tiers[targetTier];
-        const tierName = targetTier === "vip" ? "👑 VIP Pass" : "⚡ PRO Pass";
-        const videoLimit = tierCfg?.dailyVideoQuota ?? (targetTier === "vip" ? 10 : 3);
-        const imageLimit = tierCfg?.dailyImageQuota ?? (targetTier === "vip" ? 60 : 20);
+        const tierName = tierCfg?.label || (targetTier === "vip" ? "VIP Pass" : "PRO Pass");
+        const chatQuota = tierCfg?.dailyQuota !== undefined && tierCfg.dailyQuota >= 0
+          ? `${tierCfg.dailyQuota}/day`
+          : "Unlimited";
+        const videoLimit = tierCfg?.dailyVideoQuota !== undefined && tierCfg.dailyVideoQuota >= 0
+          ? `${tierCfg.dailyVideoQuota}/day`
+          : (tierCfg?.allowedFeatures?.videoGen ? "Active" : "Disabled");
+        const imageLimit = tierCfg?.dailyImageQuota !== undefined && tierCfg.dailyImageQuota >= 0
+          ? `${tierCfg.dailyImageQuota}/day`
+          : (tierCfg?.allowedFeatures?.imageGen ? "Active" : "Disabled");
+        const deepReasoningStatus = tierCfg?.allowedFeatures?.deepReasoning ? "Unlocked ✨" : "Standard";
 
         const welcomeMessage = [
-          `🎉 <b>Payment Confirmed! Welcome to ${tierName}!</b>`,
+          `🎉 <b>Payment Confirmed! Welcome to ${escapeHtml(tierName)}!</b>`,
           "",
           `Your daily quotas and capabilities have been immediately activated:`,
-          `• <b>Chat Messages:</b> ${tierCfg?.dailyQuota ?? 500}/day`,
-          `• <b>Authentic Video Generation:</b> ${videoLimit}/day`,
-          `• <b>High-Resolution Image Generation:</b> ${imageLimit}/day`,
-          `• <b>Deep Reasoning & Research:</b> Unlocked ✨`,
+          `• <b>Chat Messages:</b> ${chatQuota}`,
+          `• <b>Authentic Video Generation:</b> ${videoLimit}`,
+          `• <b>High-Resolution Image Generation:</b> ${imageLimit}`,
+          `• <b>Deep Reasoning & Research:</b> ${deepReasoningStatus}`,
           "",
           `Try /video or /image now to test your new capabilities, or /tier to view your renewed quota balance!`,
         ].join("\n");
@@ -327,8 +382,9 @@ app.get("/api/dashboard/runtime", async (_req: Request, res: Response) => {
     observability: aiObservabilityService.snapshot(),
     webResearchProvider: tavilyService.isConfigured() ? "Tavily" : (process.env.TAVILY_API_KEY?.trim() ? "Tavily" : ""),
     webResearchConfigured: tavilyService.isConfigured(),
-    executionEngineEnabled: String(process.env.EXECUTION_ENGINE_ENABLED ?? "").toLowerCase() === "true",
+    executionEngineEnabled: isExecutionEngineEnabled(),
     telegramRuntimeActive: Boolean(realTelegramRuntime),
+    cronSchedulerActive: cronTaskService.isPollingActive(),
     keyPool: apiKeyPoolService.getSummary(),
   });
 });

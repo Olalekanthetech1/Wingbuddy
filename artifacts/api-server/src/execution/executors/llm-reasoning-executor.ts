@@ -63,9 +63,9 @@ export class LlmReasoningExecutor implements INodeExecutor {
           } catch (routerErr: any) {
             logger.warn(
               { nodeId: node.id, error: routerErr?.message },
-              "LLM reasoning node fallback to deterministic synthesis",
+              "LLM reasoning node failed across all providers",
             );
-            reasoningText = `Reasoning completed for: ${node.title}.\nAnalysis: Evaluated input bindings and executed deterministic synthesis.\nOutput Summary: ${JSON.stringify(resolvedInputs)}`;
+            throw new Error(`LLM reasoning execution failed for step "${node.title || node.id}": ${routerErr?.message || String(routerErr)}`);
           }
 
           return {

@@ -12,17 +12,17 @@ vi.mock("@prisma/client", () => {
 
 import { CronTaskService } from "../src/services/cron-task.service";
 import { agentPlannerService } from "../src/planner/agent-planner.service";
-import { executionEngine } from "../src/planner/execution-engine.service";
+import { executionEngine } from "../src/execution/execution-engine";
 
 vi.mock("../src/planner/agent-planner.service", () => ({
   agentPlannerService: { planAndCompile: vi.fn() }
 }));
 
-vi.mock("../src/planner/execution-engine.service", () => ({
+vi.mock("../src/execution/execution-engine", () => ({
   executionEngine: { startExecution: vi.fn() }
 }));
 
-vi.mock("../src/planner/execution-persistence.service", () => ({
+vi.mock("../src/execution/persistence/execution-persistence.service", () => ({
   executionPersistence: { getCompletedExecutionsForGraph: vi.fn().mockResolvedValue([]) }
 }));
 

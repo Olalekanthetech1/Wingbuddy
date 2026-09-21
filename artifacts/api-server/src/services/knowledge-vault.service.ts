@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import { logger } from "../lib/logger";
 import { unifiedModelRegistryService } from "./unified-model-registry.service";
 import { aiProviderGatewayService } from "./ai-provider-gateway.service";
+import { aiProviderRegistryService } from "./ai-provider-registry.service";
 import { randomBytes } from "crypto";
 
 export interface KnowledgeDocument {
@@ -94,10 +95,16 @@ export class KnowledgeVaultService {
 
   async indexDocumentChunks(docId: string, telegramUserId: string, content: string): Promise<void> {
     const chunks = this.chunkText(content);
-    const models = await unifiedModelRegistryService.list();
-    const embedModel = models.find(m => m.enabled && (m.roles.includes("primary_embedding" as any) || m.roles.includes("embedding"))) || models.find(m => m.enabled && m.capabilities.includes("embedding"));
+    const [models, providers] = await Promise.all([
+      unifiedModelRegistryService.list(),
+      aiProviderRegistryService.list(),
+    ]);
+    const configuredProviderIds = new Set(providers.filter(p => p.enabled && p.configured && p.adapterAvailable).map(p => p.id));
+    const embedModel = models.find(m => m.enabled && configuredProviderIds.has(m.provider) && (m.roles.includes("primary_embedding" as any) || m.roles.includes("embedding"))) ||
+      models.find(m => m.enabled && configuredProviderIds.has(m.provider) && m.capabilities.includes("embedding"));
     if (!embedModel) {
-      throw new Error("No embedding model configured. Please set a primary embedding model in the dashboard.");
+      logger.warn("No configured embedding model with an active API key found. Skipping document chunk indexing.");
+      return;
     }
 
     for (let i = 0; i < chunks.length; i++) {
@@ -163,8 +170,13 @@ export class KnowledgeVaultService {
   }
 
   async searchSimilar(telegramUserId: string, query: string, limit: number = 3): Promise<KnowledgeSearchResult[]> {
-    const models = await unifiedModelRegistryService.list();
-    const embedModel = models.find(m => m.enabled && (m.roles.includes("primary_embedding" as any) || m.roles.includes("embedding"))) || models.find(m => m.enabled && m.capabilities.includes("embedding"));
+    const [models, providers] = await Promise.all([
+      unifiedModelRegistryService.list(),
+      aiProviderRegistryService.list(),
+    ]);
+    const configuredProviderIds = new Set(providers.filter(p => p.enabled && p.configured && p.adapterAvailable).map(p => p.id));
+    const embedModel = models.find(m => m.enabled && configuredProviderIds.has(m.provider) && (m.roles.includes("primary_embedding" as any) || m.roles.includes("embedding"))) ||
+      models.find(m => m.enabled && configuredProviderIds.has(m.provider) && m.capabilities.includes("embedding"));
     
     if (!embedModel) return [];
 

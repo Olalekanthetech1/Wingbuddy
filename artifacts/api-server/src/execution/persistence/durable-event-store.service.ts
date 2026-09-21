@@ -50,49 +50,75 @@ export class DurableEventStoreService {
     const pool = getPool();
     const eventId = `evt_${Date.now()}_${Math.random().toString(36).substring(7)}`;
 
-    const { rows } = await pool.query(
-      `
-      INSERT INTO execution_events (
-        event_id, execution_id, graph_id, plan_revision, node_id, event_type,
-        sequence_number, actor, metadata_json, created_at
-      )
-      VALUES (
-        $1, $2, $3, $4, $5, $6,
-        COALESCE((SELECT MAX(sequence_number) FROM execution_events WHERE execution_id = $2), 0) + 1,
-        $7, $8, NOW()
-      )
-      RETURNING id, event_id, execution_id, graph_id, plan_revision, node_id, event_type, sequence_number, actor, metadata_json, created_at
-      `,
-      [
-        eventId,
-        params.executionId,
-        params.graphId || null,
-        params.planRevision || null,
-        params.nodeId || null,
-        params.eventType,
-        params.actor || "system",
-        sanitizedMeta ? JSON.stringify(sanitizedMeta) : null,
-      ]
-    );
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      let client: any = null;
+      try {
+        client = await pool.connect();
+        await client.query("BEGIN;");
+        // Advisory transaction lock per executionId prevents duplicate sequence calculation races
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1));", [params.executionId]);
 
-    const created = rows[0];
-    logger.debug(
-      { executionId: params.executionId, seq: created.sequence_number, eventType: params.eventType, nodeId: params.nodeId },
-      "Appended execution event"
-    );
+        const { rows } = await client.query(
+          `
+          INSERT INTO execution_events (
+            event_id, execution_id, graph_id, plan_revision, node_id, event_type,
+            sequence_number, actor, metadata_json, created_at
+          )
+          VALUES (
+            $1, $2, $3, $4, $5, $6,
+            COALESCE((SELECT MAX(sequence_number) FROM execution_events WHERE execution_id = $2), 0) + 1,
+            $7, $8, NOW()
+          )
+          RETURNING id, event_id, execution_id, graph_id, plan_revision, node_id, event_type, sequence_number, actor, metadata_json, created_at
+          `,
+          [
+            eventId,
+            params.executionId,
+            params.graphId || null,
+            params.planRevision || null,
+            params.nodeId || null,
+            params.eventType,
+            params.actor || "system",
+            sanitizedMeta ? JSON.stringify(sanitizedMeta) : null,
+          ]
+        );
 
-    return {
-      id: created.id.toString(),
-      executionId: created.execution_id,
-      graphId: created.graph_id || undefined,
-      planRevision: created.plan_revision || undefined,
-      nodeId: created.node_id || undefined,
-      eventType: created.event_type as ExecutionEventType,
-      sequenceNumber: created.sequence_number,
-      actor: created.actor,
-      metadata: created.metadata_json ? JSON.parse(created.metadata_json) : undefined,
-      createdAt: created.created_at.toISOString(),
-    };
+        await client.query("COMMIT;");
+        const created = rows[0];
+        logger.debug(
+          { executionId: params.executionId, seq: created.sequence_number, eventType: params.eventType, nodeId: params.nodeId },
+          "Appended execution event"
+        );
+
+        return {
+          id: created.id.toString(),
+          executionId: created.execution_id,
+          graphId: created.graph_id || undefined,
+          planRevision: created.plan_revision || undefined,
+          nodeId: created.node_id || undefined,
+          eventType: created.event_type as ExecutionEventType,
+          sequenceNumber: created.sequence_number,
+          actor: created.actor,
+          metadata: created.metadata_json ? JSON.parse(created.metadata_json) : undefined,
+          createdAt: created.created_at.toISOString(),
+        };
+      } catch (err) {
+        if (client) {
+          await client.query("ROLLBACK;").catch(() => {});
+        }
+        lastError = err;
+        if (attempt < 2) {
+          await new Promise((res) => setTimeout(res, 50 * (attempt + 1)));
+        }
+      } finally {
+        if (client) {
+          client.release();
+        }
+      }
+    }
+
+    throw lastError;
   }
 
   async getSessionTimeline(executionId: string): Promise<DurableExecutionEvent[]> {

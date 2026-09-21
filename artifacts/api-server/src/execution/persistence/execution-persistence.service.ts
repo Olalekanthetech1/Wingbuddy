@@ -716,13 +716,14 @@ export class ExecutionPersistenceService {
         const pool = getPool();
         await pool.query(
           `INSERT INTO execution_approvals (
-            approval_id, telegram_user_id, graph_id, plan_revision, node_id, status, reason, requested_at, resolved_at, expires_at, resolved_by_user_id
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            approval_id, telegram_user_id, graph_id, plan_revision, node_id, status, reason, requested_at, resolved_at, expires_at, resolved_by_user_id, parameter_hash
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
           ON CONFLICT (approval_id) DO UPDATE SET
             status = $6,
             reason = $7,
             resolved_at = $9,
-            resolved_by_user_id = $11`,
+            resolved_by_user_id = $11,
+            parameter_hash = COALESCE($12, execution_approvals.parameter_hash)`,
           [
             approval.approvalId,
             approval.telegramUserId,
@@ -735,6 +736,7 @@ export class ExecutionPersistenceService {
             approval.resolvedAt ? new Date(approval.resolvedAt) : null,
             approval.expiresAt ? new Date(approval.expiresAt) : null,
             approval.resolvedByUserId ?? null,
+            approval.parameterHash ?? null,
           ],
         );
       } catch (err) {
@@ -759,7 +761,7 @@ export class ExecutionPersistenceService {
       try {
         const pool = getPool();
         const res = await pool.query(
-          `SELECT * FROM execution_approvals
+          `SELECT * FROM execution_approvals 
            WHERE graph_id = $1 AND plan_revision = $2 AND node_id = $3 LIMIT 1`,
           [graphId, planRevision, nodeId],
         );
@@ -777,6 +779,7 @@ export class ExecutionPersistenceService {
             resolvedAt: row.resolved_at ? new Date(row.resolved_at).toISOString() : undefined,
             expiresAt: row.expires_at ? new Date(row.expires_at).toISOString() : undefined,
             resolvedByUserId: row.resolved_by_user_id ? Number(row.resolved_by_user_id) : undefined,
+            parameterHash: row.parameter_hash || undefined,
           };
         }
         return null;

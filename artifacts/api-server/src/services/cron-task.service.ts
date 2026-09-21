@@ -6,6 +6,20 @@ import type { Bot } from "grammy";
 import { chatDatabaseService } from "@workspace/db";
 import { scheduledTaskFlowService } from "./scheduled-task-flow.service";
 import { timezoneService } from "./timezone.service";
+import { agentPlannerService } from "../planner/agent-planner.service";
+import {
+  getUtcWeekdayName,
+  getUtcWeekdayIndex,
+  computeNextUtcRun,
+  formatDynamicScheduleDescription,
+} from "../utils/cron-date-utils";
+
+export {
+  getUtcWeekdayName,
+  getUtcWeekdayIndex,
+  computeNextUtcRun,
+  formatDynamicScheduleDescription,
+};
 
 const prisma = new PrismaClient();
 
@@ -16,10 +30,16 @@ export class CronTaskService {
 
   attachBot(bot: Bot) {
     this.bot = bot;
+    logger.info("CronTaskService bot attached.");
   }
 
   detachBot() {
     this.bot = null;
+    logger.info("CronTaskService bot detached.");
+  }
+
+  isPollingActive(): boolean {
+    return Boolean(this.pollInterval);
   }
 
   startPolling() {
@@ -43,6 +63,10 @@ export class CronTaskService {
 
   async pollTasks() {
     if (this.isPolling) return;
+    if (!this.bot) {
+      logger.debug("CronTaskService: Bot not attached yet, skipping polling tick.");
+      return;
+    }
     this.isPolling = true;
 
     try {
@@ -91,23 +115,108 @@ export class CronTaskService {
         return;
       }
 
-      const result = await scheduledTaskFlowService.executeTask(task.id, { isManualRun: false });
-      const keyboard = scheduledTaskFlowService.taskActionsKeyboard(task);
+      // Check if this task is explicitly a conditional watcher (e.g. "alert if...", "notify if...", watcher category)
+      const isConditionalWatcher =
+        (typeof task.metadataJson === "string" && task.metadataJson.includes('"type":"watcher"')) ||
+        /\b(alert (?:me )?if|notify (?:me )?if|watch for|warn (?:me )?if|only if)\b/i.test(task.goal || "") ||
+        /\b(watcher|price alert|uptime check)\b/i.test(task.title || "");
 
-      await this.bot.api.sendMessage(Number(task.telegramUserId), result.formattedMessage, {
-        parse_mode: "HTML",
-        reply_markup: keyboard,
+      let watcherHandled = false;
+      if (isConditionalWatcher) {
+        try {
+          const planResult = await agentPlannerService.planAndCompile({
+            telegramUserId: Number(task.telegramUserId),
+            goal: task.goal,
+            taskId: task.id,
+            context: {
+              activeTask: { id: task.id, title: task.title, goal: task.goal },
+              isBackgroundTask: true,
+              isConditionalWatcher: true,
+            },
+          });
+
+          if (planResult?.isDirectResponse && planResult.directResponse) {
+            let clean = planResult.directResponse.trim();
+            if (clean.startsWith("```")) {
+              clean = clean.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+            }
+            try {
+              const parsed = JSON.parse(clean);
+              if (parsed && typeof parsed === "object") {
+                if (parsed.action === "silent") {
+                  logger.info({ taskId: task.id, reason: parsed.reason }, "Structured watcher condition evaluated to silent; suppressing telegram message");
+                  watcherHandled = true;
+                } else if (parsed.action === "notify") {
+                  const notifyMsg = parsed.message || planResult.directResponse;
+                  const keyboard = scheduledTaskFlowService.taskActionsKeyboard(task);
+                  await this.bot.api.sendMessage(Number(task.telegramUserId), notifyMsg, {
+                    parse_mode: "HTML",
+                    reply_markup: keyboard,
+                  });
+                  watcherHandled = true;
+                }
+              }
+            } catch {}
+          }
+        } catch (planErr) {
+          logger.debug({ error: planErr, taskId: task.id }, "Structured watcher evaluation skipped or failed, falling back to scheduled task flow");
+        }
+      }
+
+      if (!watcherHandled) {
+        const result = await scheduledTaskFlowService.executeTask(task.id, { isManualRun: false });
+        if (result?.formattedMessage) {
+          const keyboard = scheduledTaskFlowService.taskActionsKeyboard(task);
+          await this.bot.api.sendMessage(Number(task.telegramUserId), result.formattedMessage, {
+            parse_mode: "HTML",
+            reply_markup: keyboard,
+          });
+
+          if (task.conversationId) {
+            await chatDatabaseService.addMessage({
+              conversationId: task.conversationId,
+              senderType: "model",
+              content: result.formattedMessage,
+            });
+          }
+        }
+      }
+
+      // Calculate next run date dynamically based on system UTC time
+      const nextRunAt = computeNextUtcRun({
+        cronExpression: task.cronExpression,
+        isRecurring: task.isRecurring,
+        timezone: task.timezone || "UTC",
+        baseDate: new Date(),
       });
 
-      if (task.conversationId) {
-        await chatDatabaseService.addMessage({
-          conversationId: task.conversationId,
-          senderType: "model",
-          content: result.formattedMessage,
-        });
-      }
+      await prisma.agentTask.update({
+        where: { id: task.id },
+        data: {
+          lastRunAt: new Date(),
+          nextRunAt: task.isRecurring ? nextRunAt : null,
+          status: task.isRecurring ? "pending" : "completed",
+        },
+      }).catch((updateErr) => {
+        logger.warn({ error: updateErr, taskId: task.id }, "Failed to update task execution state in DB");
+      });
     } catch (err) {
       logger.error({ taskId: task.id, error: err }, "Error executing scheduled task");
+      // Advance nextRunAt on error so it does not retry every 60 seconds endlessly
+      const safeNext = computeNextUtcRun({
+        cronExpression: task.cronExpression,
+        isRecurring: task.isRecurring,
+        timezone: task.timezone || "UTC",
+        baseDate: new Date(Date.now() + 300_000), // at least 5 minutes out in UTC
+      });
+      await prisma.agentTask.update({
+        where: { id: task.id },
+        data: {
+          lastRunAt: new Date(),
+          nextRunAt: task.isRecurring ? safeNext : null,
+          status: task.isRecurring ? "pending" : "failed",
+        },
+      }).catch(() => {});
     }
   }
 
@@ -121,14 +230,14 @@ export class CronTaskService {
     timezone?: string;
   }) {
     const tz = params.timezone || (await timezoneService.getUserTimezone(params.telegramUserId));
-    let nextRunAt: Date | null = null;
-    try {
-      const interval = parseExpression(params.cronExpression, {
-        currentDate: new Date(),
-        tz,
-      });
-      nextRunAt = interval.next().toDate();
-    } catch (e) {
+    const nextRunAt = computeNextUtcRun({
+      cronExpression: params.cronExpression,
+      isRecurring: true,
+      timezone: tz,
+      baseDate: new Date(),
+    });
+
+    if (!nextRunAt) {
       throw new Error(`Invalid cron expression: ${params.cronExpression}`);
     }
 

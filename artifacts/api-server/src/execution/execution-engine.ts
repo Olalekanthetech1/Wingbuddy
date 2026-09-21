@@ -380,7 +380,7 @@ export class ExecutionEngine {
           const toolName = node.type === "tool_call" ? node.actionSpec?.toolName : undefined;
 
           // Check concurrency capacity
-          const capacity = concurrencyController.canExecute({
+          const capacity = await concurrencyController.canExecuteAsync({
             telegramUserId: context.telegramUserId,
             graphId: graph.graphId,
             toolName,
@@ -525,6 +525,7 @@ export class ExecutionEngine {
 
       // 1. Resolve Input Bindings
       let resolvedInputs: Record<string, unknown> = {};
+      let nodeResult: NodeResult;
       try {
         resolvedInputs = bindingResolver.resolveNodeInputs(
           node,
@@ -533,47 +534,32 @@ export class ExecutionEngine {
           context,
           ancestorIds,
         );
-      } catch (bindErr: any) {
-        // Non-retryable validation error
-        const error: ExecutionError = {
-          code: "BINDING_RESOLUTION_FAILED",
-          message: bindErr.message || String(bindErr),
-          retryable: false,
-          category: "validation",
-        };
 
-        await executionPersistence.recordNodeExecution({
-          executionId: session.executionId,
+        // 2. Select Specialized Executor
+        const executor = this.getExecutorForNode(node);
+
+        // 3. Execute
+        nodeResult = await executor.execute({
+          node,
           graphId: graph.graphId,
           planRevision: graph.planRevision,
-          nodeId: node.id,
+          executionId: session.executionId,
           attempt,
-          idempotencyKey,
-          status: "failed",
-          error,
-          isRetryable: false,
-          startedAt: new Date().toISOString(),
-          completedAt: new Date().toISOString(),
+          resolvedInputs,
+          executionContext: context,
+          signal,
         });
-        await executionPersistence.releaseLease(leaseKey);
-        state.failedNodeIds.add(node.id);
-        return;
+      } catch (bindErr: any) {
+        nodeResult = {
+          success: false,
+          error: {
+            code: "BINDING_RESOLUTION_FAILED",
+            message: bindErr.message || String(bindErr),
+            retryable: false,
+            category: "validation",
+          },
+        };
       }
-
-      // 2. Select Specialized Executor
-      const executor = this.getExecutorForNode(node);
-
-      // 3. Execute
-      const nodeResult = await executor.execute({
-        node,
-        graphId: graph.graphId,
-        planRevision: graph.planRevision,
-        executionId: session.executionId,
-        attempt,
-        resolvedInputs,
-        executionContext: context,
-        signal,
-      });
 
       // 4. Verification Stage
       if (nodeResult.success) {
@@ -1035,18 +1021,25 @@ export class ExecutionEngine {
       throw new Error(`Execution session is not waiting for approval (current status: "${session.status}").`);
     }
 
+    const existingApproval = await executionPersistence.getApproval(
+      submission.graphId,
+      submission.planRevision,
+      submission.nodeId,
+    );
+
     const now = new Date().toISOString();
     await executionPersistence.upsertApproval({
-      approvalId: `app_${submission.graphId}_r${submission.planRevision}_${submission.nodeId}`,
+      approvalId: existingApproval?.approvalId || `app_${submission.graphId}_r${submission.planRevision}_${submission.nodeId}`,
       telegramUserId: submission.telegramUserId,
       graphId: submission.graphId,
       planRevision: submission.planRevision,
       nodeId: submission.nodeId,
       status: submission.approved ? "approved" : "denied",
       reason: submission.reason || (submission.approved ? "Approved by user" : "Denied by user"),
-      requestedAt: now,
+      requestedAt: existingApproval?.requestedAt || now,
       resolvedAt: now,
       resolvedByUserId: submission.telegramUserId,
+      parameterHash: existingApproval?.parameterHash,
     });
 
     // If approved, resume the execution session
@@ -1122,6 +1115,13 @@ export class ExecutionEngine {
     }
 
     let session = await executionPersistence.getSessionForGraph(params.graphId, params.planRevision);
+    if (session) {
+      if (session.status === "executing" && this.abortControllers.has(session.executionId)) {
+        throw new Error(
+          `Cannot step graph "${params.graphId}": session ${session.executionId} is actively running in an execution loop.`,
+        );
+      }
+    }
     if (!session) {
       session = {
         executionId: params.executionId || `exec_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -1191,15 +1191,20 @@ export class ExecutionEngine {
     await executionPersistence.saveExecutionSession(session);
 
     const abortController = new AbortController();
-    await this.executeNode(
-      nodeToExecute,
-      graph,
-      session,
-      context,
-      completedResults,
-      state,
-      abortController.signal,
-    );
+    this.abortControllers.set(session.executionId, abortController);
+    try {
+      await this.executeNode(
+        nodeToExecute,
+        graph,
+        session,
+        context,
+        completedResults,
+        state,
+        abortController.signal,
+      );
+    } finally {
+      this.abortControllers.delete(session.executionId);
+    }
 
     session.completedNodes = Array.from(state.completedNodeIds);
     session.failedNodes = Array.from(state.failedNodeIds);
@@ -1257,6 +1262,13 @@ export class ExecutionEngine {
     }
 
     let session = await executionPersistence.getSessionForGraph(params.graphId, params.planRevision);
+    if (session) {
+      if (session.status === "executing" && this.abortControllers.has(session.executionId)) {
+        throw new Error(
+          `Cannot rerun node "${params.nodeId}" in graph "${params.graphId}": session ${session.executionId} is actively running in an execution loop.`,
+        );
+      }
+    }
     if (!session) {
       session = {
         executionId: `exec_rerun_${Date.now()}`,
@@ -1310,7 +1322,12 @@ export class ExecutionEngine {
     };
 
     const abortController = new AbortController();
-    await this.executeNode(node, graph, session, context, completedResults, state, abortController.signal);
+    this.abortControllers.set(session.executionId, abortController);
+    try {
+      await this.executeNode(node, graph, session, context, completedResults, state, abortController.signal);
+    } finally {
+      this.abortControllers.delete(session.executionId);
+    }
 
     session.completedNodes = Array.from(state.completedNodeIds);
     session.failedNodes = Array.from(state.failedNodeIds);

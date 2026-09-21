@@ -244,7 +244,14 @@ export class UnifiedModelRegistryService {
   private async syncLegacyGemini(models: UnifiedModelRecord[]): Promise<void> {
     const gemini = models.filter((model) => model.provider === "gemini");
     await db.insert(systemSettingsTable).values({ key: LEGACY_GEMINI_KEY, value: JSON.stringify(gemini), updatedAt: new Date() }).onConflictDoUpdate({ target: systemSettingsTable.key, set: { value: JSON.stringify(gemini), updatedAt: new Date() } });
-    const executable = gemini.filter((model) => model.enabled && !model.roles.includes("embedding"));
+    const executable = gemini.filter((model) => {
+      if (!model.enabled) return false;
+      if (model.roles.includes("embedding") || model.roles.includes("primary_embedding" as any)) return false;
+      if (model.roles.includes("primary_video") || model.roles.includes("primary_image")) return false;
+      const lower = model.modelId.toLowerCase();
+      if (lower.includes("embedding") || lower.includes("veo") || lower.includes("imagen")) return false;
+      return true;
+    });
     const preferred = executable.find((model) => model.roles.includes("primary"));
     process.env.GEMINI_MODEL = preferred?.modelId || executable[0]?.modelId || "";
     process.env.GEMINI_MODEL_POOL = executable.map((model) => model.modelId).join(",");
@@ -252,7 +259,7 @@ export class UnifiedModelRegistryService {
     process.env.GEMINI_MODEL_FAST = executable.find((model) => model.roles.includes("fast"))?.modelId || "";
     process.env.GEMINI_MODEL_REASONING = executable.find((model) => model.roles.includes("reasoning"))?.modelId || "";
     process.env.GEMINI_MODEL_EXTRACTION = executable.find((model) => model.roles.includes("extraction"))?.modelId || "";
-    process.env.GEMINI_EMBEDDING_MODEL = gemini.find((model) => model.enabled && model.roles.includes("embedding"))?.modelId || "";
+    process.env.GEMINI_EMBEDDING_MODEL = gemini.find((model) => model.enabled && (model.roles.includes("embedding") || model.capabilities.includes("embedding")))?.modelId || "";
   }
 
   private async persist(models: UnifiedModelRecord[]): Promise<void> { const normalized = this.enforce(models); await db.insert(systemSettingsTable).values({ key: REGISTRY_KEY, value: JSON.stringify(normalized), updatedAt: new Date() }).onConflictDoUpdate({ target: systemSettingsTable.key, set: { value: JSON.stringify(normalized), updatedAt: new Date() } }); await this.syncLegacyGemini(normalized); this.cache = normalized; this.cacheAt = Date.now(); }

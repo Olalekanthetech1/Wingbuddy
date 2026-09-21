@@ -33,6 +33,13 @@ const TABLE = "user_timezones";
  */
 export class TimezoneService {
   /**
+   * Returns the system configured default timezone.
+   */
+  configuredDefaultTimezone(): string {
+    return process.env.DEFAULT_TIMEZONE?.trim() || SYSTEM_DEFAULT_TIMEZONE;
+  }
+
+  /**
    * Validates whether a given timezone string is a recognized IANA timezone identifier.
    */
   isValidTimezone(timezone: unknown): boolean {

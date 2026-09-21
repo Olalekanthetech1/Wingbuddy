@@ -68,7 +68,8 @@ export interface PlannerUserContext {
   mediaPresent?: boolean;
   requiresExternalEvidence?: boolean;
   isBackgroundTask?: boolean;
+  isConditionalWatcher?: boolean;
 }
 export interface PlannerRequest { requestId: string; telegramUserId: number; goal: string; context?: PlannerUserContext; toolRegistry?: ToolRegistry; taskId?: number; graphId?: string; plannerModel?: string; }
 export interface ReplannerRequest { requestId: string; telegramUserId: number; previousGraphId: string; previousRevision: number; replanReason: string; failedNodeId?: string; context?: PlannerUserContext; toolRegistry?: ToolRegistry; taskId?: number; plannerModel?: string; }
-export interface PlannerResult { success: boolean; graph?: ExecutionGraph; errorCode?: PlannerErrorCode; errorMessage?: string; diagnostics: ValidationDiagnostic[]; isDirectResponse?: boolean; }
+export interface PlannerResult { success: boolean; graph?: ExecutionGraph; errorCode?: PlannerErrorCode; errorMessage?: string; diagnostics: ValidationDiagnostic[]; isDirectResponse?: boolean; directResponse?: string; }

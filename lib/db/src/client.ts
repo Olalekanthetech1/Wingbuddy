@@ -320,11 +320,30 @@ export async function ensureDatabaseSchema(pgPool?: pg.Pool): Promise<void> {
       requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       resolved_at TIMESTAMPTZ,
       expires_at TIMESTAMPTZ,
-      resolved_by_user_id BIGINT
+      resolved_by_user_id BIGINT,
+      parameter_hash TEXT
     );
+    ALTER TABLE execution_approvals ADD COLUMN IF NOT EXISTS parameter_hash TEXT;
     CREATE INDEX IF NOT EXISTS execution_approvals_user_idx ON execution_approvals(telegram_user_id);
     CREATE INDEX IF NOT EXISTS execution_approvals_graph_node_idx ON execution_approvals(graph_id, plan_revision, node_id);
     CREATE INDEX IF NOT EXISTS execution_approvals_status_idx ON execution_approvals(status);
+
+    CREATE TABLE IF NOT EXISTS execution_events (
+      id SERIAL PRIMARY KEY,
+      event_id TEXT NOT NULL UNIQUE,
+      execution_id TEXT NOT NULL,
+      graph_id TEXT,
+      plan_revision INTEGER,
+      node_id TEXT,
+      event_type TEXT NOT NULL,
+      sequence_number INTEGER NOT NULL,
+      actor TEXT NOT NULL DEFAULT 'system',
+      metadata_json TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS execution_events_event_id_idx ON execution_events(event_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS execution_events_seq_uq ON execution_events(execution_id, sequence_number);
+    CREATE INDEX IF NOT EXISTS execution_events_seq_idx ON execution_events(execution_id, sequence_number);
 
     CREATE TABLE IF NOT EXISTS user_timezones (
       id SERIAL PRIMARY KEY,

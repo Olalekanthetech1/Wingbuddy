@@ -7,6 +7,16 @@ import { InlineKeyboard, type Bot } from "grammy";
 import cronParser from "cron-parser";
 const { parseExpression } = cronParser;
 import { timezoneService } from "./timezone.service";
+import { getUtcWeekdayIndex } from "../utils/cron-date-utils";
+
+function getUtcWeekdayRegexPattern(): string {
+  const names: string[] = [];
+  for (let i = 0; i < 7; i++) {
+    const sampleDate = new Date(Date.UTC(2026, 0, 4 + i, 12, 0, 0));
+    names.push(new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" }).format(sampleDate).toLowerCase());
+  }
+  return names.join("|");
+}
 
 function escapeHtml(text: string): string {
   return text
@@ -165,7 +175,8 @@ export class ReminderService {
       const embeddedMatch = trimmed.match(/\bremind\s+me\s+/i);
       if (!embeddedMatch) {
         // Also check if text begins with "every day at ..." or "daily at ..."
-        const directRecurringMatch = trimmed.match(/^(?:every\s+day|daily|every\s+morning|every\s+weekday|every\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday))\s+at\s+/i);
+        const weekdaysPattern = getUtcWeekdayRegexPattern();
+        const directRecurringMatch = trimmed.match(new RegExp(`^(?:every\\s+day|daily|every\\s+morning|every\\s+weekday|every\\s+(?:${weekdaysPattern}))\\s+at\\s+`, "i"));
         if (!directRecurringMatch) return null;
       }
     }
@@ -290,12 +301,13 @@ export class ReminderService {
     }
 
     // Pattern R3: "every [day of week] at 9am [task]"
+    const weekdaysPattern = getUtcWeekdayRegexPattern();
     const dayOfWeekMatch =
       body.match(
-        /^(?:every\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+)(\d{1,2})(?::(\d{2}))?\s*(am|pm)?(?:\s+(?:to\s+|about\s+|that\s+)?(.*))?$/i,
+        new RegExp(`^(?:every\\s+(${weekdaysPattern})\\s+at\\s+)(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)?(?:\\s+(?:to\\s+|about\\s+|that\\s+)?(.*))?$`, "i"),
       ) ||
       body.match(
-        /^(.*?)\s+(?:every\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+)(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i,
+        new RegExp(`^(.*?)\\s+(?:every\\s+(${weekdaysPattern})\\s+at\\s+)(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)?$`, "i"),
       );
 
     if (dayOfWeekMatch) {
@@ -311,16 +323,7 @@ export class ReminderService {
       if (meridiem === "pm" && hour < 12) hour += 12;
       if (meridiem === "am" && hour === 12) hour = 0;
 
-      const dayMap: Record<string, number> = {
-        sunday: 0,
-        monday: 1,
-        tuesday: 2,
-        wednesday: 3,
-        thursday: 4,
-        friday: 5,
-        saturday: 6,
-      };
-      const dayNum = dayMap[dayName] ?? 1;
+      const dayNum = getUtcWeekdayIndex(dayName) ?? 1;
 
       const cronExpression = `${rawMin} ${hour} * * ${dayNum}`;
       let dueAt = new Date(now);

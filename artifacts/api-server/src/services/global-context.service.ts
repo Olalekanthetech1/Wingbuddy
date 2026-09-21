@@ -151,7 +151,7 @@ export class GlobalContextService {
     const modeConfig = MODES[mode] || MODES.general;
     const fullName = [userProfile?.firstName, userProfile?.lastName].filter(Boolean).join(" ").trim();
     const displayName = fullName || userProfile?.username || undefined;
-    const temporalContext = TemporalContextService.resolve();
+    const temporalContext = await TemporalContextService.resolveForUser(telegramUserId);
 
     const promptInstructionBase = chatDatabaseService.formatGlobalContextForPrompt({
       userName: displayName,

@@ -540,7 +540,17 @@ class HuggingFaceAdapter implements AIProviderAdapter {
   }
 }
 
-class GroqAdapter extends OpenAICompatibleAdapter { readonly providerId = "groq" as const; protected completionPath = "/chat/completions"; }
+class GroqAdapter extends OpenAICompatibleAdapter {
+  readonly providerId = "groq" as const;
+  protected completionPath = "/chat/completions";
+  override async chat(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIChatResponse> {
+    const cappedRequest: AIChatRequest = {
+      ...request,
+      maxOutputTokens: request.maxOutputTokens ? Math.min(request.maxOutputTokens, 800) : 800,
+    };
+    return super.chat(cappedRequest, provider, apiKey);
+  }
+}
 class MistralAdapter extends OpenAICompatibleAdapter { readonly providerId = "mistral" as const; protected completionPath = "/v1/chat/completions"; protected modelPath = "/v1/models"; protected embeddingPath = "/v1/embeddings"; }
 
 class ElevenLabsAdapter implements AIProviderAdapter {

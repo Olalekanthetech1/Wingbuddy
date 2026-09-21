@@ -12,6 +12,15 @@ function parseModels(value?: string): string[] {
     .filter(Boolean);
 }
 
+function isExecutableChatModel(model: string): boolean {
+  if (!model) return false;
+  const m = model.toLowerCase();
+  // Filter out embedding models, video generation models (veo), image models, etc.
+  if (m.includes("embedding") || m.includes("embed")) return false;
+  if (m.includes("veo") || m.includes("imagen") || m.includes("image-preview")) return false;
+  return true;
+}
+
 function unique(models: string[]): string[] {
   return [...new Set(models)];
 }
@@ -50,7 +59,7 @@ export class GeminiModelPoolService {
       primary,
       ...globalPool,
       ...configuredFallbacks,
-    ].filter((model): model is string => Boolean(model)));
+    ].filter((model): model is string => Boolean(model) && isExecutableChatModel(model)));
   }
 }
 

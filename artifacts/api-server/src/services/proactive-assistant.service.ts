@@ -6,6 +6,7 @@ import type { AIChatRequest } from "./ai-provider.types";
 import { logger } from "../lib/logger";
 import type { Bot } from "grammy";
 import { timezoneService } from "./timezone.service";
+import { TemporalContextService } from "./temporal-context.service";
 
 export type ProactivePeriod = "morning" | "evening";
 
@@ -373,8 +374,10 @@ export class ProactiveAssistantService {
   private async generateMessage(target: ProactiveTarget, period: ProactivePeriod): Promise<string> {
     const config = await this.getConfig();
     const timeOfDay = period === "morning" ? "morning" : "evening";
+    const temporalContext = await TemporalContextService.resolveForUser(target.telegramUserId);
 
     const contextBlocks: string[] = [
+      TemporalContextService.buildPromptInstruction(temporalContext),
       `User Name: ${target.firstName}`,
       `Preferred Persona/Vibe: ${target.personality}`,
       `Current Assistant Mode: ${target.mode}`,
@@ -415,6 +418,7 @@ export class ProactiveAssistantService {
       "3. An engaging, low-friction check-in question or actionable suggestion to kick off the day or wind down smoothly.",
       "",
       "STRICT RULES:",
+      `- STRICT TEMPORAL ACCURACY: Today is ${temporalContext.dayOfWeek}, ${temporalContext.localDate} (${temporalContext.timeOfDay} local time in ${temporalContext.timezone}). Always use this exact live temporal context if referencing the day of the week. NEVER guess, assume, or state an incorrect day of the week (e.g. NEVER call a ${temporalContext.dayOfWeek} 'Thursday').`,
       "- NEVER output a single-line or isolated greeting (e.g. NEVER just 'Good morning, [Name]'. It must always be a complete, engaging 2-4 sentence check-in).",
       "- Do NOT invent false facts or assume events that are not in the context.",
       "- Do NOT mention being an AI, a bot, or an automated campaign.",

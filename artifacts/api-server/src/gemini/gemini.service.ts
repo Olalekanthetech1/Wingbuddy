@@ -149,6 +149,24 @@ export class GeminiService {
       }
       if (keyInfo && lastError) this.pool.recordError(keyInfo.id, lastError);
     }
+
+    if (!this.customClient && (!options?.attachments?.length && !options?.hasAudio)) {
+      try {
+        logger.warn({ lastError: safeErrorMetadata(lastError) }, "Native Gemini candidate pool exhausted; dynamically failing over to adaptive multi-provider route");
+        const routed = await adaptiveAIRouterService.route(this.adaptiveRequest(history, message, guidance, options), {
+          mode: options?.mode,
+          isDeepReasoning: options?.isDeepReasoning,
+          isExtraction: options?.isExtraction,
+          userTier: options?.userTier,
+          userCustomModelOverride: options?.userCustomModelOverride,
+          personaPreferredModel: options?.personaPreferredModel,
+        });
+        if (routed.response.text.trim()) return routed.response.text.trim();
+      } catch (failoverErr) {
+        logger.warn({ error: safeErrorMetadata(failoverErr) }, "Cross-provider failover also failed after Gemini pool exhaustion in generateReply");
+      }
+    }
+
     if (lastError instanceof GeminiError) throw lastError;
     throw new GeminiServiceError("No configured Gemini model candidate could complete the request.", lastError);
   }
@@ -203,6 +221,33 @@ export class GeminiService {
       }
       if (keyInfo && lastError) this.pool.recordError(keyInfo.id, lastError);
     }
+
+    // Dynamic failover: If native Gemini was preferred (e.g. for search) but all Gemini keys/models were exhausted by quota or rate limits,
+    // seamlessly fail over to the active multi-provider router (Groq, etc.) so the user still gets a fast, high-quality answer.
+    if (!this.customClient && (!options?.attachments?.length && !options?.hasAudio)) {
+      logger.warn({ lastError: safeErrorMetadata(lastError) }, "Native Gemini candidate pool exhausted; dynamically failing over to adaptive multi-provider stream");
+      const request = this.adaptiveRequest(history, message, guidance, options);
+      let accumulated = "";
+      try {
+        for await (const chunk of adaptiveAIRouterService.routeStream(request, {
+          mode: options?.mode,
+          isDeepReasoning: options?.isDeepReasoning,
+          isExtraction: options?.isExtraction,
+          userTier: options?.userTier,
+          userCustomModelOverride: options?.userCustomModelOverride,
+          personaPreferredModel: options?.personaPreferredModel,
+        })) {
+          if (chunk.delta) {
+            accumulated += chunk.delta;
+            if (onChunk) await onChunk(accumulated);
+          }
+        }
+        if (accumulated.trim()) return accumulated.trim();
+      } catch (failoverErr) {
+        logger.warn({ error: safeErrorMetadata(failoverErr) }, "Cross-provider failover also failed after Gemini pool exhaustion");
+      }
+    }
+
     if (lastError instanceof GeminiError) throw lastError;
     throw new GeminiServiceError("No configured Gemini model candidate could complete the streamed request.", lastError);
   }

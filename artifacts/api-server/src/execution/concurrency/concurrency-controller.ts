@@ -1,3 +1,4 @@
+import { getPool } from "@workspace/db";
 import { getExecutionConfig } from "../config";
 import { executionPersistence } from "../persistence/execution-persistence.service";
 
@@ -20,6 +21,59 @@ export class ConcurrencyController {
       ConcurrencyController.instance = new ConcurrencyController();
     }
     return ConcurrencyController.instance;
+  }
+
+  /**
+   * Synchronizes active concurrency counters with live unexpired leases in PostgreSQL.
+   */
+  async syncFromPersistence(): Promise<void> {
+    if (executionPersistence.isDbAvailable()) {
+      try {
+        const pool = getPool();
+        const { rows } = await pool.query(`
+          SELECT l.graph_id, s.telegram_user_id, count(*)::int as active_count
+          FROM execution_leases l
+          LEFT JOIN execution_sessions s ON s.execution_id = l.execution_id
+          WHERE l.lease_expires_at > NOW()
+          GROUP BY l.graph_id, s.telegram_user_id
+        `);
+        let global = 0;
+        const userMap = new Map<number, number>();
+        const graphMap = new Map<string, number>();
+        for (const row of rows) {
+          const count = Number(row.active_count);
+          global += count;
+          if (row.graph_id) {
+            graphMap.set(row.graph_id, (graphMap.get(row.graph_id) || 0) + count);
+          }
+          if (row.telegram_user_id) {
+            const uid = Number(row.telegram_user_id);
+            userMap.set(uid, (userMap.get(uid) || 0) + count);
+          }
+        }
+        this.activeGlobalCount = Math.max(this.activeGlobalCount, global);
+        for (const [gid, count] of graphMap) {
+          this.activePerGraph.set(gid, Math.max(this.activePerGraph.get(gid) || 0, count));
+        }
+        for (const [uid, count] of userMap) {
+          this.activePerUser.set(uid, Math.max(this.activePerUser.get(uid) || 0, count));
+        }
+      } catch {
+        // Fall back to memory counters if DB query fails
+      }
+    }
+  }
+
+  /**
+   * Evaluates concurrency capacity after synchronizing with persistent leases.
+   */
+  async canExecuteAsync(params: {
+    telegramUserId: number;
+    graphId: string;
+    toolName?: string;
+  }): Promise<ConcurrencyCheckResult> {
+    await this.syncFromPersistence();
+    return this.canExecute(params);
   }
 
   /**

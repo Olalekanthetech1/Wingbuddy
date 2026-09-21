@@ -1,3 +1,4 @@
+import { describe, it, expect } from "vitest";
 import { AdaptiveStartExperienceService } from "./adaptive-start-experience.service";
 
 const service = new AdaptiveStartExperienceService();
@@ -7,35 +8,32 @@ describe("AdaptiveStartExperienceService", () => {
     const text = service.build({
       displayName: "Alex",
       isReturningUser: true,
-      mode: "coding",
-      personality: "focused",
+      mode: "coder",
       activeTaskCount: 1,
       activeReminderCount: 2,
-      activeSessionCount: 3,
-      capabilities: ["Conversation", "Memory", "Autonomous workflows"],
+      recentSessionAvailable: false,
+      timezone: "UTC",
     });
-    expect(text).toContain("Welcome back");
     expect(text).toContain("Alex");
-    expect(text).toContain("Mode:");
-    expect(text).toContain("Personality:");
-    expect(text).toContain("Autonomous workflows");
-    expect(text).toContain("1 active task");
-    expect(text).toContain("2 pending reminders");
+    expect(text).toContain("Coder");
+    expect(text).toContain("1</b> active task");
+    expect(text).toContain("2</b> reminders scheduled");
+    expect(text).toContain("What should we tackle next?");
   });
 
-  it("keeps a neutral fallback when capability metadata is empty", () => {
+  it("handles new user with empty state gracefully", () => {
     const text = service.build({
       displayName: "New user",
       isReturningUser: false,
       mode: "general",
-      personality: "balanced",
       activeTaskCount: 0,
       activeReminderCount: 0,
-      activeSessionCount: 0,
-      capabilities: [],
+      recentSessionAvailable: false,
+      timezone: "UTC",
     });
-    expect(text).toContain("Welcome");
-    expect(text).toContain("Conversation and context-aware assistance");
-    expect(text).toContain("Nothing is waiting on you right now");
+    expect(text).toContain("New user");
+    expect(text).toContain("General Assistant");
+    expect(text).toContain("Nothing urgent is waiting");
+    expect(text).toContain("Let’s get started");
   });
 });

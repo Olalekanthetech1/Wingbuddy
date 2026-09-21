@@ -50,7 +50,7 @@ export class OnboardingService {
         step TEXT NOT NULL,
         proactivity_preference TEXT NOT NULL DEFAULT 'occasional',
         memory_enabled BOOLEAN NOT NULL DEFAULT TRUE,
-        timezone TEXT NOT NULL DEFAULT 'Africa/Lagos',
+        timezone TEXT NOT NULL DEFAULT 'UTC',
         version INTEGER NOT NULL DEFAULT 0,
         active_message_id BIGINT,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -79,7 +79,7 @@ export class OnboardingService {
       step: normalizeStep(row.step),
       proactivityPreference: normalizeProactivity(row.proactivityPreference),
       memoryEnabled: row.memoryEnabled !== false,
-      timezone: typeof row.timezone === "string" && row.timezone ? row.timezone : "Africa/Lagos",
+      timezone: typeof row.timezone === "string" && row.timezone ? row.timezone : timezoneService.configuredDefaultTimezone(),
       version: normalizeVersion(row.version),
       activeMessageId: normalizeMessageId(row.activeMessageId),
       updatedAt: new Date(row.updatedAt).toISOString(),
@@ -105,7 +105,7 @@ export class OnboardingService {
       version: CURRENT_ONBOARDING_VERSION,
       proactivityPreference: existing?.proactivityPreference ?? "occasional",
       memoryEnabled: existing?.memoryEnabled ?? true,
-      timezone: existing?.timezone ?? "Africa/Lagos",
+      timezone: existing?.timezone ?? timezoneService.configuredDefaultTimezone(),
     });
   }
 
@@ -118,7 +118,7 @@ export class OnboardingService {
       activeMessageId: null,
       proactivityPreference: existing?.proactivityPreference ?? "occasional",
       memoryEnabled: existing?.memoryEnabled ?? true,
-      timezone: existing?.timezone ?? "Africa/Lagos",
+      timezone: existing?.timezone ?? timezoneService.configuredDefaultTimezone(),
     });
   }
 
@@ -132,7 +132,7 @@ export class OnboardingService {
     const step = normalizeStep(patch.step ?? current?.step ?? "welcome");
     const preference = normalizeProactivity(patch.proactivityPreference ?? current?.proactivityPreference);
     const memoryEnabled = patch.memoryEnabled ?? current?.memoryEnabled ?? true;
-    const timezone = patch.timezone?.trim() || current?.timezone || "Africa/Lagos";
+    const timezone = patch.timezone?.trim() || current?.timezone || timezoneService.configuredDefaultTimezone();
     const version = normalizeVersion(patch.version ?? current?.version ?? CURRENT_ONBOARDING_VERSION);
     const activeMessageId = patch.activeMessageId !== undefined ? normalizeMessageId(patch.activeMessageId) : current?.activeMessageId ?? null;
 

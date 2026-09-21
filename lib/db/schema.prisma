@@ -332,6 +332,7 @@ model ExecutionApprovalRecord {
   resolvedAt       DateTime? @map("resolved_at")
   expiresAt        DateTime? @map("expires_at")
   resolvedByUserId BigInt?   @map("resolved_by_user_id")
+  parameterHash    String?   @map("parameter_hash")
 
   @@index([telegramUserId], map: "execution_approvals_user_idx")
   @@index([graphId, planRevision, nodeId], map: "execution_approvals_graph_node_idx")

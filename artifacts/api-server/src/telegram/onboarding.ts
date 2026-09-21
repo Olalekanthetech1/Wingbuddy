@@ -5,6 +5,7 @@ import { memoryService } from "../services/memory.service";
 import { taskService } from "../services/task.service";
 import { reminderService } from "../services/reminder.service";
 import { CURRENT_ONBOARDING_VERSION, onboardingService, type OnboardingState, type ProactivityPreference } from "../services/onboarding.service";
+import { timezoneService } from "../services/timezone.service";
 import { adaptiveStartExperienceService } from "./adaptive-start-experience.service";
 import type { ConversationService } from "../services/conversation.service";
 import type { ModeService } from "../services/mode.service";
@@ -130,7 +131,7 @@ async function buildAdaptiveMainMenuText(ctx: Context, deps: OnboardingDependenc
     activeReminderCount: activeReminders.length,
     nextReminderDueAt: nextReminder ? new Date(nextReminder.dueAt) : null,
     recentSessionAvailable: Boolean(recentSummary?.trim()),
-    timezone: state?.timezone || "Africa/Lagos",
+    timezone: state?.timezone || (ctx.from ? await timezoneService.getUserTimezone(ctx.from.id) : timezoneService.configuredDefaultTimezone()),
   });
 }
 
@@ -225,6 +226,7 @@ export function registerOnboardingHandlers(bot: Bot, deps: OnboardingDependencie
     if (!ensure(ctx) || !ctx.from || !ctx.chat) return;
     const timezone = String(ctx.match[1]);
     try { new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(); } catch { await ctx.answerCallbackQuery({ text: "Invalid timezone", show_alert: true }); return; }
+    await timezoneService.setUserTimezone(ctx.from.id, timezone);
     const state = await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "ready", timezone, status: "completed", version: CURRENT_ONBOARDING_VERSION });
     await ctx.answerCallbackQuery({ text: "Setup complete" });
     await sendReadySummary(ctx, deps, state);
@@ -235,7 +237,13 @@ export function registerOnboardingHandlers(bot: Bot, deps: OnboardingDependencie
     const skipped = ctx.match[1];
     const next: Record<string, OnboardingState["step"]> = { personality: "mode", mode: "proactivity", proactivity: "memory", memory: "about_you", timezone: "ready" };
     const nextStep = next[skipped];
-    if (skipped === "timezone") { const state = await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "ready", status: "completed", version: CURRENT_ONBOARDING_VERSION }); await ctx.answerCallbackQuery({ text: "Setup complete" }); await sendReadySummary(ctx, deps, state); return; }
+    if (skipped === "timezone") {
+      const userTz = await timezoneService.getUserTimezone(ctx.from.id);
+      const state = await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "ready", timezone: userTz, status: "completed", version: CURRENT_ONBOARDING_VERSION });
+      await ctx.answerCallbackQuery({ text: "Setup complete" });
+      await sendReadySummary(ctx, deps, state);
+      return;
+    }
     await onboardingService.save(ctx.from.id, ctx.chat.id, { step: nextStep, version: CURRENT_ONBOARDING_VERSION });
     await ctx.answerCallbackQuery({ text: "Skipped" });
     await showStep(ctx, nextStep, true);

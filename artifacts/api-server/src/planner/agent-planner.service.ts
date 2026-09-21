@@ -74,7 +74,7 @@ export class AgentPlannerService {
 
       logger.info({ requestId: request.requestId, graphId, route: autonomyDecision.route, confidence: autonomyDecision.confidence, reasons: autonomyDecision.executionReasons }, "PLAN_AUTONOMY_GATE_COMPLETED");
 
-      if (autonomyDecision.route === "direct" || autonomyDecision.route === "clarify") {
+      if ((autonomyDecision.route === "direct" || autonomyDecision.route === "clarify") && !request.context?.activeTask && !request.taskId && !request.context?.requiresExternalEvidence && !request.context?.isBackgroundTask) {
         return {
           success: true,
           diagnostics: [{ severity: "warning", code: autonomyDecision.route === "direct" ? "DIRECT_CONVERSATION_ROUTE" : "CLARIFICATION_CONVERSATION_ROUTE", message: autonomyDecision.rationale }],
@@ -185,11 +185,16 @@ export class AgentPlannerService {
   }
 
   private async generateDynamicCandidate(request: PlannerRequest, registry: ToolRegistry, reasons: string[], previousGraph?: ExecutionGraph): Promise<CandidatePlan> {
-    const tools = registry.list().map((tool) => ({ name: tool.name, description: tool.description, policy: registry.getPolicy(tool.name) }));
+    const isBackground = Boolean(request.context?.isBackgroundTask || request.context?.activeTask);
+    const tools = registry.list()
+      .filter((tool) => !isBackground || !["create_task", "create_reminder", "snooze_reminder", "complete_reminder"].includes(tool.name))
+      .map((tool) => ({ name: tool.name, description: tool.description, policy: registry.getPolicy(tool.name) }));
     const context = {
       mode: request.context?.mode || "general",
       capabilities: request.context?.capabilities || [],
       activeTask: request.context?.activeTask || null,
+      isBackgroundTask: Boolean(request.context?.isBackgroundTask),
+      isConditionalWatcher: Boolean(request.context?.isConditionalWatcher),
       recentHistory: (request.context?.conversationHistory || []).slice(-10),
       previousGraph: previousGraph ? { graphId: previousGraph.graphId, revision: previousGraph.planRevision, goal: previousGraph.goal, nodes: Object.values(previousGraph.nodes).map((node) => ({ id: node.id, title: node.title, type: node.type, toolName: node.actionSpec?.toolName })) } : null,
     };
@@ -217,11 +222,16 @@ export class AgentPlannerService {
       "- Durable task creation should use create_task with explicit title, goal and ordered steps when persistent task state is requested.",
       "- Reminder scheduling should use create_reminder only when a valid future dueAt can be established; never guess.",
       "- A final reasoning/synthesis node may claim success only from successful upstream tool results.",
-      ...(context?.isBackgroundTask ? [
-        "- BACKGROUND CONDITIONAL WATCHERS: Because this is an autonomous background execution, the final output node (or direct response) MUST output a strictly formatted JSON evaluation of the user's condition.",
+      ...(context?.isConditionalWatcher ? [
+        "- BACKGROUND CONDITIONAL WATCHERS: Because this is an autonomous background conditional watcher, the final output node (or direct response) MUST output a strictly formatted JSON evaluation of the user's condition.",
         "- Your output MUST be a valid JSON object matching this schema: {\"action\": \"notify\" | \"silent\", \"reason\": \"internal reasoning\", \"message\": \"message to send user if notify\"}",
         "- If the condition is MET, set action to 'notify' and provide the 'message'.",
         "- If the condition is NOT MET, set action to 'silent'."
+      ] : context?.isBackgroundTask || context?.activeTask ? [
+        "- SCHEDULED / BACKGROUND TASK EXECUTION: This is an active background execution of a scheduled standing instruction or task.",
+        "- CRITICAL: Do NOT plan task creation tools (create_task, create_reminder). The task is ALREADY created and is running right now.",
+        "- If the goal requires current information, jobs, news, research, or real-world data, plan a tool_call node using registered tools (such as web_search with query keywords) followed by an llm_reasoning node that synthesizes the live results.",
+        "- ZERO-FALLBACK POLICY: Do not output simulated text, generic placeholder checks ('All systems normal'), or direct conversational shortcuts when live tool execution is required."
       ] : []),
       "",
       `Execution reasons: ${JSON.stringify(reasons)}`,
@@ -289,9 +299,10 @@ export class AgentPlannerService {
         }
       }
 
-      if (node.type === "llm_reasoning" && node.actionSpec?.toolName) {
-        const toolName = node.actionSpec.toolName.trim();
-        if (!registry.get(toolName)) {
+      if (node.type === "llm_reasoning" && node.actionSpec) {
+        const toolName = node.actionSpec.toolName?.trim();
+        if (!toolName || !registry.get(toolName)) {
+          node.actionSpec = undefined;
           normalizedNodes.push(node);
           continue;
         }

@@ -319,12 +319,35 @@ export const executionApprovalsTable = pgTable(
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     resolvedByUserId: bigint("resolved_by_user_id", { mode: "number" }),
+    parameterHash: text("parameter_hash"),
   },
   (table) => [
     uniqueIndex("execution_approvals_approval_id_idx").on(table.approvalId),
     index("execution_approvals_user_idx").on(table.telegramUserId),
     index("execution_approvals_graph_node_idx").on(table.graphId, table.planRevision, table.nodeId),
     index("execution_approvals_status_idx").on(table.status),
+  ],
+);
+
+export const executionEventsTable = pgTable(
+  "execution_events",
+  {
+    id: serial("id").primaryKey(),
+    eventId: text("event_id").notNull(),
+    executionId: text("execution_id").notNull(),
+    graphId: text("graph_id"),
+    planRevision: integer("plan_revision"),
+    nodeId: text("node_id"),
+    eventType: text("event_type").notNull(),
+    sequenceNumber: integer("sequence_number").notNull(),
+    actor: text("actor").default("system").notNull(),
+    metadataJson: text("metadata_json"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("execution_events_event_id_idx").on(table.eventId),
+    uniqueIndex("execution_events_seq_uq").on(table.executionId, table.sequenceNumber),
+    index("execution_events_seq_idx").on(table.executionId, table.sequenceNumber),
   ],
 );
 
