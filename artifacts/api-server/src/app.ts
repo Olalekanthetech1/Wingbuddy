@@ -37,6 +37,15 @@ import { cronTaskService } from "./services/cron-task.service";
 import { tavilyService } from "./services/tavily.service";
 import { userTierService, type UserTier } from "./services/user-tier.service";
 import { isExecutionEngineEnabled } from "./execution/config";
+import { authService } from "./services/auth.service";
+import { apiAdminGate } from "./middlewares/auth.middleware";
+
+// Global support for BigInt serialization in JSON.stringify
+if (!(BigInt.prototype as any).toJSON) {
+  (BigInt.prototype as any).toJSON = function (this: bigint) {
+    return this.toString();
+  };
+}
 
 function escapeHtml(str: string): string {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -354,7 +363,7 @@ app.post("/api/payments/webhook", async (req: Request, res: Response) => {
   res.json({ received: true });
 });
 
-app.get("/api/dashboard/runtime", async (_req: Request, res: Response) => {
+app.get("/api/dashboard/runtime", apiAdminGate, async (_req: Request, res: Response) => {
   const [models, providers, routingPolicy, routingHealth] = await Promise.all([
     unifiedModelRegistryService.list(),
     aiProviderRegistryService.list(),
@@ -621,9 +630,117 @@ app.get("/app", (_req: Request, res: Response) => {
   res.type("html").send(renderUserDashboardHtml());
 });
 
+function renderAdminLoginForm(res: Response, errorMsg?: string): void {
+  const html = `
+    <!DOCTYPE html>
+    <html lang="en" class="dark">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Wingbuddy AI | Admin Sign In</title>
+      <script src="https://cdn.tailwindcss.com"></script>
+      <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+      <style>
+        body {
+          font-family: 'Plus Jakarta Sans', sans-serif;
+          background-color: #0b0f19;
+          background-image: radial-gradient(circle at 50% 15%, rgba(14, 165, 233, 0.15) 0%, rgba(15, 23, 42, 0.6) 50%, #0b0f19 80%);
+        }
+      </style>
+    </head>
+    <body class="flex flex-col justify-center items-center min-h-screen p-4 text-white">
+      <div class="max-w-md w-full bg-[#131b2e] border border-[#1e293b] rounded-2xl p-6 sm:p-8 shadow-2xl relative">
+        
+        <!-- Logo -->
+        <div class="flex flex-col items-center mb-6 text-center">
+          <img src="/app-icon.svg" alt="Logo" class="w-12 h-12 rounded-xl mb-3 shadow-lg shadow-sky-500/20" />
+          <h1 class="text-xl font-extrabold tracking-tight">Wingbuddy <span class="text-sky-400">Control Center</span></h1>
+          <p class="text-xs text-slate-400 mt-1">Authorized Administrator Access Only</p>
+        </div>
+
+        <form method="POST" action="/admin" class="space-y-4">
+          <div>
+            <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">Secret Password / Token</label>
+            <input type="password" name="password" required placeholder="Enter server ADMIN_PASSWORD" class="w-full bg-[#0b0f19] border border-[#1e293b] rounded-xl px-4 py-3 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:border-sky-500 transition" />
+          </div>
+
+          ${errorMsg ? `
+            <div class="text-xs text-rose-400 bg-rose-500/10 p-3 rounded-xl border border-rose-500/20 font-semibold leading-relaxed">
+              ⚠️ ${errorMsg}
+            </div>
+          ` : ""}
+
+          <button type="submit" class="w-full px-5 py-3 rounded-xl bg-gradient-to-r from-sky-600 to-indigo-600 hover:opacity-90 text-white font-bold text-sm shadow-lg shadow-sky-600/25 transition active:scale-95 cursor-pointer">
+            Access Dashboard
+          </button>
+        </form>
+
+        <div class="mt-6 pt-5 border-t border-[#1e293b] text-center">
+          <a href="/" class="text-xs text-slate-500 hover:text-slate-300 transition flex items-center justify-center gap-1.5">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+            <span>Back to Public Site</span>
+          </a>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+  res.type("html").send(html);
+}
+
+async function browserAdminGate(req: Request, res: Response, next: any) {
+  try {
+    const adminPassword = process.env.ADMIN_PASSWORD?.trim();
+    if (!adminPassword) {
+      return res.status(500).type("html").send(`
+        <!DOCTYPE html>
+        <html class="dark">
+        <head>
+          <title>Admin Access Blocked</title>
+          <script src="https://cdn.tailwindcss.com"></script>
+        </head>
+        <body class="bg-[#0b0f19] text-white flex items-center justify-center min-h-screen p-4">
+          <div class="max-w-md w-full bg-[#131b2e] border border-red-500/30 rounded-2xl p-6 text-center shadow-xl">
+            <span class="text-4xl">⚠️</span>
+            <h1 class="text-xl font-bold mt-4 mb-2 text-red-400">Admin Password Not Configured</h1>
+            <p class="text-xs text-slate-400 leading-relaxed">
+              The <code>ADMIN_PASSWORD</code> environment variable is missing on the server. Please add it to your environment variables to secure and unlock the Admin Control Center.
+            </p>
+          </div>
+        </body>
+        </html>
+      `);
+    }
+
+    const cookieHeader = req.headers.cookie || "";
+    const tokenMatch = cookieHeader.match(/(?:^|;\s*)wb_admin_token=([^;]+)/);
+    const token = tokenMatch ? decodeURIComponent(tokenMatch[1]) : null;
+
+    if (token && token === adminPassword) {
+      return next();
+    }
+
+    if (req.method === "POST" && req.body?.password) {
+      const submittedPassword = String(req.body.password).trim();
+      if (submittedPassword === adminPassword) {
+        res.setHeader("Set-Cookie", `wb_admin_token=${encodeURIComponent(adminPassword)}; Path=/; Max-Age=2592000; SameSite=Lax; HttpOnly`);
+        return res.redirect("/admin");
+      } else {
+        return renderAdminLoginForm(res, "Invalid secret password or token.");
+      }
+    }
+
+    return renderAdminLoginForm(res);
+  } catch (err) {
+    logger.error({ error: err }, "Error in browserAdminGate");
+    res.status(500).send("Internal server error during admin validation.");
+  }
+}
+
 // Dedicated Admin Control Center
-app.get("/admin", serveDashboard);
-app.get("/dashboard", (_req: Request, res: Response) => {
+app.get("/admin", browserAdminGate, serveDashboard);
+app.post("/admin", browserAdminGate, serveDashboard);
+app.get("/dashboard", browserAdminGate, (_req: Request, res: Response) => {
   res.redirect("/admin");
 });
 

@@ -31,8 +31,8 @@ export class WebChatService {
   /**
    * Resolves the primary ID used for partitioning database tables.
    */
-  public getPartitionUserId(user: AuthenticatedUser): number {
-    return user.telegramUserId || 9000000000 + user.id;
+  public getPartitionUserId(user: AuthenticatedUser): number | bigint {
+    return user.telegramUserId || BigInt(9000000000 + user.id);
   }
 
   /**
@@ -41,7 +41,7 @@ export class WebChatService {
   public async ensurePartitionUser(user: AuthenticatedUser): Promise<number> {
     const partitionId = this.getPartitionUserId(user);
     const pool = getPool();
-    const isAdmin = user.role === "admin" || String(user.email).toLowerCase().includes("olalekan");
+    const isAdmin = user.role === "admin";
     const tier = isAdmin ? "vip" : "free";
     const quota = isAdmin ? 999999 : 50;
 

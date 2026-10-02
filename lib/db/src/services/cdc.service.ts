@@ -5,8 +5,8 @@ import { chatDatabaseService } from "./chat.service";
 export interface ReminderCdcEvent {
   action: "INSERT" | "UPDATE" | "DELETE";
   id: number;
-  telegramUserId: number;
-  chatId: number;
+  telegramUserId: bigint;
+  chatId: bigint;
   isCompleted?: boolean;
   dueAt?: string | Date;
   prompt?: string;
@@ -16,7 +16,7 @@ export interface ReminderCdcEvent {
 export interface UserCdcEvent {
   action: "INSERT" | "UPDATE" | "DELETE";
   id?: number;
-  telegramUserId: number;
+  telegramUserId: bigint;
   personality?: string;
   mode?: string;
   source?: "database_trigger" | "pulse_stream" | "manual_dispatch";
@@ -76,8 +76,8 @@ export class ChangeDataCaptureService extends EventEmitter {
             const event: ReminderCdcEvent = {
               action: payload.action,
               id: Number(payload.id),
-              telegramUserId: Number(payload.telegramUserId),
-              chatId: Number(payload.chatId),
+              telegramUserId: BigInt(String(payload.telegramUserId)),
+              chatId: BigInt(String(payload.chatId)),
               isCompleted: payload.isCompleted,
               dueAt: payload.dueAt ? new Date(payload.dueAt) : undefined,
               prompt: payload.prompt,
@@ -98,7 +98,7 @@ export class ChangeDataCaptureService extends EventEmitter {
             const event: UserCdcEvent = {
               action: payload.action,
               id: payload.id ? Number(payload.id) : undefined,
-              telegramUserId: Number(payload.telegramUserId),
+              telegramUserId: BigInt(String(payload.telegramUserId)),
               personality: payload.personality,
               mode: payload.mode,
               source: "database_trigger",
