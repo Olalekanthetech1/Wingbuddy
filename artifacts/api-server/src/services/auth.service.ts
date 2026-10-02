@@ -110,7 +110,7 @@ class AuthService {
         name = COALESCE(EXCLUDED.name, web_users.name),
         given_name = COALESCE(EXCLUDED.given_name, web_users.given_name),
         picture = COALESCE(EXCLUDED.picture, web_users.picture),
-        role = CASE WHEN ADMIN_EMAIL_WHITELIST.has(EXCLUDED.email) THEN 'admin' ELSE web_users.role END,
+        role = CASE WHEN EXCLUDED.role = 'admin' THEN 'admin' ELSE web_users.role END,
         telegram_user_id = COALESCE(EXCLUDED.telegram_user_id, web_users.telegram_user_id),
         telegram_username = COALESCE(EXCLUDED.telegram_username, web_users.telegram_username),
         preferred_name = CASE 

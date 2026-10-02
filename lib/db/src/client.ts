@@ -65,6 +65,22 @@ export function isPgVectorAvailable(): boolean {
 
 export async function ensureDatabaseSchema(pgPool?: pg.Pool): Promise<void> {
   const pool = pgPool || getPool();
+
+  // Dynamically resolve and create schema if specified in DATABASE_URL
+  try {
+    const rawDbUrl = process.env.DATABASE_URL;
+    if (rawDbUrl) {
+      const u = new URL(rawDbUrl);
+      const schemaParam = u.searchParams.get("schema");
+      if (schemaParam && schemaParam !== "public") {
+        await pool.query(`CREATE SCHEMA IF NOT EXISTS "${schemaParam}";`);
+        console.log(`[database] Schema "${schemaParam}" ensured/created successfully.`);
+      }
+    }
+  } catch (err) {
+    console.error("Database schema pre-creation note:", err instanceof Error ? err.message : String(err));
+  }
+
   const schemaSql = `
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,

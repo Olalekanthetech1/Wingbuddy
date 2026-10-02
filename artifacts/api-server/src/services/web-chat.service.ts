@@ -41,7 +41,7 @@ export class WebChatService {
   public async ensurePartitionUser(user: AuthenticatedUser): Promise<number> {
     const partitionId = this.getPartitionUserId(user);
     const pool = getPool();
-    const isAdmin = user.role === "admin" || String(user.email).toLowerCase().includes("olalekan");
+    const isAdmin = user.role === "admin";
     const tier = isAdmin ? "vip" : "free";
     const quota = isAdmin ? 999999 : 50;
 
