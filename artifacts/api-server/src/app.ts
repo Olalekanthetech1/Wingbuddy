@@ -40,6 +40,13 @@ import { isExecutionEngineEnabled } from "./execution/config";
 import { authService } from "./services/auth.service";
 import { apiAdminGate } from "./middlewares/auth.middleware";
 
+// Global support for BigInt serialization in JSON.stringify
+if (!(BigInt.prototype as any).toJSON) {
+  (BigInt.prototype as any).toJSON = function (this: bigint) {
+    return this.toString();
+  };
+}
+
 function escapeHtml(str: string): string {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
