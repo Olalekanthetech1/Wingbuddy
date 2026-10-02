@@ -26,8 +26,12 @@
   "dependencies": {
     "@prisma/client": "^6.4.1",
     "@replit/connectors-sdk": "^0.4.1",
+    "@types/multer": "^2.3.0",
+    "@types/unzipper": "^0.10.11",
     "cron-parser": "^5.10.0",
-    "prisma": "^6.4.1"
+    "multer": "^2.4.0",
+    "prisma": "^6.4.1",
+    "unzipper": "^0.12.5"
   },
   "devDependencies": {
     "prettier": "^3.9.6",

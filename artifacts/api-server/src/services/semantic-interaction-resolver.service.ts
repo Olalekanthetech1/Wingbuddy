@@ -267,24 +267,6 @@ export class SemanticInteractionResolverService {
     if (cached) return cached;
 
     const profile = MODES[params.persistentMode] || MODES.general;
-    const fallback: SemanticInteractionDecision = {
-      intent: "general",
-      promptTypes: ["DIRECT_COMMAND"],
-      primaryPromptType: "DIRECT_COMMAND",
-      executionProfile: "conversational",
-      effectiveMode: params.persistentMode,
-      requiredCapabilities: Array.from(profile.capabilitiesList),
-      enableSearch: profile.researchPolicy === "always",
-      thinkingLevel: profile.capabilities.thinkingLevelDefault,
-      isModeSwitch: false,
-      isGreeting: false,
-      complexity: "simple",
-      confidence: 0,
-      taskIntent: "NO_TASK",
-      conversationOperation: "new_request",
-      durabilityEvidence: [],
-    };
-
     const trimmed = params.text.trim();
     const promptForLLM = jsonOnlyPrompt(params.text, params.persistentMode, history);
 
@@ -303,7 +285,7 @@ export class SemanticInteractionResolverService {
       }
     }
 
-    // 2. Dynamic Adaptive AI Router fallback (Routes to best active LLM candidate in real-time)
+    // 2. Dynamic Adaptive AI Router (Routes to best active LLM candidate in real-time)
     try {
       // Use 'auto' role for the router to pick the best healthy extraction candidate
       const routed = await adaptiveAIRouterService.route({
@@ -317,12 +299,12 @@ export class SemanticInteractionResolverService {
       logger.info({ intent: decision.intent, text: trimmed, enableSearch: decision.enableSearch }, "PROMPT_INTENT_RESOLVED_ADAPTIVE");
       return decision;
     } catch (routerErr) {
-      logger.warn({ error: safeErrorMetadata(routerErr) }, "Adaptive AI router semantic resolution failed");
+      logger.error({ error: safeErrorMetadata(routerErr) }, "Adaptive AI router semantic resolution failed");
     }
 
-    // 3. Clean fallback if AI network is completely unreachable
-    semanticInteractionCache.set(params.text, params.persistentMode, history, fallback);
-    return fallback;
+    // 3. Strict Zero-Fallback: Fail explicitly if all interpretative intelligence routes are unreachable.
+    // Do NOT return a static/fabricated 'general' intent.
+    throw new Error("Unable to interpret intent: Intelligence interpretation layer is currently unreachable via all routes.");
   }
 
   static getCached(text: string, persistentMode: ModeKey, history: Array<{ role: string; content: string }> = []): SemanticInteractionDecision | undefined {

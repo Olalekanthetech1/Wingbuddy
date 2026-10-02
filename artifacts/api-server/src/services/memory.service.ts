@@ -36,11 +36,20 @@ export class MemoryService {
     sourceSessionId?: number;
     sourceMessageId?: number;
     sourceConversationId?: number;
+    importSource?: string;
+    externalId?: string;
+    importBatchId?: string;
     expiresAt?: Date;
   }): Promise<UserMemoryRecord | null> {
     const telegramUserId = Number(options.telegramUserId);
     const key = options.key.trim().toLowerCase().replace(/[^a-z0-9_]/g, "_");
     const confidence = options.confidence ?? "high";
+
+    // Sanitize content: strip control characters and cap length
+    let content = options.content.replace(/[\x00-\x1F\x7F-\x9F]/g, "").trim();
+    if (content.length > 2048) {
+      content = content.substring(0, 2045) + "...";
+    }
 
     // Ignore low confidence extractions to prevent noise
     if (confidence === "low") {
@@ -68,7 +77,7 @@ export class MemoryService {
       result = await chatDatabaseService.saveMemory({
         telegramUserId,
         key: match.key,
-        content: options.content,
+        content: content,
         category,
         type,
         confidence,
@@ -78,14 +87,17 @@ export class MemoryService {
         sourceSessionId: options.sourceSessionId,
         sourceMessageId: options.sourceMessageId,
         sourceConversationId: options.sourceConversationId,
+        importSource: options.importSource,
+        externalId: options.externalId,
+        importBatchId: options.importBatchId,
         expiresAt: options.expiresAt,
       });
     } else {
-      logger.info({ telegramUserId, key, content: options.content }, "MEMORY_CREATED");
+      logger.info({ telegramUserId, key, content: content }, "MEMORY_CREATED");
       result = await chatDatabaseService.saveMemory({
         telegramUserId,
         key,
-        content: options.content,
+        content: content,
         category,
         type,
         confidence,
@@ -95,6 +107,9 @@ export class MemoryService {
         sourceSessionId: options.sourceSessionId,
         sourceMessageId: options.sourceMessageId,
         sourceConversationId: options.sourceConversationId,
+        importSource: options.importSource,
+        externalId: options.externalId,
+        importBatchId: options.importBatchId,
         expiresAt: options.expiresAt,
       });
     }
@@ -317,6 +332,95 @@ export class MemoryService {
     }
 
     return items;
+  }
+
+  /**
+   * Extracts candidate memories from a larger block of text (e.g., imported from ChatGPT/Claude) using Gemini.
+   * Returns a structured list of proposed memories for the user to review.
+   */
+  async extractImportCandidates(telegramUserId: number | bigint, pastedText: string): Promise<ExtractedMemoryItem[]> {
+    const { getDefaultGeminiService } = await import("../gemini/gemini.service");
+    const gemini = getDefaultGeminiService();
+
+    const prompt = `You are a memory extraction expert. Analyze the provided text which is a summary of a user's memories, habits, and preferences from another AI tool.
+Extract individual, atomic memory items.
+Rules:
+1. Each item must be discrete (one fact per item).
+2. Assign a 'type' from: user_preference, user_fact, workflow_preference, project_context, learning_context, interaction_preference, important_context.
+3. Assign a short snake_case 'key' for each.
+4. Estimate confidence and importance (low, medium, high).
+5. Strip any metadata or conversational filler.
+6. Return ONLY a valid JSON array of objects with schema: [{"key": string, "content": string, "type": string, "category": string, "confidence": string, "importance": string}]
+
+Input Text:
+${pastedText}`;
+
+    try {
+      const response = await gemini.generateReply([], prompt, "Return valid JSON only.", { isExtraction: true });
+      const cleaned = response.replace(/^```json/i, "").replace(/^```/i, "").replace(/```$/i, "").trim();
+      const parsed = JSON.parse(cleaned);
+
+      if (!Array.isArray(parsed)) return [];
+
+      // Dedupe against existing memories semantically
+      const existing = await this.getMemories(telegramUserId);
+      return parsed.map(item => {
+        const isDuplicate = existing.some(e =>
+          e.key === item.key ||
+          e.content.toLowerCase().includes(item.content.toLowerCase()) ||
+          item.content.toLowerCase().includes(e.content.toLowerCase())
+        );
+
+        return {
+          ...item,
+          isDuplicate,
+          confidence: item.confidence || "high",
+          importance: item.importance || "medium",
+          category: item.category || item.type || "user_fact"
+        };
+      });
+    } catch (err) {
+      logger.error({ err: err instanceof Error ? err.message : String(err) }, "IMPORT_EXTRACTION_ERROR");
+      return [];
+    }
+  }
+
+  /**
+   * Finalizes a batch of imported memories after user confirmation.
+   */
+  async commitImportedMemories(
+    telegramUserId: number | bigint,
+    items: ExtractedMemoryItem[],
+    source: string
+  ): Promise<{ saved: number; skipped: number }> {
+    const batchId = `import_${source}_${Date.now()}`;
+    let saved = 0;
+    let skipped = 0;
+
+    for (const item of items) {
+      try {
+        const result = await this.saveMemory({
+          telegramUserId,
+          key: item.key,
+          content: item.content,
+          type: item.type,
+          category: item.category,
+          confidence: item.confidence,
+          importance: item.importance,
+          importSource: source,
+          importBatchId: batchId,
+          externalId: `import_${source}_${item.key}`
+        });
+
+        if (result) saved++;
+        else skipped++;
+      } catch (err) {
+        skipped++;
+        logger.error({ key: item.key, err }, "COMMIT_MEMORY_ERROR");
+      }
+    }
+
+    return { saved, skipped };
   }
 
   /**

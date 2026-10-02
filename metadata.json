@@ -1,6 +1,6 @@
 {
   "name": "Wingbuddy Telegram Assistant",
-  "description": "A Telegram personal AI assistant backed by Google Gemini with a Strict Zero-Fallback Policy. Features include persistent context, switchable AI personas, VIP user tiers, smart quotas, real-time web search grounding, multi-step reasoning, multimodal image and video generation, semantic vector memory recall, and proactive system diagnostics with live health matrices and latency probes.",
+  "description": "A Telegram personal AI assistant backed by Google Gemini with a Strict Zero-Fallback Policy. Features include persistent context, switchable AI personas, VIP user tiers, smart quotas, real-time web search grounding, multi-step reasoning, multimodal image and video generation, semantic vector memory recall, memory extraction from ChatGPT/Claude, and bulk chat history migration from external AI platforms.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

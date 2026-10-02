@@ -10,7 +10,7 @@ export function renderLandingPageHtml(): string {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
   <title>Wingbuddy AI | Autonomous Assistant Across Web & Telegram</title>
-  <meta name="description" content="State-of-the-art autonomous AI assistant. Seamless bi-directional synchronization between your Telegram mobile app and live Web Workspace.">
+  <meta name="description" content="State-of-the-art autonomous AI assistant. Seamless bi-directional synchronization between your Telegram mobile app and live Web Workspace. Now featuring bulk chat history migration and memory extraction from ChatGPT/Claude.">
   <meta name="theme-color" content="#0b0f19">
   <link rel="icon" type="image/svg+xml" href="/app-icon.svg">
   <link rel="alternate icon" href="/favicon.ico">

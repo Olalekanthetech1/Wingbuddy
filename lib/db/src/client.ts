@@ -100,12 +100,18 @@ export async function ensureDatabaseSchema(pgPool?: pg.Pool): Promise<void> {
       title TEXT,
       summary TEXT,
       is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      import_batch_id TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     CREATE UNIQUE INDEX IF NOT EXISTS conversations_user_chat_idx ON conversations(telegram_user_id, chat_id);
     CREATE INDEX IF NOT EXISTS conversations_chat_id_idx ON conversations(chat_id);
     CREATE INDEX IF NOT EXISTS conversations_user_active_idx ON conversations(telegram_user_id, is_active);
+    CREATE INDEX IF NOT EXISTS conversations_import_batch_idx ON conversations(import_batch_id);
+
+    -- Ensure import fields exist on conversations
+    ALTER TABLE conversations ADD COLUMN IF NOT EXISTS import_batch_id TEXT;
+    ALTER TABLE conversations ADD COLUMN IF NOT EXISTS external_id TEXT;
 
     CREATE TABLE IF NOT EXISTS messages (
       id SERIAL PRIMARY KEY,
@@ -113,14 +119,18 @@ export async function ensureDatabaseSchema(pgPool?: pg.Pool): Promise<void> {
       role TEXT NOT NULL,
       content TEXT NOT NULL,
       token_count INTEGER,
+      external_id TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS messages_conversation_created_idx ON messages(conversation_id, created_at);
+    CREATE INDEX IF NOT EXISTS messages_external_id_idx ON messages(external_id);
 
     -- Ensure media and source columns exist on messages
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_type TEXT NOT NULL DEFAULT 'text';
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'web';
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS audio_url TEXT;
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS external_id TEXT;
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS embedding_json TEXT;
 
     -- Web Users Table for Google Sign-In & Dashboard Accounts
     CREATE TABLE IF NOT EXISTS web_users (
@@ -189,6 +199,9 @@ export async function ensureDatabaseSchema(pgPool?: pg.Pool): Promise<void> {
       source_session_id INTEGER,
       source_message_id INTEGER,
       source_conversation_id INTEGER,
+      import_source TEXT,
+      external_id TEXT,
+      import_batch_id TEXT,
       expires_at TIMESTAMPTZ,
       last_accessed_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -197,6 +210,8 @@ export async function ensureDatabaseSchema(pgPool?: pg.Pool): Promise<void> {
     CREATE UNIQUE INDEX IF NOT EXISTS user_memories_user_key_idx ON user_memories(telegram_user_id, key);
     CREATE INDEX IF NOT EXISTS user_memories_user_category_idx ON user_memories(telegram_user_id, category);
     CREATE INDEX IF NOT EXISTS user_memories_user_status_idx ON user_memories(telegram_user_id, status);
+    CREATE INDEX IF NOT EXISTS user_memories_import_batch_idx ON user_memories(import_batch_id);
+    CREATE INDEX IF NOT EXISTS user_memories_external_id_idx ON user_memories(external_id);
 
     -- Ensure upgraded columns exist for user_memories
     ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS embedding_json TEXT;
@@ -205,8 +220,12 @@ export async function ensureDatabaseSchema(pgPool?: pg.Pool): Promise<void> {
     ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS confidence TEXT NOT NULL DEFAULT 'high';
     ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS importance TEXT NOT NULL DEFAULT 'medium';
     ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+    ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS source_session_id INTEGER;
     ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS source_message_id INTEGER;
     ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS source_conversation_id INTEGER;
+    ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS import_source TEXT;
+    ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS external_id TEXT;
+    ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS import_batch_id TEXT;
     ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
     ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS last_accessed_at TIMESTAMPTZ;
 
@@ -546,6 +565,10 @@ export async function ensureDatabaseSchema(pgPool?: pg.Pool): Promise<void> {
       await pool.query(`CREATE EXTENSION IF NOT EXISTS vector;`);
       await pool.query(`ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS embedding vector(768);`);
       await pool.query(`CREATE INDEX IF NOT EXISTS user_memories_embedding_idx ON user_memories USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);`);
+      
+      await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS embedding vector(768);`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS messages_embedding_idx ON messages USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);`);
+      
       pgVectorAvailable = true;
     } catch {
       // Graceful fallback if PostgreSQL instance does not have the compiled pgvector extension

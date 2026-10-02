@@ -178,7 +178,9 @@ router.get("/dashboard/memories", async (req: Request, res: Response) => {
     res.json({
       telegramUserId: Number(targetUserId),
       pgVectorAvailable: isPgVectorAvailable(),
-      memories,
+      memories: JSON.parse(JSON.stringify(memories, (key, value) =>
+        typeof value === 'bigint' ? value.toString() : value
+      )),
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

@@ -599,9 +599,19 @@ export function renderUserDashboardHtml(): string {
             <h2 class="text-xl font-bold text-app-text">Persistent Memory Vault</h2>
             <p class="text-xs text-app-text opacity-60 mt-1">Multi-tenant isolated long-term knowledge learned across Telegram and Web.</p>
           </div>
-          <button onclick="openCreateMemoryModal()" class="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition flex items-center gap-2">
-            <span>+ Add Memory</span>
-          </button>
+          <div class="flex items-center gap-2">
+            <button onclick="openImportMemoryModal()" class="px-4 py-2 rounded-xl bg-app-highlight hover:bg-black/5 dark:hover:bg-white/10 border border-app-border text-app-text opacity-80 hover:opacity-100 text-xs font-bold transition flex items-center gap-2">
+              <span>🧠</span>
+              <span>Import Preferences</span>
+            </button>
+            <button onclick="openImportChatsModal()" class="px-4 py-2 rounded-xl bg-app-highlight hover:bg-black/5 dark:hover:bg-white/10 border border-app-border text-app-text opacity-80 hover:opacity-100 text-xs font-bold transition flex items-center gap-2">
+              <span>💬</span>
+              <span>Import Chats</span>
+            </button>
+            <button onclick="openCreateMemoryModal()" class="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition flex items-center gap-2">
+              <span>+ Add Memory</span>
+            </button>
+          </div>
         </div>
 
         <div id="memory-list" class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -868,6 +878,116 @@ export function renderUserDashboardHtml(): string {
           <button id="mem-btn-submit" type="submit" class="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold shadow-lg shadow-purple-600/20">Save Memory</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <div id="modal-import-memory" class="hidden fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="glass-panel rounded-2xl p-6 max-w-2xl w-full space-y-4 border border-app-border shadow-2xl max-h-[90vh] flex flex-col">
+      <div class="flex items-center justify-between border-b border-app-border pb-3 shrink-0">
+        <h3 class="font-bold text-app-text text-base flex items-center gap-2">
+          <span>📥</span>
+          <span>Import Memory from Other AI</span>
+        </h3>
+        <button onclick="closeImportMemoryModal()" class="text-app-text opacity-40 hover:opacity-100 text-xl leading-none">&times;</button>
+      </div>
+
+      <div id="import-mem-step-1" class="space-y-4">
+        <div class="p-4 rounded-xl bg-brand-500/10 border border-brand-500/20 space-y-3">
+          <p class="text-[11px] text-app-text opacity-80 leading-relaxed font-semibold">
+            Step 1: Get your memory summary from ChatGPT or Claude
+          </p>
+          <div class="bg-app-surface/50 border border-app-border rounded-lg p-3 relative group">
+            <p id="extraction-prompt-text" class="text-[10px] text-app-text opacity-60 leading-normal italic">
+              "Please provide a detailed, structured summary of everything you remember about me, including my personal context, work habits, project preferences, technical skills, and any specific instructions I've given you for future interactions. Format this as a clear list of facts and preferences."
+            </p>
+            <button onclick="copyExtractionPrompt()" class="mt-2 w-full py-1.5 rounded-lg bg-app-highlight hover:bg-app-border text-[10px] font-bold text-brand-400 transition flex items-center justify-center gap-1.5 border border-brand-500/20">
+              <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"/></svg>
+              <span>Copy Prompt to Clipboard</span>
+            </button>
+          </div>
+          <p class="text-[10px] text-app-text opacity-50">
+            Paste the prompt above into your other AI tool. Once it generates the summary, copy and paste it into the box below.
+          </p>
+        </div>
+        <div>
+          <label class="block text-xs font-bold text-app-text opacity-70 mb-1.5">Step 2: Paste the Generated Summary</label>
+          <textarea id="import-mem-input-text" rows="6" placeholder="Paste the generated summary here..." class="w-full bg-app-highlight border border-app-border rounded-xl px-3.5 py-2.5 text-xs text-app-text focus:outline-none focus:border-brand-500 resize-none"></textarea>
+        </div>
+        <div class="flex items-center justify-end gap-2 pt-2">
+          <button type="button" onclick="closeImportMemoryModal()" class="px-4 py-2 rounded-xl bg-app-highlight hover:bg-app-highlight/80 text-app-text opacity-70 text-xs font-semibold">Cancel</button>
+          <button id="import-mem-btn-preview" onclick="handleImportMemoryPreview()" class="px-5 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold shadow-lg shadow-brand-600/20">Extract Memories</button>
+        </div>
+      </div>
+
+      <div id="import-mem-step-2" class="hidden flex flex-col space-y-4 overflow-hidden">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-bold text-app-text opacity-70">Review extracted memories:</span>
+          <span id="import-mem-count" class="text-[10px] bg-app-highlight px-2 py-0.5 rounded-full text-app-text opacity-50">0 items found</span>
+        </div>
+        <div id="import-mem-candidates-list" class="flex-1 overflow-y-auto space-y-2.5 pr-1 min-h-[200px]">
+          <!-- Extracted candidates here -->
+        </div>
+        <div class="flex items-center justify-end gap-2 pt-4 border-t border-app-border shrink-0">
+          <button type="button" onclick="showImportStep(1)" class="px-4 py-2 rounded-xl bg-app-highlight hover:bg-app-highlight/80 text-app-text opacity-70 text-xs font-semibold">Back</button>
+          <button id="import-mem-btn-confirm" onclick="handleImportMemoryConfirm()" class="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold shadow-lg shadow-purple-600/20">Save Approved Memories</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-import-chats" class="hidden fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="glass-panel rounded-2xl p-6 max-w-lg w-full space-y-4 border border-app-border shadow-2xl flex flex-col">
+      <div class="flex items-center justify-between border-b border-app-border pb-3 shrink-0">
+        <h3 class="font-bold text-app-text text-base flex items-center gap-2">
+          <span>📁</span>
+          <span>Import Chat History (.zip)</span>
+        </h3>
+        <button onclick="closeImportChatsModal()" class="text-app-text opacity-40 hover:opacity-100 text-xl leading-none">&times;</button>
+      </div>
+
+      <div id="import-chats-step-1" class="space-y-4">
+        <div class="p-3.5 rounded-xl bg-brand-500/10 border border-brand-500/20 text-[11px] text-app-text opacity-80 leading-relaxed">
+          <strong>Instructions:</strong> Upload the <code>.zip</code> file you exported from ChatGPT or Claude. We'll index your conversations so you can search and reference them here.
+        </div>
+        <div class="space-y-3">
+          <div>
+            <label class="block text-xs font-bold text-app-text opacity-70 mb-1.5">Source Platform</label>
+            <select id="import-chats-source" class="w-full bg-app-highlight border border-app-border rounded-xl px-3.5 py-2.5 text-xs text-app-text focus:outline-none focus:border-brand-500">
+              <option value="chatgpt">ChatGPT (OpenAI)</option>
+              <option value="claude">Claude (Anthropic)</option>
+            </select>
+          </div>
+          <div class="border-2 border-dashed border-app-border rounded-2xl p-8 flex flex-col items-center justify-center gap-3 hover:border-brand-500/50 transition cursor-pointer relative">
+            <input type="file" id="import-chats-file" accept=".zip" class="absolute inset-0 opacity-0 cursor-pointer" onchange="updateFileNameDisplay(this)" />
+            <span class="text-3xl">📦</span>
+            <span id="import-chats-file-name" class="text-xs font-medium text-app-text opacity-50">Click to select .zip file</span>
+          </div>
+        </div>
+        <div class="flex items-center justify-end gap-2 pt-2">
+          <button type="button" onclick="closeImportChatsModal()" class="px-4 py-2 rounded-xl bg-app-highlight hover:bg-app-highlight/80 text-app-text opacity-70 text-xs font-semibold">Cancel</button>
+          <button id="import-chats-btn-upload" onclick="handleChatImportUpload()" class="px-5 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold shadow-lg shadow-brand-600/20">Start Import</button>
+        </div>
+      </div>
+
+      <div id="import-chats-step-2" class="hidden flex flex-col space-y-4 items-center py-6">
+        <div class="w-16 h-16 rounded-full border-4 border-brand-500/20 border-t-brand-500 animate-spin mb-2"></div>
+        <div class="text-center">
+          <div id="import-chats-status" class="text-sm font-bold text-app-text">Processing conversations...</div>
+          <div id="import-chats-progress-text" class="text-xs text-app-text opacity-50 mt-1">0 chats imported</div>
+        </div>
+        <button id="import-chats-btn-finish" onclick="closeImportChatsModal()" class="hidden px-6 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold shadow-lg">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-index-progress" class="hidden fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="glass-panel rounded-2xl p-6 max-w-sm w-full space-y-4 border border-app-border shadow-2xl flex flex-col items-center py-8">
+      <div class="w-12 h-12 rounded-full border-4 border-brand-500/20 border-t-brand-500 animate-spin mb-2"></div>
+      <div class="text-center">
+        <div class="text-sm font-bold text-app-text">Building Search Index...</div>
+        <div id="index-progress-text" class="text-xs text-app-text opacity-50 mt-1">0 messages processed</div>
+      </div>
+      <button onclick="document.getElementById('modal-index-progress').classList.add('hidden')" class="px-4 py-1.5 rounded-lg bg-app-highlight text-xs font-semibold">Run in background</button>
     </div>
   </div>
 
@@ -1521,6 +1641,9 @@ export function renderUserDashboardHtml(): string {
             </div>
             <div class="flex items-center gap-2 shrink-0">
               <span class="text-[10px] text-app-text opacity-40 font-mono hidden sm:inline-block">\${timeStr}</span>
+              <button onclick="handleIndexConversation(\${c.id}, event)" class="p-1.5 rounded-lg text-app-text opacity-40 hover:opacity-100 hover:text-brand-500 transition cursor-pointer" title="Make this chat semantically searchable">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+              </button>
               <button onclick="deleteConversation(\${c.id}, event)" class="p-1.5 rounded-lg text-app-text opacity-40 hover:opacity-100 hover:text-red-500 transition cursor-pointer" title="Delete this conversation">
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
               </button>
@@ -1588,6 +1711,50 @@ export function renderUserDashboardHtml(): string {
       } catch (err) {
         console.error('Failed creating new chat:', err);
       }
+    }
+
+    async function handleIndexConversation(convId, event) {
+      if (event) event.stopPropagation();
+      const token = localStorage.getItem('wb_session_token');
+      
+      try {
+        const res = await fetch('/api/user/conversations/' + convId + '/index', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token }
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Indexing failed');
+
+        document.getElementById('modal-index-progress').classList.remove('hidden');
+        pollIndexProgress(data.jobId);
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    function pollIndexProgress(jobId) {
+      const token = localStorage.getItem('wb_session_token');
+      const interval = setInterval(async () => {
+        try {
+          const res = await fetch('/api/user/conversations/index/' + jobId + '/progress', {
+            headers: { 'Authorization': 'Bearer ' + token }
+          });
+          const data = await res.json();
+          
+          document.getElementById('index-progress-text').innerText = 
+            data.processed + ' of ' + data.total + ' messages indexed';
+          
+          if (data.status === 'completed' || data.status === 'failed') {
+            clearInterval(interval);
+            setTimeout(() => {
+              document.getElementById('modal-index-progress').classList.add('hidden');
+              if (window.toast) window.toast('✓ Chat indexed for search');
+            }, 1000);
+          }
+        } catch (err) {
+          clearInterval(interval);
+        }
+      }, 2000);
     }
 
     async function deleteConversation(convId, event) {
@@ -2951,6 +3118,191 @@ export function renderUserDashboardHtml(): string {
       const errEl = document.getElementById('mem-submit-error');
       if (errEl) errEl.classList.add('hidden');
     }
+
+    function openImportMemoryModal() {
+      const modal = document.getElementById('modal-import-memory');
+      if (modal) {
+        modal.classList.remove('hidden');
+        showImportStep(1);
+        document.getElementById('import-mem-input-text')?.focus();
+      }
+    }
+    function closeImportMemoryModal() {
+      const modal = document.getElementById('modal-import-memory');
+      if (modal) modal.classList.add('hidden');
+    }
+
+    function openImportChatsModal() {
+      const modal = document.getElementById('modal-import-chats');
+      if (modal) {
+        modal.classList.remove('hidden');
+        document.getElementById('import-chats-step-1').classList.remove('hidden');
+        document.getElementById('import-chats-step-2').classList.add('hidden');
+        document.getElementById('import-chats-btn-finish').classList.add('hidden');
+        document.getElementById('import-chats-file').value = '';
+        document.getElementById('import-chats-file-name').innerText = 'Click to select .zip file';
+      }
+    }
+    function closeImportChatsModal() {
+      const modal = document.getElementById('modal-import-chats');
+      if (modal) modal.classList.add('hidden');
+    }
+    function updateFileNameDisplay(input) {
+      const name = input.files[0] ? input.files[0].name : 'Click to select .zip file';
+      document.getElementById('import-chats-file-name').innerText = name;
+    }
+
+    async function handleChatImportUpload() {
+      const fileInput = document.getElementById('import-chats-file');
+      if (!fileInput.files[0]) return alert('Please select a ZIP file.');
+      
+      const source = document.getElementById('import-chats-source').value;
+      const btn = document.getElementById('import-chats-btn-upload');
+      btn.disabled = true;
+      btn.innerText = 'Uploading...';
+
+      const formData = new FormData();
+      formData.append('file', fileInput.files[0]);
+      formData.append('source', source);
+
+      const token = localStorage.getItem('wb_session_token');
+
+      try {
+        const res = await fetch('/api/user/conversations/import/upload', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token },
+          body: formData
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Upload failed');
+
+        document.getElementById('import-chats-step-1').classList.add('hidden');
+        document.getElementById('import-chats-step-2').classList.remove('hidden');
+        pollImportProgress(data.batchId);
+      } catch (err) {
+        alert(err.message);
+        btn.disabled = false;
+        btn.innerText = 'Start Import';
+      }
+    }
+
+    function pollImportProgress(batchId) {
+      const token = localStorage.getItem('wb_session_token');
+      const interval = setInterval(async () => {
+        try {
+          const res = await fetch('/api/user/conversations/import/' + batchId + '/progress', {
+            headers: { 'Authorization': 'Bearer ' + token }
+          });
+          const data = await res.json();
+          
+          document.getElementById('import-chats-progress-text').innerText = 
+            data.processedChats + ' of ' + data.totalChats + ' chats processed (' + data.savedMessages + ' messages)';
+          
+          if (data.status === 'completed') {
+            clearInterval(interval);
+            document.getElementById('import-chats-status').innerText = 'Import Complete!';
+            document.getElementById('import-chats-btn-finish').classList.remove('hidden');
+            loadConversations();
+          } else if (data.status === 'failed') {
+            clearInterval(interval);
+            document.getElementById('import-chats-status').innerText = 'Import Failed';
+            document.getElementById('import-chats-btn-finish').classList.remove('hidden');
+          }
+        } catch (err) {
+          clearInterval(interval);
+        }
+      }, 2000);
+    }
+    function showImportStep(step) {
+      document.getElementById('import-mem-step-1').classList.toggle('hidden', step !== 1);
+      document.getElementById('import-mem-step-2').classList.toggle('hidden', step !== 2);
+    }
+
+    let extractedImportCandidates = [];
+    async function handleImportMemoryPreview() {
+      const text = document.getElementById('import-mem-input-text').value.trim();
+      if (text.length < 10) return alert('Please paste more text for extraction.');
+      
+      const btn = document.getElementById('import-mem-btn-preview');
+      btn.disabled = true;
+      btn.innerText = 'Extracting...';
+      const token = localStorage.getItem('wb_session_token');
+
+      try {
+        const res = await fetch('/api/user/memories/import/preview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+          body: JSON.stringify({ text })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Extraction failed');
+        
+        extractedImportCandidates = data.candidates || [];
+        renderImportCandidates();
+        showImportStep(2);
+      } catch (err) {
+        alert(err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerText = 'Extract Memories';
+      }
+    }
+
+    function renderImportCandidates() {
+      const list = document.getElementById('import-mem-candidates-list');
+      const countEl = document.getElementById('import-mem-count');
+      countEl.innerText = extractedImportCandidates.length + ' items found';
+      
+      list.innerHTML = extractedImportCandidates.map((c, idx) => \`
+        <div class="p-3 rounded-xl bg-app-highlight border border-app-border flex items-start gap-3 transition hover:border-brand-500/30">
+          <input type="checkbox" id="import-item-\${idx}" checked class="mt-1 w-4 h-4 rounded border-app-border text-brand-600 focus:ring-brand-500" />
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-2 mb-1">
+              <span class="text-[10px] font-bold uppercase tracking-tight text-brand-400 bg-brand-500/10 px-1.5 py-0.5 rounded">\${escapeHtml(c.type)}</span>
+              <span class="text-[10px] font-mono text-app-text opacity-40 truncate">#\${escapeHtml(c.key)}</span>
+              \${c.isDuplicate ? '<span class="text-[10px] bg-amber-500/10 text-amber-500 px-1.5 py-0.5 rounded border border-amber-500/20 font-bold">Duplicate</span>' : ''}
+            </div>
+            <div class="text-xs text-app-text font-medium leading-relaxed">\${escapeHtml(c.content)}</div>
+          </div>
+        </div>
+      \`).join('');
+    }
+
+    async function handleImportMemoryConfirm() {
+      const selectedIndices = [];
+      extractedImportCandidates.forEach((c, idx) => {
+        if (document.getElementById('import-item-' + idx).checked) {
+          selectedIndices.push(idx);
+        }
+      });
+
+      if (selectedIndices.length === 0) return alert('Please select at least one item to save.');
+
+      const itemsToSave = selectedIndices.map(idx => extractedImportCandidates[idx]);
+      const btn = document.getElementById('import-mem-btn-confirm');
+      btn.disabled = true;
+      btn.innerText = 'Saving...';
+      const token = localStorage.getItem('wb_session_token');
+
+      try {
+        const res = await fetch('/api/user/memories/import/confirm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+          body: JSON.stringify({ items: itemsToSave, source: 'gemini_import' })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Import failed');
+
+        alert('Successfully imported ' + data.saved + ' memories.');
+        closeImportMemoryModal();
+        loadMemories();
+      } catch (err) {
+        alert(err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerText = 'Save Approved Memories';
+      }
+    }
     async function handleCreateMemorySubmit(event) {
       event.preventDefault();
       const token = localStorage.getItem('wb_session_token');
@@ -3192,6 +3544,17 @@ export function renderUserDashboardHtml(): string {
       });
     }
 
+    function copyExtractionPrompt() {
+      const prompt = document.getElementById('extraction-prompt-text').innerText;
+      navigator.clipboard.writeText(prompt);
+      const btn = event.currentTarget;
+      const originalHtml = btn.innerHTML;
+      btn.innerHTML = '<span>✓ Copied to Clipboard</span>';
+      setTimeout(() => {
+        btn.innerHTML = originalHtml;
+      }, 2000);
+    }
+
     function handleLogout() {
       try {
         if (typeof firebase !== 'undefined' && firebase.auth) {
@@ -3219,6 +3582,17 @@ export function renderUserDashboardHtml(): string {
     window.deleteSingleTask = deleteSingleTask;
     window.stopAllTasks = stopAllTasks;
     window.clearAllTasks = clearAllTasks;
+    window.openImportMemoryModal = openImportMemoryModal;
+    window.closeImportMemoryModal = closeImportMemoryModal;
+    window.handleImportMemoryPreview = handleImportMemoryPreview;
+    window.handleImportMemoryConfirm = handleImportMemoryConfirm;
+    window.showImportStep = showImportStep;
+    window.openImportChatsModal = openImportChatsModal;
+    window.closeImportChatsModal = closeImportChatsModal;
+    window.handleChatImportUpload = handleChatImportUpload;
+    window.updateFileNameDisplay = updateFileNameDisplay;
+    window.handleIndexConversation = handleIndexConversation;
+    window.copyExtractionPrompt = copyExtractionPrompt;
 
     function escapeHtml(str) {
       if (!str) return '';

@@ -19,6 +19,8 @@ export interface CreateSessionOptions {
   chatId: number | bigint;
   title?: string;
   archiveExisting?: boolean;
+  importBatchId?: string;
+  externalId?: string;
 }
 
 export interface GetOrCreateSessionOptions {
@@ -42,6 +44,9 @@ export interface SaveMemoryOptions {
   sourceSessionId?: number;
   sourceMessageId?: number;
   sourceConversationId?: number;
+  importSource?: string;
+  externalId?: string;
+  importBatchId?: string;
   expiresAt?: Date;
 }
 
@@ -51,6 +56,9 @@ export interface ChatMessageRecord {
   role: string;
   content: string;
   tokenCount: number | null;
+  externalId?: string | null;
+  embeddingJson?: string | null;
+  similarity?: number;
   createdAt: Date;
 }
 
@@ -61,6 +69,7 @@ export interface ChatSessionRecord {
   title: string | null;
   summary: string | null;
   isActive: boolean;
+  importBatchId?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -81,6 +90,9 @@ export interface UserMemoryRecord {
   sourceSessionId: number | null;
   sourceMessageId?: number | null;
   sourceConversationId?: number | null;
+  importSource?: string | null;
+  externalId?: string | null;
+  importBatchId?: string | null;
   expiresAt?: Date | null;
   lastAccessedAt?: Date | null;
   createdAt: Date;
@@ -325,6 +337,7 @@ export class ChatDatabaseService {
         chatId,
         title: options.title ?? null,
         isActive: true,
+        importBatchId: options.importBatchId,
       },
     });
 
@@ -422,16 +435,56 @@ export class ChatDatabaseService {
   }
 
   /**
-   * Searches past dialogue messages across all conversations for a user.
-   * Enables dense vector/hybrid RAG recall across long-term historical sessions.
+   * Searches past dialogue messages across all conversations for a user using hybrid keyword and semantic search.
    */
   async searchHistoricalDialogue(
     telegramUserId: number | bigint,
     query: string,
-    excludeConversationId?: number,
-    limit = 6,
-  ): Promise<Array<{ role: string; content: string; createdAt: Date; conversationId: number }>> {
+    options?: { queryVector?: number[]; excludeConversationId?: number; limit?: number },
+  ): Promise<ChatMessageRecord[]> {
     const uid = BigInt(telegramUserId);
+    const limit = options?.limit ?? 6;
+    const queryVector = options?.queryVector;
+
+    // 1. Semantic Search if vector is provided
+    if (queryVector && queryVector.length > 0 && isPgVectorAvailable()) {
+      try {
+        const vectorStr = `[${queryVector.join(",")}]`;
+        const pool = getPool();
+        const res = await pool.query(
+          `
+          SELECT m.*, (1 - (m.embedding <=> $1::vector)) as similarity
+          FROM messages m
+          JOIN conversations c ON m.conversation_id = c.id
+          WHERE c.telegram_user_id = $2 AND m.embedding IS NOT NULL
+          ${options?.excludeConversationId ? "AND c.id != $4" : ""}
+          ORDER BY m.embedding <=> $1::vector ASC
+          LIMIT $3
+          `,
+          options?.excludeConversationId
+            ? [vectorStr, uid.toString(), limit, options.excludeConversationId]
+            : [vectorStr, uid.toString(), limit],
+        );
+
+        if (res.rows && res.rows.length > 0) {
+          return res.rows.map((row) => ({
+            id: row.id,
+            conversationId: row.conversation_id,
+            role: row.role,
+            content: row.content,
+            tokenCount: row.token_count,
+            externalId: row.external_id,
+            embeddingJson: row.embedding_json,
+            similarity: typeof row.similarity === "number" ? row.similarity : parseFloat(row.similarity),
+            createdAt: row.created_at,
+          }));
+        }
+      } catch (err) {
+        console.warn("HISTORICAL_SEMANTIC_SEARCH_FAILED", err);
+      }
+    }
+
+    // 2. Keyword Fallback
     const words = query
       .toLowerCase()
       .replace(/[^\w\s]/g, " ")
@@ -444,7 +497,7 @@ export class ChatDatabaseService {
     });
     const conversationIds = conversations
       .map((c) => c.id)
-      .filter((id) => id !== excludeConversationId);
+      .filter((id) => id !== options?.excludeConversationId);
 
     if (conversationIds.length === 0) return [];
 
@@ -460,16 +513,17 @@ export class ChatDatabaseService {
           : {}),
       },
       orderBy: { createdAt: "desc" },
-      take: limit * 2,
-      select: {
-        role: true,
-        content: true,
-        createdAt: true,
-        conversationId: true,
-      },
+      take: limit,
     });
 
-    return messages.slice(0, limit);
+    return messages.map((m) => ({
+      id: m.id,
+      conversationId: m.conversationId,
+      role: m.role,
+      content: m.content,
+      tokenCount: m.tokenCount,
+      createdAt: m.createdAt,
+    }));
   }
 
   // ==========================================
@@ -534,11 +588,41 @@ export class ChatDatabaseService {
   /**
    * Clears all messages in a specific session.
    */
-  async clearSessionMessages(conversationId: number): Promise<number> {
-    const result = await this.prisma.message.deleteMany({
-      where: { conversationId },
+  async updateMessageEmbedding(messageId: number, embedding: number[]): Promise<void> {
+    const embeddingJson = JSON.stringify(embedding);
+    await this.prisma.message.update({
+      where: { id: messageId },
+      data: { embeddingJson },
     });
-    return result.count;
+
+    if (isPgVectorAvailable()) {
+      try {
+        const vectorStr = `[${embedding.join(",")}]`;
+        const pool = getPool();
+        await pool.query(
+          `UPDATE messages SET embedding = $1::vector WHERE id = $2`,
+          [vectorStr, messageId],
+        );
+      } catch {}
+    }
+  }
+
+  async getMessagesForConversation(conversationId: number): Promise<ChatMessageRecord[]> {
+    const messages = await this.prisma.message.findMany({
+      where: { conversationId },
+      orderBy: { createdAt: "asc" },
+    });
+
+    return messages.map((m) => ({
+      id: m.id,
+      conversationId: m.conversationId,
+      role: m.role,
+      content: m.content,
+      tokenCount: m.tokenCount,
+      externalId: m.externalId,
+      embeddingJson: m.embeddingJson,
+      createdAt: m.createdAt,
+    }));
   }
 
   // ==========================================
@@ -564,6 +648,9 @@ export class ChatDatabaseService {
     const importance = options.importance ?? "medium";
     const status = options.status ?? "active";
     const structuredValue = options.structuredValue ?? null;
+    const importSource = options.importSource ?? null;
+    const externalId = options.externalId ?? null;
+    const importBatchId = options.importBatchId ?? null;
 
     const memory = await this.prisma.userMemory.upsert({
       where: {
@@ -582,6 +669,9 @@ export class ChatDatabaseService {
         structuredValue,
         embeddingJson,
         sourceSessionId: options.sourceSessionId ?? null,
+        importSource,
+        externalId,
+        importBatchId,
         updatedAt: new Date(),
       },
       create: {
@@ -596,6 +686,9 @@ export class ChatDatabaseService {
         structuredValue,
         embeddingJson,
         sourceSessionId: options.sourceSessionId ?? null,
+        importSource,
+        externalId,
+        importBatchId,
       },
     });
 
@@ -1368,6 +1461,7 @@ export class ChatDatabaseService {
     title: string | null;
     summary: string | null;
     isActive: boolean;
+    importBatchId: string | null;
     createdAt: Date;
     updatedAt: Date;
   }): ChatSessionRecord {
@@ -1378,6 +1472,7 @@ export class ChatDatabaseService {
       title: session.title,
       summary: session.summary,
       isActive: session.isActive,
+      importBatchId: session.importBatchId,
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
     };
@@ -1399,6 +1494,9 @@ export class ChatDatabaseService {
       sourceSessionId: memory.sourceSessionId ? Number(memory.sourceSessionId) : null,
       sourceMessageId: memory.sourceMessageId ? Number(memory.sourceMessageId) : null,
       sourceConversationId: memory.sourceConversationId ? Number(memory.sourceConversationId) : null,
+      importSource: memory.importSource ? String(memory.importSource) : null,
+      externalId: memory.externalId ? String(memory.externalId) : null,
+      importBatchId: memory.importBatchId ? String(memory.importBatchId) : null,
       expiresAt: memory.expiresAt instanceof Date ? memory.expiresAt : null,
       lastAccessedAt: memory.lastAccessedAt instanceof Date ? memory.lastAccessedAt : null,
       createdAt: memory.createdAt instanceof Date ? memory.createdAt : new Date(),

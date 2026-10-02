@@ -53,6 +53,7 @@ export const conversationsTable = pgTable(
     title: text("title"),
     summary: text("summary"),
     isActive: boolean("is_active").default(true).notNull(),
+    importBatchId: text("import_batch_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -60,6 +61,7 @@ export const conversationsTable = pgTable(
     uniqueIndex("conversations_user_chat_idx").on(table.telegramUserId, table.chatId),
     index("conversations_chat_id_idx").on(table.chatId),
     index("conversations_user_active_idx").on(table.telegramUserId, table.isActive),
+    index("conversations_import_batch_idx").on(table.importBatchId),
   ],
 );
 
@@ -77,6 +79,8 @@ export const messagesTable = pgTable(
     assetId: integer("asset_id"),
     jobId: text("job_id"),
     metadataJson: text("metadata_json"),
+    externalId: text("external_id"),
+    embeddingJson: text("embedding_json"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
@@ -84,6 +88,7 @@ export const messagesTable = pgTable(
       table.conversationId,
       table.createdAt,
     ),
+    index("messages_external_id_idx").on(table.externalId),
   ],
 );
 
@@ -167,6 +172,9 @@ export const userMemoriesTable = pgTable(
     sourceSessionId: integer("source_session_id"),
     sourceMessageId: integer("source_message_id"),
     sourceConversationId: integer("source_conversation_id"),
+    importSource: text("import_source"), // 'chatgpt' | 'claude' | 'gemini' | 'manual'
+    externalId: text("external_id"),
+    importBatchId: text("import_batch_id"),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     lastAccessedAt: timestamp("last_accessed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -176,6 +184,8 @@ export const userMemoriesTable = pgTable(
     uniqueIndex("user_memories_user_key_idx").on(table.telegramUserId, table.key),
     index("user_memories_user_category_idx").on(table.telegramUserId, table.category),
     index("user_memories_user_status_idx").on(table.telegramUserId, table.status),
+    index("user_memories_import_batch_idx").on(table.importBatchId),
+    index("user_memories_external_id_idx").on(table.externalId),
   ],
 );
 

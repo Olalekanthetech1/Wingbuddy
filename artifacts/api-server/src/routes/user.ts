@@ -10,8 +10,15 @@ import { telegramIdentityService } from "../services/telegram-identity.service";
 import { getPool } from "@workspace/db";
 import { logger } from "../lib/logger";
 import { getDisplayName, getGreeting, userIdentityResolverService } from "../services/user-identity-resolver.service";
+import multer from "multer";
+import { chatImportService } from "../services/chat-import.service";
+import { semanticSearchService } from "../services/semantic-search.service";
 
 const router = Router();
+const upload = multer({ 
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit for now
+});
 router.use(requireAuth);
 router.use(async (req: Request, _res: Response, next) => {
   if (req.user) {
@@ -196,7 +203,11 @@ router.get("/overview", async (req: Request, res: Response) => {
       updatedAt: new Date().toISOString(),
     };
 
-    res.json(overviewDto);
+    const safeOverviewDto = JSON.parse(JSON.stringify(overviewDto, (key, value) =>
+      typeof value === 'bigint' ? value.toString() : value
+    ));
+
+    res.json(safeOverviewDto);
   } catch (err: any) {
     logger.error({ error: err }, "Failed fetching user overview");
     res.status(500).json({ error: err.message || "Failed fetching overview" });
@@ -585,8 +596,19 @@ router.get("/memories", async (req: Request, res: Response) => {
     const user = req.user!;
     const partitionId = webChatService.getPartitionUserId(user);
     const memories = await memoryService.getUserMemories(partitionId);
-    res.json({ memories });
+    
+    // Defensive BigInt serialization for Express
+    const safeMemories = JSON.parse(JSON.stringify(memories, (key, value) =>
+      typeof value === 'bigint' ? value.toString() : value
+    ));
+    
+    res.json({ memories: safeMemories });
   } catch (err: any) {
+    logger.error({ 
+      error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+      user: req.user?.id 
+    }, "Failed fetching user memories");
     res.status(500).json({ error: err.message || "Failed fetching memories" });
   }
 });
@@ -624,6 +646,125 @@ router.delete("/memories/:key", async (req: Request, res: Response) => {
     res.json({ success: true, message: "Memory removed" });
   } catch (err: any) {
     res.status(500).json({ error: err.message || "Failed deleting memory" });
+  }
+});
+
+/**
+ * POST /api/user/memories/import/preview
+ */
+router.post("/memories/import/preview", async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const partitionId = webChatService.getPartitionUserId(user);
+    const { text } = req.body;
+    if (!text || text.length < 10) {
+      res.status(400).json({ error: "Provide a valid memory block for extraction" });
+      return;
+    }
+    const candidates = await memoryService.extractImportCandidates(partitionId, text);
+    res.json({ candidates });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Extraction failed" });
+  }
+});
+
+/**
+ * POST /api/user/memories/import/confirm
+ */
+router.post("/memories/import/confirm", async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const partitionId = webChatService.getPartitionUserId(user);
+    const { items, source } = req.body;
+    if (!Array.isArray(items) || items.length === 0) {
+      res.status(400).json({ error: "No items to import" });
+      return;
+    }
+    const result = await memoryService.commitImportedMemories(partitionId, items, source || "pasted_text");
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Import failed" });
+  }
+});
+
+/**
+ * POST /api/user/conversations/import/upload
+ * Handles multi-platform ZIP chat history exports.
+ */
+router.post("/conversations/import/upload", upload.single("file"), async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const partitionId = webChatService.getPartitionUserId(user);
+    const source = req.body.source || "chatgpt";
+    
+    if (!req.file) {
+      res.status(400).json({ error: "No file uploaded" });
+      return;
+    }
+
+    const batchId = await chatImportService.processZipImport(partitionId, req.file.buffer, source as any);
+    res.json({ batchId, message: "Import processing started in background" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Upload failed" });
+  }
+});
+
+/**
+ * GET /api/user/conversations/import/:batchId/progress
+ */
+router.get("/conversations/import/:batchId/progress", (req: Request, res: Response) => {
+  try {
+    const batchId = req.params.batchId;
+    const progress = chatImportService.getImportProgress(batchId);
+    if (!progress) {
+      res.status(404).json({ error: "Batch not found" });
+      return;
+    }
+    res.json(progress);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed fetching progress" });
+  }
+});
+
+/**
+ * POST /api/user/conversations/:id/index
+ * Triggers background indexing for semantic search.
+ */
+router.post("/conversations/:id/index", async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const partitionId = webChatService.getPartitionUserId(user);
+    const conversationId = parseInt(req.params.id, 10);
+    
+    // Security check: ensure user owns the conversation
+    const pool = getPool();
+    const checkRes = await pool.query("SELECT id FROM conversations WHERE id = $1 AND telegram_user_id = $2", [conversationId, partitionId]);
+    if (checkRes.rows.length === 0) {
+      res.status(403).json({ error: "Access denied" });
+      return;
+    }
+
+    const jobId = await semanticSearchService.indexConversation(conversationId);
+    res.json({ jobId, message: "Indexing started" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Indexing failed" });
+  }
+});
+
+/**
+ * GET /api/user/conversations/index/:jobId/progress
+ */
+router.get("/conversations/index/:jobId/progress", (req: Request, res: Response) => {
+  try {
+    const jobId = req.params.jobId;
+    const progress = semanticSearchService.getIndexingProgress(jobId);
+    if (!progress) {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
+    res.json(progress);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed fetching progress" });
   }
 });
 

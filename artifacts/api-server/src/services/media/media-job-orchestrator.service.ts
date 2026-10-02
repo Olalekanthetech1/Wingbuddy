@@ -95,7 +95,7 @@ class MediaJobOrchestratorService {
       try {
         const cap = await huggingFaceCapabilityService.resolveModel("text-to-image");
         imageAvail = Boolean(cap.model);
-        imageModel = cap.model || "flux-schnell";
+        imageModel = cap.model || "";
         imageProvider = "huggingface";
       } catch (err: any) {
         imageAvail = false;
@@ -110,7 +110,7 @@ class MediaJobOrchestratorService {
       try {
         const cap = await huggingFaceCapabilityService.resolveModel("text-to-video");
         videoAvail = Boolean(cap.model || (cap.candidates && cap.candidates.length > 0));
-        videoModel = cap.model || cap.candidates?.[0]?.id || "zeroscope_v2_576w";
+        videoModel = cap.model || cap.candidates?.[0]?.id || "";
         videoProvider = "huggingface";
       } catch {
         videoAvail = false;
@@ -485,11 +485,28 @@ class MediaJobOrchestratorService {
         try {
           const { telegramRuntime } = await import("../../app");
           if (telegramRuntime?.bot) {
-            const badge = `Engine: ${actualEngine}`;
+            const isUserAdmin = await userTierService.isAdmin(ownerUserId);
+            let badge: string;
+
+            if (isUserAdmin) {
+              const allModels = await unifiedModelRegistryService.list().catch(() => []);
+              const record = allModels.find(m => m.modelId === actualEngine || m.id === actualEngine);
+              let engineDisplay = record?.name || actualEngine;
+              if (engineDisplay === actualEngine) {
+                // Clean fallback if not in registry
+                let name = actualEngine.includes(':') ? actualEngine.split(':').pop()! : actualEngine;
+                name = name.includes('/') ? name.split('/').pop()! : name;
+                engineDisplay = name.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+              }
+              badge = `🧠 <b>Engine:</b> <code>${escapeHtml(engineDisplay)}</code>`;
+            } else {
+              badge = `⚡ <i>Powered by Wingbuddy AI</i>`;
+            }
+
             const caption = [
               `<b>${modality === "video" ? "🎬 Video" : "🎨 Image"} Ready!</b>`,
               `<b>Prompt:</b> ${escapeHtml(prompt)}`,
-              `<i>${escapeHtml(badge)}</i>`,
+              badge,
             ].join("\n\n");
 
             if (modality === "video") {
@@ -499,7 +516,7 @@ class MediaJobOrchestratorService {
               }).catch(async () => {
                 await telegramRuntime.bot?.api.sendMessage(
                   telegramChatId,
-                  `🎬 <b>Your video is ready:</b>\n<a href="${escapeHtml(deliveryUrl)}">${escapeHtml(prompt)}</a>\n\n<i>${escapeHtml(badge)}</i>`,
+                  `🎬 <b>Your video is ready:</b>\n<a href="${escapeHtml(deliveryUrl)}">${escapeHtml(prompt)}</a>\n\n${badge}`,
                   { parse_mode: "HTML" }
                 );
               });
@@ -510,7 +527,7 @@ class MediaJobOrchestratorService {
               }).catch(async () => {
                 await telegramRuntime.bot?.api.sendMessage(
                   telegramChatId,
-                  `🎨 <b>Your image is ready:</b>\n<a href="${escapeHtml(deliveryUrl)}">${escapeHtml(prompt)}</a>\n\n<i>${escapeHtml(badge)}</i>`,
+                  `🎨 <b>Your image is ready:</b>\n<a href="${escapeHtml(deliveryUrl)}">${escapeHtml(prompt)}</a>\n\n${badge}`,
                   { parse_mode: "HTML" }
                 );
               });

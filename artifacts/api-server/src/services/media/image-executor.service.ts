@@ -127,56 +127,10 @@ export class ImageExecutor {
       };
     } catch (primaryErr: any) {
       const errMsg = primaryErr?.message || String(primaryErr);
-      const httpStatus = primaryErr?.status || primaryErr?.statusCode;
+      logger.error({ primaryProvider: targetProvider, primaryModel: targetModel, error: errMsg }, "Primary image generation failed; zero-fallback policy prevents hardcoded community failover.");
       
-      const errorCategory = errMsg.includes("401") || errMsg.includes("auth") || errMsg.includes("API key")
-        ? "auth_error"
-        : errMsg.includes("429") || errMsg.includes("rate")
-        ? "rate_limit"
-        : errMsg.includes("timeout")
-        ? "timeout"
-        : errMsg.includes("404") || errMsg.includes("not found")
-        ? "model_unavailable"
-        : "unknown";
-
-      logger.warn({ primaryProvider: targetProvider, primaryModel: targetModel, error: errMsg }, "Primary image provider failed; executing capability failover");
-
-      const failoverRecord: FailoverRecord = {
-        primaryProvider: targetProvider,
-        primaryModel: targetModel,
-        errorCategory,
-        errorMessage: errMsg,
-        httpStatus,
-        retryAttempt: 1,
-        fallbackProvider: "community",
-        fallbackModel: "flux-realism-community",
-        fallbackType: "secondary_provider",
-        timestamp: new Date().toISOString(),
-      };
-      failovers.push(failoverRecord);
-
-      // Execute explicitly declared fallback provider
-      const fallbackExecution = await aiProviderGatewayService.generateImage("huggingface" as any, {
-        model: "flux-realism-community",
-        prompt: enhancedPrompt,
-        width,
-        height,
-        metadata: { originalPrompt: request.prompt, fallback: true, primaryError: errMsg },
-      });
-
-      const fallbackRes = fallbackExecution.result;
-      return {
-        buffer: fallbackRes.buffer,
-        enhancedPrompt,
-        actualProvider: "community",
-        actualModel: fallbackRes.model || "flux-realism-community",
-        route: "community",
-        sourceUrl: fallbackRes.sourceUrl,
-        width,
-        height,
-        mimeType: fallbackRes.mimeType || "image/png",
-        failovers,
-      };
+      // Strict Zero-Fallback: Throw authentic error instead of switching to a hardcoded 'community' model.
+      throw new Error(`Media generation failed: ${errMsg}`);
     }
   }
 }
