@@ -3,7 +3,7 @@ export function renderUserDashboardHtml(): string {
 <html lang="en" id="main-html">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Wingbuddy AI | User Workspace</title>
   <meta name="theme-color" content="#0b0f19">
   <link rel="manifest" href="/manifest.json">
@@ -53,6 +53,7 @@ export function renderUserDashboardHtml(): string {
     }
   </script>
   <style>
+    *, *::before, *::after { box-sizing: border-box; }
     :root { 
       color-scheme: light; 
       --app-bg: #f8fafc;
@@ -70,18 +71,24 @@ export function renderUserDashboardHtml(): string {
       --app-highlight: rgba(255, 255, 255, 0.05);
     }
     html, body { 
+      width: 100%;
+      max-width: 100%;
+      overflow-x: clip;
+      touch-action: pan-y pinch-zoom;
       background-color: var(--app-bg); 
       color: var(--app-text); 
       font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif; 
       transition: background-color 0.2s ease, color 0.2s ease;
     }
-    .glass-panel { background: var(--app-surface); border: 1px solid var(--app-border); }
+    img, video, svg { max-width: 100%; height: auto; }
+    .glass-panel { background: var(--app-surface); border: 1px solid var(--app-border); min-width: 0; max-width: 100%; }
+    .glass-panel * { min-width: 0; }
     .chat-bubble-user { background: #0284c7; color: #ffffff; }
     .chat-bubble-ai { background: var(--app-surface); color: var(--app-text); border: 1px solid var(--app-border); }
     .chat-bubble-tg { border-left: 3px solid #38bdf8; }
     .chat-bubble-voice { border-left: 3px solid #a855f7; }
-    pre { background: #0f172a; padding: 12px; border-radius: 8px; overflow-x: auto; margin: 8px 0; border: 1px solid rgba(255, 255, 255, 0.08); font-family: 'JetBrains Mono', monospace; font-size: 13px; }
-    code { font-family: 'JetBrains Mono', monospace; font-size: 12px; background: rgba(255, 255, 255, 0.08); padding: 2px 5px; border-radius: 4px; }
+    pre { background: #0f172a; padding: 12px; border-radius: 8px; overflow-x: auto; margin: 8px 0; border: 1px solid rgba(255, 255, 255, 0.08); font-family: 'JetBrains Mono', monospace; font-size: 13px; max-width: 100%; }
+    code { font-family: 'JetBrains Mono', monospace; font-size: 12px; background: rgba(255, 255, 255, 0.08); padding: 2px 5px; border-radius: 4px; word-break: break-word; }
     pre code { background: transparent; padding: 0; }
     /* Custom Scrollbars */
     ::-webkit-scrollbar { width: 6px; height: 0px; }
@@ -143,35 +150,33 @@ export function renderUserDashboardHtml(): string {
     }
   </style>
 </head>
-<body class="h-screen flex flex-col antialiased overflow-hidden selection:bg-brand-500 selection:text-white bg-app-bg text-app-text">
+<body class="h-screen flex flex-col antialiased overflow-hidden selection:bg-brand-500 selection:text-white bg-app-bg text-app-text w-full max-w-full">
 
   <!-- TOP APP BAR -->
-  <header class="h-16 border-b border-app-border bg-app-surface px-4 sm:px-6 flex items-center justify-between z-30 shrink-0">
-    <div class="flex items-center gap-3">
-      <a href="/app" class="flex items-center gap-2.5">
-        <img src="/app-icon.svg" alt="Wingbuddy Logo" class="w-9 h-9 rounded-xl shadow-md shadow-brand-500/20 object-cover" />
-        <div>
-          <span class="font-extrabold text-lg tracking-tight text-app-text">Wingbuddy <span class="text-brand-400 text-xs font-semibold">AI Workspace</span></span>
-        </div>
+  <header class="h-16 border-b border-app-border bg-app-surface px-3 sm:px-6 flex items-center justify-between z-30 shrink-0 w-full max-w-full gap-2">
+    <div class="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+      <a href="/app" class="flex items-center gap-2 min-w-0 shrink-0">
+        <img src="/app-icon.svg" alt="Wingbuddy Logo" class="w-8 h-8 rounded-xl shadow-md shadow-brand-500/20 object-cover shrink-0" />
+        <span class="font-extrabold text-base sm:text-lg tracking-tight text-app-text whitespace-nowrap">Wingbuddy<span class="hidden md:inline text-brand-400 text-xs font-semibold ml-1.5">AI Workspace</span></span>
       </a>
 
       <!-- Telegram Status Pill -->
-      <div id="tg-status-pill" onclick="openTelegramSyncModal()" class="cursor-pointer ml-1 sm:ml-3 px-3 py-1 rounded-full bg-app-highlight hover:bg-black/5 dark:hover:bg-white/10 border border-app-border text-xs flex items-center gap-2 transition">
-        <span class="w-2 h-2 rounded-full bg-amber-400" id="tg-status-dot"></span>
-        <span class="text-app-text opacity-70 font-medium" id="tg-status-text">Checking Telegram Sync...</span>
+      <div id="tg-status-pill" onclick="openTelegramSyncModal()" class="cursor-pointer px-2.5 py-1 rounded-full bg-app-highlight hover:bg-black/5 dark:hover:bg-white/10 border border-app-border text-xs flex items-center gap-1.5 transition shrink min-w-0 max-w-[130px] sm:max-w-none" title="Telegram Sync Status">
+        <span class="w-2 h-2 rounded-full bg-amber-400 shrink-0" id="tg-status-dot"></span>
+        <span class="text-app-text opacity-70 font-medium truncate text-[11px] sm:text-xs" id="tg-status-text">Checking Sync...</span>
       </div>
 
       <!-- Real-time Event Bus indicator -->
-      <div id="sse-status-pill" class="hidden lg:flex items-center gap-2 px-3 py-1 rounded-full bg-app-highlight border border-app-border text-xs text-app-text opacity-70">
+      <div id="sse-status-pill" class="hidden xl:flex items-center gap-2 px-3 py-1 rounded-full bg-app-highlight border border-app-border text-xs text-app-text opacity-70 shrink-0">
         <span id="sse-status-dot" class="w-2 h-2 rounded-full bg-app-text opacity-30"></span>
         <span id="sse-status-text" class="font-medium">Connecting...</span>
       </div>
     </div>
 
     <!-- Right Controls -->
-    <div class="flex items-center gap-3">
+    <div class="flex items-center gap-1.5 sm:gap-3 shrink-0">
       <!-- Notification Filter Mode -->
-      <div class="hidden md:flex items-center gap-1.5 px-3 py-1 rounded-lg bg-app-highlight border border-app-border text-xs">
+      <div class="hidden lg:flex items-center gap-1.5 px-3 py-1 rounded-lg bg-app-highlight border border-app-border text-xs">
         <span class="text-app-text opacity-60">TG Notify:</span>
         <select id="select-notify-pref" onchange="updateNotifyPreference(this.value)" class="bg-transparent text-brand-400 font-semibold focus:outline-none cursor-pointer">
           <option value="full" class="bg-app-bg text-app-text">Full Replies</option>
@@ -181,7 +186,7 @@ export function renderUserDashboardHtml(): string {
       </div>
 
       <!-- Theme Switcher -->
-      <div class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-app-highlight border border-app-border text-xs">
+      <div class="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-app-highlight border border-app-border text-xs">
         <span class="text-app-text opacity-60">Theme:</span>
         <select id="header-theme-select" onchange="updateTheme(this.value)" class="bg-transparent text-brand-400 font-semibold focus:outline-none cursor-pointer">
           <option value="system" class="bg-app-bg text-app-text">System</option>
@@ -191,20 +196,21 @@ export function renderUserDashboardHtml(): string {
       </div>
 
       <!-- Admin switch link if admin -->
-      <a id="admin-portal-link" href="/admin" class="hidden px-3 py-1.5 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/20 text-indigo-400 text-xs font-semibold transition flex items-center gap-1.5">
-        <span>⚙️ Admin Panel</span>
+      <a id="admin-portal-link" href="/admin" class="hidden px-2.5 py-1.5 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/20 text-indigo-400 text-xs font-semibold transition flex items-center gap-1 shrink-0" title="Admin Panel">
+        <span>⚙️</span>
+        <span class="hidden sm:inline">Admin</span>
       </a>
 
       <!-- User Profile Menu -->
-      <div class="flex items-center gap-2.5 pl-2 border-l border-app-border">
-        <div id="user-avatar" class="w-8 h-8 rounded-full bg-gradient-to-tr from-brand-500 to-sky-400 flex items-center justify-center text-white font-bold text-xs uppercase shadow-sm">
+      <div class="flex items-center gap-1.5 sm:gap-2.5 pl-1.5 sm:pl-2 border-l border-app-border shrink-0">
+        <div id="user-avatar" class="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-gradient-to-tr from-brand-500 to-sky-400 flex items-center justify-center text-white font-bold text-xs uppercase shadow-sm shrink-0">
           U
         </div>
-        <div class="hidden sm:block text-left">
-          <div id="user-name" class="text-xs font-bold text-app-text truncate max-w-[120px]">User</div>
-          <div id="user-email" class="text-[10px] text-app-text opacity-60 truncate max-w-[120px]">user@example.com</div>
+        <div class="hidden md:block text-left">
+          <div id="user-name" class="text-xs font-bold text-app-text truncate max-w-[100px]">User</div>
+          <div id="user-email" class="text-[10px] text-app-text opacity-60 truncate max-w-[100px]">user@example.com</div>
         </div>
-        <button onclick="handleLogout()" title="Sign Out" class="p-1.5 rounded-lg text-app-text opacity-50 hover:opacity-100 hover:bg-app-highlight transition">
+        <button onclick="handleLogout()" title="Sign Out" class="p-1.5 rounded-lg text-app-text opacity-50 hover:opacity-100 hover:bg-app-highlight transition shrink-0">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
         </button>
       </div>
@@ -247,69 +253,69 @@ export function renderUserDashboardHtml(): string {
         </div>
 
         <!-- Top Dual Hub Cards: Assistant Intelligence & Telegram Continuity -->
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4 min-w-0 max-w-full">
           
           <!-- Card 1: Assistant Intelligence Status -->
-          <div class="glass-panel rounded-2xl p-5 space-y-4 flex flex-col justify-between relative overflow-hidden">
-            <div class="flex items-start justify-between gap-3">
-              <div>
+          <div class="glass-panel rounded-2xl p-4 sm:p-5 space-y-3 sm:space-y-4 flex flex-col justify-between relative overflow-hidden min-w-0 max-w-full">
+            <div class="flex items-start justify-between gap-2.5 min-w-0">
+              <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2">
-                  <span id="ov-assistant-dot" class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                  <h3 id="ov-assistant-status-label" class="font-bold text-app-text text-base">Assistant Ready</h3>
+                  <span id="ov-assistant-dot" class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0"></span>
+                  <h3 id="ov-assistant-status-label" class="font-bold text-app-text text-sm sm:text-base truncate">Assistant Ready</h3>
                 </div>
-                <p id="ov-assistant-details" class="text-xs text-app-text opacity-50 mt-1">Live and responding to tasks, research, and conversational requests.</p>
+                <p id="ov-assistant-details" class="text-xs text-app-text opacity-50 mt-1 line-clamp-2">Live and responding to tasks, research, and conversational requests.</p>
               </div>
-              <span id="ov-assistant-status-pill" class="px-2.5 py-1 rounded-full text-[10px] font-mono font-bold tracking-wide uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              <span id="ov-assistant-status-pill" class="px-2.5 py-1 rounded-full text-[10px] font-mono font-bold tracking-wide uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 shrink-0">
                 Ready
               </span>
             </div>
 
-            <div class="p-3 rounded-xl bg-app-highlight border border-app-border flex items-center justify-between gap-3 text-xs">
-              <div class="flex items-center gap-2 text-app-text opacity-70">
-                <span>⚡</span>
-                <span>Multi-Step Autonomy &amp; Real-Time Web Search Active</span>
+            <div class="p-3 rounded-xl bg-app-highlight border border-app-border flex items-center justify-between gap-2 text-xs min-w-0">
+              <div class="flex items-center gap-2 text-app-text opacity-70 min-w-0 flex-1">
+                <span class="shrink-0">⚡</span>
+                <span class="truncate">Multi-Step Autonomy &amp; Web Search Active</span>
               </div>
             </div>
 
-            <div class="flex items-center justify-between pt-1">
-              <span class="text-[11px] text-app-text opacity-50">Continuous conversational context</span>
-              <button onclick="switchTab('chat')" class="px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white font-bold text-xs flex items-center gap-2 shadow-md shadow-brand-600/20 transition">
+            <div class="flex items-center justify-between gap-2 pt-1 min-w-0">
+              <span class="text-[11px] text-app-text opacity-50 truncate">Continuous context</span>
+              <button onclick="switchTab('chat')" class="px-3.5 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-brand-600/20 transition shrink-0">
                 <span>💬 Open Live Chat</span>
               </button>
             </div>
           </div>
 
           <!-- Card 2: User Profile & Telegram Continuity -->
-          <div class="glass-panel rounded-2xl p-5 space-y-4 flex flex-col justify-between">
-            <div class="flex items-start justify-between gap-3">
-              <div class="flex items-center gap-3">
-                <div id="ov-profile-avatar" class="w-12 h-12 rounded-2xl bg-gradient-to-tr from-brand-500 to-indigo-500 flex items-center justify-center text-white font-extrabold text-base uppercase shadow-md shadow-brand-500/20 shrink-0">
+          <div class="glass-panel rounded-2xl p-4 sm:p-5 space-y-3 sm:space-y-4 flex flex-col justify-between min-w-0 max-w-full">
+            <div class="flex flex-wrap items-start justify-between gap-2.5 min-w-0">
+              <div class="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
+                <div id="ov-profile-avatar" class="w-10 h-10 sm:w-12 sm:h-12 rounded-2xl bg-gradient-to-tr from-brand-500 to-indigo-500 flex items-center justify-center text-white font-extrabold text-sm sm:text-base uppercase shadow-md shadow-brand-500/20 shrink-0">
                   U
                 </div>
-                <div>
-                  <div id="ov-profile-name" class="font-extrabold text-app-text text-base">Loading profile...</div>
-                  <div id="ov-profile-email" class="text-xs text-app-text opacity-50 font-mono">user@domain</div>
-                  <div class="text-[10px] text-emerald-400 font-medium mt-0.5 flex items-center gap-1">
-                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                    <span>Cloud Workspace Synced</span>
+                <div class="min-w-0 flex-1">
+                  <div id="ov-profile-name" class="font-extrabold text-app-text text-sm sm:text-base truncate">Loading profile...</div>
+                  <div id="ov-profile-email" class="text-xs text-app-text opacity-50 font-mono break-all overflow-hidden text-ellipsis max-w-full">user@domain</div>
+                  <div class="text-[10px] text-emerald-400 font-medium mt-0.5 flex items-center gap-1 truncate">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0"></span>
+                    <span class="truncate">Cloud Workspace Synced</span>
                   </div>
                 </div>
               </div>
-              <div id="ov-tg-badge">
-                <span class="px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">Checking...</span>
+              <div id="ov-tg-badge" class="shrink-0">
+                <span class="px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 whitespace-nowrap">Checking...</span>
               </div>
             </div>
 
-            <div class="p-3.5 rounded-xl bg-app-highlight border border-app-border flex items-center justify-between gap-3">
-              <div class="flex items-center gap-2.5">
-                <span class="text-xl">📱</span>
-                <div>
-                  <div id="ov-tg-title" class="text-xs font-bold text-app-text">Telegram Synchronization</div>
-                  <div id="ov-tg-subtitle" class="text-[11px] text-app-text opacity-50 mt-0.5">Verifying paired mobile connection...</div>
+            <div class="p-3 sm:p-3.5 rounded-xl bg-app-highlight border border-app-border flex flex-wrap sm:flex-nowrap items-center justify-between gap-2.5 min-w-0">
+              <div class="flex items-center gap-2 min-w-0 flex-1">
+                <span class="text-lg sm:text-xl shrink-0">📱</span>
+                <div class="min-w-0 flex-1">
+                  <div id="ov-tg-title" class="text-xs font-bold text-app-text truncate">Telegram Sync</div>
+                  <div id="ov-tg-subtitle" class="text-[11px] text-app-text opacity-50 truncate mt-0.5">Verifying mobile connection...</div>
                 </div>
               </div>
-              <div id="ov-tg-action-container">
-                <button onclick="openTelegramSyncModal()" class="px-3.5 py-1.5 rounded-lg bg-[#229ED9] hover:bg-[#1e8cc0] text-white text-xs font-bold transition shadow-sm">
+              <div id="ov-tg-action-container" class="shrink-0">
+                <button onclick="openTelegramSyncModal()" class="px-3 py-1.5 rounded-lg bg-[#229ED9] hover:bg-[#1e8cc0] text-white text-xs font-bold transition shadow-sm whitespace-nowrap">
                   Connect Telegram
                 </button>
               </div>
@@ -515,19 +521,6 @@ export function renderUserDashboardHtml(): string {
         <!-- Chat Input Form -->
         <div class="p-4 border-t border-app-border bg-app-surface shrink-0 pb-20 sm:pb-24">
           <div class="max-w-4xl mx-auto">
-            <!-- Capability-Aware Media Generation Toolbar -->
-            <div id="media-capability-bar" class="flex items-center gap-2 mb-2 px-1 text-xs">
-              <button id="btn-quick-image" type="button" onclick="triggerMediaShortcut('image')" class="px-2.5 py-1 rounded-lg border text-[11px] font-medium flex items-center gap-1.5 transition cursor-pointer bg-app-highlight border-app-border text-app-text hover:border-brand-500/50">
-                <span>🎨 /image</span>
-                <span id="badge-image-status" class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-              </button>
-              <button id="btn-quick-video" type="button" onclick="triggerMediaShortcut('video')" class="px-2.5 py-1 rounded-lg border text-[11px] font-medium flex items-center gap-1.5 transition cursor-pointer bg-app-highlight border-app-border text-app-text hover:border-brand-500/50">
-                <span>🎬 /video</span>
-                <span id="badge-video-status" class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-              </button>
-              <span id="media-capability-info" class="text-[10px] text-app-text opacity-50 truncate hidden sm:inline">Async jobs • Cloudinary persistent vault</span>
-            </div>
-
             <form id="chat-form" onsubmit="handleChatSubmit(event)" class="relative flex items-end gap-2">
               <textarea id="chat-input" rows="1" placeholder="Type a message or task goal..."
                         class="w-full rounded-xl bg-app-highlight border border-app-border focus:border-brand-500 px-4 py-3.5 text-sm text-app-text placeholder:text-app-text placeholder:opacity-40 focus:outline-none resize-none min-h-[50px] max-h-[160px] leading-relaxed transition-[height] duration-75"></textarea>
@@ -1151,12 +1144,20 @@ export function renderUserDashboardHtml(): string {
     }
 
     function renderUserProfile(user) {
-      document.getElementById('user-name').innerText = user.name || user.email.split('@')[0];
-      document.getElementById('user-email').innerText = user.email;
-      if (user.picture) {
-        document.getElementById('user-avatar').innerHTML = '<img src="' + user.picture + '" class="w-8 h-8 rounded-full" />';
-      } else {
-        document.getElementById('user-avatar').innerText = (user.name || user.email)[0].toUpperCase();
+      const name = user.name || (user.email ? user.email.split('@')[0] : 'User');
+      const initial = (name || user.email || 'U')[0].toUpperCase();
+      const nameEl = document.getElementById('user-name');
+      const emailEl = document.getElementById('user-email');
+      const avatarEl = document.getElementById('user-avatar');
+      
+      if (nameEl) nameEl.innerText = name;
+      if (emailEl) emailEl.innerText = user.email || '';
+      if (avatarEl) {
+        if (user.picture) {
+          avatarEl.innerHTML = '<img src="' + escapeHtml(user.picture) + '" alt="' + escapeHtml(name) + '" referrerpolicy="no-referrer" class="w-full h-full rounded-full object-cover" onerror="this.onerror=null; this.parentElement.innerText=\\'' + initial + '\\';" />';
+        } else {
+          avatarEl.innerText = initial;
+        }
       }
 
       // Admin button
@@ -2666,10 +2667,10 @@ export function renderUserDashboardHtml(): string {
 
         const avatarEl = document.getElementById('ov-profile-avatar');
         if (avatarEl) {
+          const initial = displayName ? displayName[0].toUpperCase() : (u.email ? u.email[0].toUpperCase() : 'U');
           if (u.picture) {
-            avatarEl.innerHTML = '<img src="' + escapeHtml(u.picture) + '" class="w-12 h-12 rounded-2xl object-cover" />';
+            avatarEl.innerHTML = '<img src="' + escapeHtml(u.picture) + '" alt="' + escapeHtml(displayName || 'User') + '" referrerpolicy="no-referrer" class="w-full h-full rounded-2xl object-cover" onerror="this.onerror=null; this.parentElement.innerText=\\'' + initial + '\\';" />';
           } else {
-            const initial = displayName ? displayName[0].toUpperCase() : '?';
             avatarEl.innerText = initial;
           }
         }
