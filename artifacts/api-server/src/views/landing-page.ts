@@ -125,10 +125,6 @@ export function renderLandingPageHtml(): string {
 
       <!-- Right Action & Mobile Menu Toggle -->
       <div class="flex items-center gap-2.5">
-        <button onclick="triggerPWAInstall()" class="pwa-install-btn hidden touch-target px-3.5 py-2 text-xs sm:text-sm font-bold rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-md shadow-blue-500/20 transition items-center gap-1.5 shrink-0 cursor-pointer">
-          📲 Install App
-        </button>
-
         <button id="nav-login-btn" onclick="launchWorkspaceSession()" class="touch-target px-4 py-2 sm:px-5 sm:py-2.5 text-xs sm:text-sm font-bold rounded-xl bg-brand-600 hover:bg-brand-500 text-white shadow-md shadow-brand-600/20 transition flex items-center gap-1.5 shrink-0 cursor-pointer">
           <span>Open Workspace</span>
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
@@ -483,7 +479,8 @@ export function renderLandingPageHtml(): string {
         window.location.replace('/app');
         return;
       }
-      await launchInstantWorkspace();
+      // If no session, trigger real Google Sign In
+      await triggerFirebaseGoogleSignIn();
     }
 
     async function triggerFirebaseGoogleSignIn() {
@@ -541,24 +538,35 @@ export function renderLandingPageHtml(): string {
         if (btnBottomLabel) btnBottomLabel.innerText = 'Sign In & Launch Web App';
 
         if (err.code === 'auth/popup-blocked' || err.code === 'auth/unauthorized-domain' || err.code === 'auth/cancelled-popup-request') {
-          // Seamless fallback: direct instant workspace access so user is never locked out
-          if (btnLabel) btnLabel.innerText = 'Connecting Workspace...';
+          // Attempt instant launch on any error if we have a saved user
+          let savedEmail = null;
           try {
-            const fallbackRes = await fetch('/api/auth/instant-login', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ email: 'olalekan4565@gmail.com', name: 'Olalekan' })
-            });
-            const fallbackData = await fallbackRes.json();
-            if (fallbackData.sessionToken) {
-              localStorage.setItem('wb_session_token', fallbackData.sessionToken);
-              localStorage.setItem('wb_user', JSON.stringify(fallbackData.user));
-              document.cookie = 'wb_session_token=' + encodeURIComponent(fallbackData.sessionToken) + '; path=/; max-age=2592000; SameSite=Lax';
-              window.location.replace('/app');
-              return;
+            const userStr = localStorage.getItem('wb_user');
+            if (userStr) {
+              const u = JSON.parse(userStr);
+              if (u.email) savedEmail = u.email;
             }
-          } catch (e) {
-            console.error('Instant fallback failed:', e);
+          } catch(e) {}
+
+          if (savedEmail) {
+            if (btnLabel) btnLabel.innerText = 'Connecting Workspace...';
+            try {
+              const fallbackRes = await fetch('/api/auth/instant-login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: savedEmail })
+              });
+              const fallbackData = await fallbackRes.json();
+              if (fallbackData.sessionToken) {
+                localStorage.setItem('wb_session_token', fallbackData.sessionToken);
+                localStorage.setItem('wb_user', JSON.stringify(fallbackData.user));
+                document.cookie = 'wb_session_token=' + encodeURIComponent(fallbackData.sessionToken) + '; path=/; max-age=2592000; SameSite=Lax';
+                window.location.replace('/app');
+                return;
+              }
+            } catch (e) {
+              console.error('Instant fallback failed:', e);
+            }
           }
         }
         
@@ -568,25 +576,6 @@ export function renderLandingPageHtml(): string {
           // Attempt instant launch on any error
           window.location.replace('/app');
         }
-      }
-    }
-
-    async function launchInstantWorkspace(customEmail) {
-      try {
-        const res = await fetch('/api/auth/instant-login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: customEmail || 'olalekan4565@gmail.com', name: 'Olalekan' })
-        });
-        const data = await res.json();
-        if (data.sessionToken) {
-          localStorage.setItem('wb_session_token', data.sessionToken);
-          localStorage.setItem('wb_user', JSON.stringify(data.user));
-          document.cookie = 'wb_session_token=' + encodeURIComponent(data.sessionToken) + '; path=/; max-age=2592000; SameSite=Lax';
-          window.location.replace('/app');
-        }
-      } catch (err) {
-        window.location.replace('/app');
       }
     }
 
@@ -629,10 +618,8 @@ export function renderLandingPageHtml(): string {
       }
     }
   </script>
-  <!-- PWA Manager Script -->
   <script>
     (function() {
-      let deferredPrompt = null;
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', function() {
           navigator.serviceWorker.register('/sw.js').catch(function(e) {
@@ -640,55 +627,6 @@ export function renderLandingPageHtml(): string {
           });
         });
       }
-
-      const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
-
-      window.addEventListener('beforeinstallprompt', function(e) {
-        e.preventDefault();
-        deferredPrompt = e;
-        updatePWAInstallUI();
-      });
-
-      window.addEventListener('appinstalled', function() {
-        deferredPrompt = null;
-        updatePWAInstallUI(true);
-      });
-
-      function isIOS() {
-        return /iphone|ipad|ipod/.test(navigator.userAgent.toLowerCase());
-      }
-
-      function updatePWAInstallUI(installed) {
-        const btns = document.querySelectorAll('.pwa-install-btn');
-        btns.forEach(function(btn) {
-          if (installed || isStandalone) {
-            btn.classList.add('hidden');
-            btn.style.display = 'none';
-          } else {
-            btn.classList.remove('hidden');
-            btn.style.display = 'inline-flex';
-            btn.innerHTML = isIOS() ? '📲 Install on iOS' : '📲 Install App';
-          }
-        });
-      }
-
-      window.triggerPWAInstall = async function() {
-        if (deferredPrompt) {
-          deferredPrompt.prompt();
-          const choice = await deferredPrompt.userChoice;
-          if (choice.outcome === 'accepted') {
-            deferredPrompt = null;
-            updatePWAInstallUI(true);
-          }
-        } else if (isIOS()) {
-          alert(['To install on iOS Safari:', '', '1. Tap the Share button (⎋) in Safari', '2. Select "Add to Home Screen" (➕)'].join('\\n'));
-        } else {
-          alert(['To install Wingbuddy as an app:', '', '1. Tap your browser menu (⋮ or Share)', '2. Select "Add to Home Screen" or "Install App"'].join('\\n'));
-        }
-      };
-
-      document.addEventListener('DOMContentLoaded', updatePWAInstallUI);
-      setTimeout(updatePWAInstallUI, 800);
     })();
   </script>
 </body>

@@ -1,6 +1,6 @@
 export function renderUserDashboardHtml(): string {
   return `<!DOCTYPE html>
-<html lang="en" class="dark" style="background-color: #0b0f19 !important; background: #0b0f19 !important; color-scheme: dark;">
+<html lang="en" id="main-html">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
@@ -32,6 +32,13 @@ export function renderUserDashboardHtml(): string {
             mono: ['"JetBrains Mono"', 'monospace'],
           },
           colors: {
+            app: {
+              bg: 'var(--app-bg)',
+              surface: 'var(--app-surface)',
+              text: 'var(--app-text)',
+              border: 'var(--app-border)',
+              highlight: 'var(--app-highlight)',
+            },
             brand: {
               50: '#f0f9ff',
               100: '#e0f2fe',
@@ -46,11 +53,31 @@ export function renderUserDashboardHtml(): string {
     }
   </script>
   <style>
-    :root { color-scheme: dark; }
-    html, body { background-color: #0b0f19 !important; background: #0b0f19 !important; color: #f8fafc !important; font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif; }
-    .glass-panel { background: #131b2e; border: 1px solid #1e293b; }
+    :root { 
+      color-scheme: light; 
+      --app-bg: #f8fafc;
+      --app-surface: #ffffff;
+      --app-text: #1e293b;
+      --app-border: rgba(0, 0, 0, 0.08);
+      --app-highlight: rgba(0, 0, 0, 0.04);
+    }
+    .dark { 
+      color-scheme: dark; 
+      --app-bg: #0b0f19;
+      --app-surface: #0e1424;
+      --app-text: #f8fafc;
+      --app-border: rgba(255, 255, 255, 0.05);
+      --app-highlight: rgba(255, 255, 255, 0.05);
+    }
+    html, body { 
+      background-color: var(--app-bg); 
+      color: var(--app-text); 
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif; 
+      transition: background-color 0.2s ease, color 0.2s ease;
+    }
+    .glass-panel { background: var(--app-surface); border: 1px solid var(--app-border); }
     .chat-bubble-user { background: #0284c7; color: #ffffff; }
-    .chat-bubble-ai { background: #131b2e; color: #f1f5f9; border: 1px solid #1e293b; }
+    .chat-bubble-ai { background: var(--app-surface); color: var(--app-text); border: 1px solid var(--app-border); }
     .chat-bubble-tg { border-left: 3px solid #38bdf8; }
     .chat-bubble-voice { border-left: 3px solid #a855f7; }
     pre { background: #0f172a; padding: 12px; border-radius: 8px; overflow-x: auto; margin: 8px 0; border: 1px solid rgba(255, 255, 255, 0.08); font-family: 'JetBrains Mono', monospace; font-size: 13px; }
@@ -81,63 +108,68 @@ export function renderUserDashboardHtml(): string {
     }
   </style>
 </head>
-<body class="h-screen flex flex-col antialiased overflow-hidden selection:bg-brand-500 selection:text-white">
+<body class="h-screen flex flex-col antialiased overflow-hidden selection:bg-brand-500 selection:text-white bg-app-bg text-app-text">
 
   <!-- TOP APP BAR -->
-  <header class="h-16 border-b border-white/5 bg-[#0e1424] px-4 sm:px-6 flex items-center justify-between z-30 shrink-0">
+  <header class="h-16 border-b border-app-border bg-app-surface px-4 sm:px-6 flex items-center justify-between z-30 shrink-0">
     <div class="flex items-center gap-3">
       <a href="/app" class="flex items-center gap-2.5">
         <img src="/app-icon.svg" alt="Wingbuddy Logo" class="w-9 h-9 rounded-xl shadow-md shadow-brand-500/20 object-cover" />
         <div>
-          <span class="font-extrabold text-lg tracking-tight text-white">Wingbuddy <span class="text-brand-400 text-xs font-semibold">AI Workspace</span></span>
+          <span class="font-extrabold text-lg tracking-tight text-app-text">Wingbuddy <span class="text-brand-400 text-xs font-semibold">AI Workspace</span></span>
         </div>
       </a>
 
       <!-- Telegram Status Pill -->
-      <div id="tg-status-pill" onclick="openTelegramSyncModal()" class="cursor-pointer ml-1 sm:ml-3 px-3 py-1 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-xs flex items-center gap-2 transition">
+      <div id="tg-status-pill" onclick="openTelegramSyncModal()" class="cursor-pointer ml-1 sm:ml-3 px-3 py-1 rounded-full bg-app-highlight hover:bg-black/5 dark:hover:bg-white/10 border border-app-border text-xs flex items-center gap-2 transition">
         <span class="w-2 h-2 rounded-full bg-amber-400" id="tg-status-dot"></span>
-        <span class="text-slate-300 font-medium" id="tg-status-text">Checking Telegram Sync...</span>
+        <span class="text-app-text opacity-70 font-medium" id="tg-status-text">Checking Telegram Sync...</span>
       </div>
 
       <!-- Real-time Event Bus indicator -->
-      <div class="hidden lg:flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-xs text-slate-300">
-        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-        <span class="font-medium">Live Event Bus</span>
+      <div id="sse-status-pill" class="hidden lg:flex items-center gap-2 px-3 py-1 rounded-full bg-app-highlight border border-app-border text-xs text-app-text opacity-70">
+        <span id="sse-status-dot" class="w-2 h-2 rounded-full bg-app-text opacity-30"></span>
+        <span id="sse-status-text" class="font-medium">Connecting...</span>
       </div>
     </div>
 
     <!-- Right Controls -->
     <div class="flex items-center gap-3">
       <!-- Notification Filter Mode -->
-      <div class="hidden md:flex items-center gap-1.5 px-3 py-1 rounded-lg bg-white/5 border border-white/10 text-xs">
-        <span class="text-slate-400">TG Notify:</span>
+      <div class="hidden md:flex items-center gap-1.5 px-3 py-1 rounded-lg bg-app-highlight border border-app-border text-xs">
+        <span class="text-app-text opacity-60">TG Notify:</span>
         <select id="select-notify-pref" onchange="updateNotifyPreference(this.value)" class="bg-transparent text-brand-400 font-semibold focus:outline-none cursor-pointer">
-          <option value="full" class="bg-slate-900 text-white">Full Replies</option>
-          <option value="digest_only" class="bg-slate-900 text-white">Tasks &amp; Alerts Only</option>
-          <option value="silent" class="bg-slate-900 text-white">Silent History Sync</option>
+          <option value="full" class="bg-app-bg text-app-text">Full Replies</option>
+          <option value="digest_only" class="bg-app-bg text-app-text">Tasks &amp; Alerts Only</option>
+          <option value="silent" class="bg-app-bg text-app-text">Silent History Sync</option>
         </select>
       </div>
 
-      <!-- PWA In-App Install Button -->
-      <button id="pwa-install-btn" onclick="triggerPWAInstall()" class="hidden px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-bold shadow-md shadow-blue-500/20 transition items-center gap-1.5">
-        📲 Install App
-      </button>
+      <!-- Theme Switcher -->
+      <div class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-app-highlight border border-app-border text-xs">
+        <span class="text-app-text opacity-60">Theme:</span>
+        <select id="header-theme-select" onchange="updateTheme(this.value)" class="bg-transparent text-brand-400 font-semibold focus:outline-none cursor-pointer">
+          <option value="system" class="bg-app-bg text-app-text">System</option>
+          <option value="light" class="bg-app-bg text-app-text">Light</option>
+          <option value="dark" class="bg-app-bg text-app-text">Dark</option>
+        </select>
+      </div>
 
       <!-- Admin switch link if admin -->
-      <a id="admin-portal-link" href="/admin" class="hidden px-3 py-1.5 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/30 text-indigo-300 text-xs font-semibold transition flex items-center gap-1.5">
+      <a id="admin-portal-link" href="/admin" class="hidden px-3 py-1.5 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/20 text-indigo-400 text-xs font-semibold transition flex items-center gap-1.5">
         <span>⚙️ Admin Panel</span>
       </a>
 
       <!-- User Profile Menu -->
-      <div class="flex items-center gap-2.5 pl-2 border-l border-white/10">
+      <div class="flex items-center gap-2.5 pl-2 border-l border-app-border">
         <div id="user-avatar" class="w-8 h-8 rounded-full bg-gradient-to-tr from-brand-500 to-sky-400 flex items-center justify-center text-white font-bold text-xs uppercase shadow-sm">
           U
         </div>
         <div class="hidden sm:block text-left">
-          <div id="user-name" class="text-xs font-bold text-white truncate max-w-[120px]">User</div>
-          <div id="user-email" class="text-[10px] text-slate-400 truncate max-w-[120px]">user@example.com</div>
+          <div id="user-name" class="text-xs font-bold text-app-text truncate max-w-[120px]">User</div>
+          <div id="user-email" class="text-[10px] text-app-text opacity-60 truncate max-w-[120px]">user@example.com</div>
         </div>
-        <button onclick="handleLogout()" title="Sign Out" class="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition">
+        <button onclick="handleLogout()" title="Sign Out" class="p-1.5 rounded-lg text-app-text opacity-50 hover:opacity-100 hover:bg-app-highlight transition">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
         </button>
       </div>
@@ -147,32 +179,32 @@ export function renderUserDashboardHtml(): string {
   <!-- MAIN WORKSPACE LAYOUT (Full-width clean refined canvas) -->
   <div class="flex-1 flex overflow-hidden w-full relative">
     <!-- CONTENT VIEW AREA -->
-    <main class="flex-1 flex flex-col overflow-hidden bg-[#0b0f19] w-full">
+    <main class="flex-1 flex flex-col overflow-hidden bg-app-bg w-full">
 
       <!-- TAB 0: AUTHORITATIVE OVERVIEW DASHBOARD -->
       <section id="tab-view-overview" class="flex-1 overflow-y-auto p-3.5 sm:p-6 md:p-8 max-w-6xl w-full mx-auto space-y-4 sm:space-y-6 pb-28 sm:pb-36">
         
         <!-- Welcome & Telemetry Header -->
-        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/5 pb-5">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-app-border pb-5">
           <div>
             <div class="flex items-center gap-2.5">
-              <h1 class="text-xl sm:text-2xl font-extrabold text-white tracking-tight">
+              <h1 class="text-xl sm:text-2xl font-extrabold text-app-text tracking-tight">
                 Welcome back, <span id="ov-user-name" class="text-transparent bg-clip-text bg-gradient-to-r from-brand-400 via-sky-300 to-indigo-300">...</span>
               </h1>
               <span id="ov-badge-role" class="px-2 py-0.5 rounded-full bg-brand-500/10 text-brand-400 border border-brand-500/20 text-[10px] font-bold uppercase tracking-wider">Active</span>
             </div>
-            <p class="text-xs text-slate-400 mt-1">Autonomous Multi-Device Workspace • Live Signals &amp; Verified Data</p>
+            <p class="text-xs text-app-text opacity-50 mt-1">Autonomous Multi-Device Workspace • Live Signals &amp; Verified Data</p>
           </div>
 
           <!-- Live Heartbeat & Refresh Control -->
           <div class="flex items-center gap-3 self-start sm:self-auto">
-            <div class="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-white/5 text-xs">
+            <div class="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-app-highlight border border-app-border text-xs">
               <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-              <span id="ov-sync-indicator" class="text-slate-300 font-medium">Authoritative Sync</span>
-              <span class="text-slate-600">•</span>
-              <span id="ov-last-updated-text" class="text-[11px] font-mono text-slate-400">Loading...</span>
+              <span id="ov-sync-indicator" class="text-app-text opacity-70 font-medium">Authoritative Sync</span>
+              <span class="text-app-text opacity-30">•</span>
+              <span id="ov-last-updated-text" class="text-[11px] font-mono text-app-text opacity-50">Loading...</span>
             </div>
-            <button onclick="loadOverview(true)" id="ov-btn-refresh" class="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white transition flex items-center gap-1.5 text-xs font-semibold" title="Refresh Live Data">
+            <button onclick="loadOverview(true)" id="ov-btn-refresh" class="p-2 rounded-xl bg-app-highlight hover:bg-black/5 dark:hover:bg-white/10 text-app-text opacity-70 hover:opacity-100 transition flex items-center gap-1.5 text-xs font-semibold" title="Refresh Live Data">
               <span>🔄</span>
               <span class="hidden sm:inline">Refresh</span>
             </button>
@@ -188,24 +220,24 @@ export function renderUserDashboardHtml(): string {
               <div>
                 <div class="flex items-center gap-2">
                   <span id="ov-assistant-dot" class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                  <h3 id="ov-assistant-status-label" class="font-bold text-white text-base">Assistant Ready</h3>
+                  <h3 id="ov-assistant-status-label" class="font-bold text-app-text text-base">Assistant Ready</h3>
                 </div>
-                <p id="ov-assistant-details" class="text-xs text-slate-400 mt-1">Live and responding to tasks, research, and conversational requests.</p>
+                <p id="ov-assistant-details" class="text-xs text-app-text opacity-50 mt-1">Live and responding to tasks, research, and conversational requests.</p>
               </div>
               <span id="ov-assistant-status-pill" class="px-2.5 py-1 rounded-full text-[10px] font-mono font-bold tracking-wide uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                 Ready
               </span>
             </div>
 
-            <div class="p-3 rounded-xl bg-slate-900/60 border border-white/5 flex items-center justify-between gap-3 text-xs">
-              <div class="flex items-center gap-2 text-slate-300">
+            <div class="p-3 rounded-xl bg-app-highlight border border-app-border flex items-center justify-between gap-3 text-xs">
+              <div class="flex items-center gap-2 text-app-text opacity-70">
                 <span>⚡</span>
                 <span>Multi-Step Autonomy &amp; Real-Time Web Search Active</span>
               </div>
             </div>
 
             <div class="flex items-center justify-between pt-1">
-              <span class="text-[11px] text-slate-400">Continuous conversational context</span>
+              <span class="text-[11px] text-app-text opacity-50">Continuous conversational context</span>
               <button onclick="switchTab('chat')" class="px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white font-bold text-xs flex items-center gap-2 shadow-md shadow-brand-600/20 transition">
                 <span>💬 Open Live Chat</span>
               </button>
@@ -220,8 +252,8 @@ export function renderUserDashboardHtml(): string {
                   U
                 </div>
                 <div>
-                  <div id="ov-profile-name" class="font-extrabold text-white text-base">Loading profile...</div>
-                  <div id="ov-profile-email" class="text-xs text-slate-400 font-mono">user@domain</div>
+                  <div id="ov-profile-name" class="font-extrabold text-app-text text-base">Loading profile...</div>
+                  <div id="ov-profile-email" class="text-xs text-app-text opacity-50 font-mono">user@domain</div>
                   <div class="text-[10px] text-emerald-400 font-medium mt-0.5 flex items-center gap-1">
                     <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
                     <span>Cloud Workspace Synced</span>
@@ -233,12 +265,12 @@ export function renderUserDashboardHtml(): string {
               </div>
             </div>
 
-            <div class="p-3.5 rounded-xl bg-slate-900/60 border border-white/5 flex items-center justify-between gap-3">
+            <div class="p-3.5 rounded-xl bg-app-highlight border border-app-border flex items-center justify-between gap-3">
               <div class="flex items-center gap-2.5">
                 <span class="text-xl">📱</span>
                 <div>
-                  <div id="ov-tg-title" class="text-xs font-bold text-white">Telegram Synchronization</div>
-                  <div id="ov-tg-subtitle" class="text-[11px] text-slate-400 mt-0.5">Verifying paired mobile connection...</div>
+                  <div id="ov-tg-title" class="text-xs font-bold text-app-text">Telegram Synchronization</div>
+                  <div id="ov-tg-subtitle" class="text-[11px] text-app-text opacity-50 mt-0.5">Verifying paired mobile connection...</div>
                 </div>
               </div>
               <div id="ov-tg-action-container">
@@ -253,50 +285,50 @@ export function renderUserDashboardHtml(): string {
         <!-- Personal Intelligence Metrics Grid -->
         <div>
           <div class="flex items-center justify-between mb-3">
-            <h2 class="text-xs font-bold uppercase tracking-wider text-slate-400">Personal Intelligence Metrics</h2>
-            <span class="text-[10px] text-slate-500 font-mono">Live Database Records</span>
+            <h2 class="text-xs font-bold uppercase tracking-wider text-app-text opacity-50">Personal Intelligence Metrics</h2>
+            <span class="text-[10px] text-app-text opacity-30 font-mono">Live Database Records</span>
           </div>
 
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
             
             <!-- Tile 1: Memory Vault -->
             <div onclick="switchTab('memory')" class="glass-panel hover:border-brand-500/40 rounded-2xl p-4 sm:p-5 transition cursor-pointer group">
-              <div class="flex items-center justify-between text-slate-400 mb-2">
-                <span class="text-xs font-semibold text-slate-300">Memory Vault</span>
+              <div class="flex items-center justify-between text-app-text opacity-60 mb-2">
+                <span class="text-xs font-semibold">Memory Vault</span>
                 <span class="text-base group-hover:scale-110 transition">🧠</span>
               </div>
-              <div id="ov-metric-memories" class="text-2xl sm:text-3xl font-extrabold text-white">—</div>
-              <div id="ov-metric-memories-sub" class="text-[11px] text-slate-400 mt-1 truncate">Stored knowledge facts</div>
+              <div id="ov-metric-memories" class="text-2xl sm:text-3xl font-extrabold text-app-text">—</div>
+              <div id="ov-metric-memories-sub" class="text-[11px] text-app-text opacity-50 mt-1 truncate">Stored knowledge facts</div>
             </div>
 
             <!-- Tile 2: Scheduled Tasks -->
             <div onclick="switchTab('tasks')" class="glass-panel hover:border-brand-500/40 rounded-2xl p-4 sm:p-5 transition cursor-pointer group">
-              <div class="flex items-center justify-between text-slate-400 mb-2">
-                <span class="text-xs font-semibold text-slate-300">Scheduled Tasks</span>
+              <div class="flex items-center justify-between text-app-text opacity-60 mb-2">
+                <span class="text-xs font-semibold">Scheduled Tasks</span>
                 <span class="text-base group-hover:scale-110 transition">⚡</span>
               </div>
-              <div id="ov-metric-tasks" class="text-2xl sm:text-3xl font-extrabold text-white">—</div>
-              <div id="ov-metric-tasks-sub" class="text-[11px] text-slate-400 mt-1 truncate">Autonomous jobs</div>
+              <div id="ov-metric-tasks" class="text-2xl sm:text-3xl font-extrabold text-app-text">—</div>
+              <div id="ov-metric-tasks-sub" class="text-[11px] text-app-text opacity-50 mt-1 truncate">Autonomous jobs</div>
             </div>
 
             <!-- Tile 3: Reminders & Alerts -->
             <div onclick="switchTab('reminders')" class="glass-panel hover:border-brand-500/40 rounded-2xl p-4 sm:p-5 transition cursor-pointer group">
-              <div class="flex items-center justify-between text-slate-400 mb-2">
-                <span class="text-xs font-semibold text-slate-300">Reminders</span>
+              <div class="flex items-center justify-between text-app-text opacity-60 mb-2">
+                <span class="text-xs font-semibold">Reminders</span>
                 <span class="text-base group-hover:scale-110 transition">⏰</span>
               </div>
-              <div id="ov-metric-reminders" class="text-2xl sm:text-3xl font-extrabold text-white">—</div>
-              <div id="ov-metric-reminders-sub" class="text-[11px] text-slate-400 mt-1 truncate">Scheduled alarms</div>
+              <div id="ov-metric-reminders" class="text-2xl sm:text-3xl font-extrabold text-app-text">—</div>
+              <div id="ov-metric-reminders-sub" class="text-[11px] text-app-text opacity-50 mt-1 truncate">Scheduled alarms</div>
             </div>
 
             <!-- Tile 4: Synchronized Messages -->
             <div onclick="switchTab('chat')" class="glass-panel hover:border-brand-500/40 rounded-2xl p-4 sm:p-5 transition cursor-pointer group">
-              <div class="flex items-center justify-between text-slate-400 mb-2">
-                <span class="text-xs font-semibold text-slate-300">Messages</span>
+              <div class="flex items-center justify-between text-app-text opacity-60 mb-2">
+                <span class="text-xs font-semibold">Messages</span>
                 <span class="text-base group-hover:scale-110 transition">💬</span>
               </div>
-              <div id="ov-metric-messages" class="text-2xl sm:text-3xl font-extrabold text-white">—</div>
-              <div id="ov-metric-messages-sub" class="text-[11px] text-slate-400 mt-1 truncate">Conversational history</div>
+              <div id="ov-metric-messages" class="text-2xl sm:text-3xl font-extrabold text-app-text">—</div>
+              <div id="ov-metric-messages-sub" class="text-[11px] text-app-text opacity-50 mt-1 truncate">Conversational history</div>
             </div>
           </div>
 
@@ -305,19 +337,19 @@ export function renderUserDashboardHtml(): string {
             <div class="flex items-center gap-3">
               <span class="w-8 h-8 rounded-xl bg-indigo-500/10 text-indigo-400 flex items-center justify-center font-bold text-sm">💎</span>
               <div>
-                <div class="text-xs font-bold text-white flex items-center gap-2">
+                <div class="text-xs font-bold text-app-text flex items-center gap-2">
                   <span id="ov-quota-title">Daily Interaction Usage</span>
-                  <span id="ov-quota-tier" class="px-2 py-0.2 rounded-full bg-brand-500/20 text-brand-300 text-[10px] uppercase font-bold">Standard</span>
+                  <span id="ov-quota-tier" class="px-2 py-0.2 rounded-full bg-brand-500/20 text-brand-600 dark:text-brand-300 text-[10px] uppercase font-bold">Standard</span>
                 </div>
-                <div id="ov-quota-reset" class="text-[11px] text-slate-400 mt-0.5">Resets daily at 00:00 UTC</div>
+                <div id="ov-quota-reset" class="text-[11px] text-app-text opacity-50 mt-0.5">Resets daily at 00:00 UTC</div>
               </div>
             </div>
             <div id="ov-quota-progress-container" class="flex-1 max-w-xs flex flex-col gap-1 hidden">
               <div class="flex justify-between text-[11px] font-mono">
-                <span class="text-slate-400">Used: <span id="ov-quota-used" class="text-white font-bold">0</span></span>
-                <span class="text-slate-400">Limit: <span id="ov-quota-limit" class="text-brand-400 font-bold">50</span></span>
+                <span class="text-app-text opacity-50">Used: <span id="ov-quota-used" class="text-app-text font-bold">0</span></span>
+                <span class="text-app-text opacity-50">Limit: <span id="ov-quota-limit" class="text-brand-500 font-bold">50</span></span>
               </div>
-              <div class="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+              <div class="w-full bg-app-highlight rounded-full h-2 overflow-hidden">
                 <div id="ov-quota-bar" class="bg-gradient-to-r from-brand-500 to-indigo-500 h-2 rounded-full transition-all duration-500" style="width: 0%"></div>
               </div>
             </div>
@@ -331,8 +363,8 @@ export function renderUserDashboardHtml(): string {
         <div class="glass-panel rounded-2xl p-5 space-y-4">
           <div class="flex items-center justify-between">
             <div>
-              <h3 class="text-sm font-bold text-white">Suggested Assistant Actions</h3>
-              <p class="text-xs text-slate-400 mt-0.5">Context-aware triggers adapted to your current workspace state.</p>
+              <h3 class="text-sm font-bold text-app-text">Suggested Assistant Actions</h3>
+              <p class="text-xs text-app-text opacity-50 mt-0.5">Context-aware triggers adapted to your current workspace state.</p>
             </div>
           </div>
 
@@ -342,15 +374,15 @@ export function renderUserDashboardHtml(): string {
           </div>
 
           <!-- Direct Creation Shortcuts -->
-          <div class="pt-3 border-t border-white/5 flex flex-wrap items-center gap-2">
-            <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider mr-1">Shortcuts:</span>
-            <button onclick="openCreateTaskModal()" class="px-3 py-1.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-300 hover:text-white border border-white/5 text-xs font-semibold transition flex items-center gap-1.5">
+          <div class="pt-3 border-t border-app-border flex flex-wrap items-center gap-2">
+            <span class="text-[11px] font-bold text-app-text opacity-50 uppercase tracking-wider mr-1">Shortcuts:</span>
+            <button onclick="openCreateTaskModal()" class="px-3 py-1.5 rounded-xl bg-app-highlight hover:bg-app-highlight/80 text-app-text opacity-80 hover:opacity-100 border border-app-border text-xs font-semibold transition flex items-center gap-1.5">
               <span>⚡ + Create Task</span>
             </button>
-            <button onclick="openCreateMemoryModal()" class="px-3 py-1.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-300 hover:text-white border border-white/5 text-xs font-semibold transition flex items-center gap-1.5">
+            <button onclick="openCreateMemoryModal()" class="px-3 py-1.5 rounded-xl bg-app-highlight hover:bg-app-highlight/80 text-app-text opacity-80 hover:opacity-100 border border-app-border text-xs font-semibold transition flex items-center gap-1.5">
               <span>🧠 + Add Memory</span>
             </button>
-            <button onclick="openCreateReminderModal()" class="px-3 py-1.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-300 hover:text-white border border-white/5 text-xs font-semibold transition flex items-center gap-1.5">
+            <button onclick="openCreateReminderModal()" class="px-3 py-1.5 rounded-xl bg-app-highlight hover:bg-app-highlight/80 text-app-text opacity-80 hover:opacity-100 border border-app-border text-xs font-semibold transition flex items-center gap-1.5">
               <span>⏰ + Set Reminder</span>
             </button>
           </div>
@@ -362,20 +394,20 @@ export function renderUserDashboardHtml(): string {
           <!-- Column 1: Recent Autonomous Tasks -->
           <div class="glass-panel rounded-2xl p-5 space-y-3 flex flex-col justify-between">
             <div>
-              <div class="flex items-center justify-between border-b border-white/5 pb-2.5">
+              <div class="flex items-center justify-between border-b border-app-border pb-2.5">
                 <div class="flex items-center gap-2">
                   <span class="text-base">⚡</span>
-                  <h3 class="font-bold text-white text-sm">Recent Autonomous Tasks</h3>
+                  <h3 class="font-bold text-app-text text-sm">Recent Autonomous Tasks</h3>
                 </div>
-                <button onclick="switchTab('tasks')" class="text-xs text-brand-400 hover:underline">View All →</button>
+                <button onclick="switchTab('tasks')" class="text-xs text-brand-500 dark:text-brand-400 hover:underline">View All →</button>
               </div>
 
               <div id="ov-recent-tasks-list" class="mt-3 space-y-2">
-                <div class="text-center py-6 text-slate-500 text-xs">Loading tasks...</div>
+                <div class="text-center py-6 text-app-text opacity-50 text-xs">Loading tasks...</div>
               </div>
             </div>
 
-            <button onclick="openCreateTaskModal()" class="w-full py-2 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-300 hover:text-white border border-white/5 text-xs font-semibold transition text-center mt-2">
+            <button onclick="openCreateTaskModal()" class="w-full py-2 rounded-xl bg-app-highlight hover:bg-app-highlight/80 text-app-text opacity-80 hover:opacity-100 border border-app-border text-xs font-semibold transition text-center mt-2">
               + Create New Task
             </button>
           </div>
@@ -383,20 +415,20 @@ export function renderUserDashboardHtml(): string {
           <!-- Column 2: Recent Memory Vault -->
           <div class="glass-panel rounded-2xl p-5 space-y-3 flex flex-col justify-between">
             <div>
-              <div class="flex items-center justify-between border-b border-white/5 pb-2.5">
+              <div class="flex items-center justify-between border-b border-app-border pb-2.5">
                 <div class="flex items-center gap-2">
                   <span class="text-base">🧠</span>
-                  <h3 class="font-bold text-white text-sm">Recent Memory Vault</h3>
+                  <h3 class="font-bold text-app-text text-sm">Recent Memory Vault</h3>
                 </div>
-                <button onclick="switchTab('memory')" class="text-xs text-brand-400 hover:underline">View Vault →</button>
+                <button onclick="switchTab('memory')" class="text-xs text-brand-500 dark:text-brand-400 hover:underline">View Vault →</button>
               </div>
 
               <div id="ov-recent-memories-list" class="mt-3 space-y-2">
-                <div class="text-center py-6 text-slate-500 text-xs">Loading memories...</div>
+                <div class="text-center py-6 text-app-text opacity-50 text-xs">Loading memories...</div>
               </div>
             </div>
 
-            <button onclick="openCreateMemoryModal()" class="w-full py-2 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-300 hover:text-white border border-white/5 text-xs font-semibold transition text-center mt-2">
+            <button onclick="openCreateMemoryModal()" class="w-full py-2 rounded-xl bg-app-highlight hover:bg-app-highlight/80 text-app-text opacity-80 hover:opacity-100 border border-app-border text-xs font-semibold transition text-center mt-2">
               + Store New Memory
             </button>
           </div>
@@ -407,13 +439,13 @@ export function renderUserDashboardHtml(): string {
       <!-- TAB 1: LIVE CHAT WORKSPACE -->
       <section id="tab-view-chat" class="hidden flex-1 flex flex-col overflow-hidden">
         <!-- Chat Sub-header Bar with Multi-Conversation Controls -->
-        <div class="px-3 sm:px-4 py-2 border-b border-white/5 bg-[#0b0f19]/95 backdrop-blur-md flex items-center justify-between shrink-0 max-w-4xl w-full mx-auto gap-2">
+        <div class="px-3 sm:px-4 py-2 border-b border-app-border bg-app-bg/95 backdrop-blur-md flex items-center justify-between shrink-0 max-w-4xl w-full mx-auto gap-2">
           <!-- Active Conversation Switcher Trigger -->
           <div class="flex items-center gap-2 min-w-0">
-            <button onclick="openConversationsDrawer()" class="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-semibold text-white flex items-center gap-1.5 transition truncate cursor-pointer shadow-sm group active:scale-95" title="Switch or view all conversations">
+            <button onclick="openConversationsDrawer()" class="px-3 py-1.5 rounded-xl bg-app-highlight hover:bg-app-highlight/80 border border-app-border text-xs font-semibold text-app-text flex items-center gap-1.5 transition truncate cursor-pointer shadow-sm group active:scale-95" title="Switch or view all conversations">
               <span class="text-brand-400">💬</span>
               <span id="active-chat-title" class="truncate max-w-[130px] sm:max-w-[220px]">New Chat</span>
-              <svg class="w-3.5 h-3.5 text-slate-400 group-hover:text-white transition shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+              <svg class="w-3.5 h-3.5 text-app-text opacity-40 group-hover:opacity-100 transition shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
             </button>
             <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse hidden sm:inline-block" title="Synced across Web & Telegram"></span>
           </div>
@@ -424,10 +456,10 @@ export function renderUserDashboardHtml(): string {
               <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/></svg>
               <span>New Chat</span>
             </button>
-            <button onclick="deleteCurrentChat()" class="p-1.5 rounded-xl text-slate-400 hover:text-red-400 hover:bg-red-500/10 border border-white/5 transition flex items-center justify-center cursor-pointer" title="Delete current conversation">
+            <button onclick="deleteCurrentChat()" class="p-1.5 rounded-xl text-app-text opacity-40 hover:text-red-400 hover:bg-red-500/10 border border-app-border transition flex items-center justify-center cursor-pointer" title="Delete current conversation">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
             </button>
-            <button onclick="clearChatHistory()" class="hidden md:flex p-1.5 rounded-xl text-slate-400 hover:text-amber-400 hover:bg-amber-500/10 border border-white/5 transition items-center justify-center cursor-pointer" title="Clear messages in this conversation">
+            <button onclick="clearChatHistory()" class="hidden md:flex p-1.5 rounded-xl text-app-text opacity-40 hover:text-amber-400 hover:bg-amber-500/10 border border-app-border transition items-center justify-center cursor-pointer" title="Clear messages in this conversation">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
             </button>
           </div>
@@ -436,21 +468,21 @@ export function renderUserDashboardHtml(): string {
         <!-- Message Thread -->
         <div id="chat-thread" class="flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6 space-y-4 max-w-4xl w-full mx-auto">
           <!-- Chat messages dynamically rendered here -->
-          <div class="text-center py-12 text-slate-500 text-xs">
+          <div class="text-center py-12 text-app-text opacity-50 text-xs">
             <div class="w-12 h-12 rounded-2xl bg-brand-500/10 border border-brand-500/20 text-brand-400 flex items-center justify-center text-xl mx-auto mb-3">
               ⚡
             </div>
-            <div class="font-bold text-slate-300 text-sm mb-1">Wingbuddy Workspace Ready</div>
+            <div class="font-bold text-app-text text-sm mb-1">Wingbuddy Workspace Ready</div>
             <p>Messages, tasks, and memory items synchronize bi-directionally between Web and Telegram.</p>
           </div>
         </div>
 
         <!-- Chat Input Form -->
-        <div class="p-4 border-t border-white/5 bg-[#0e1424] shrink-0 pb-20 sm:pb-24">
+        <div class="p-4 border-t border-app-border bg-app-surface shrink-0 pb-20 sm:pb-24">
           <div class="max-w-4xl mx-auto">
             <form id="chat-form" onsubmit="handleChatSubmit(event)" class="relative flex items-end gap-2">
               <textarea id="chat-input" rows="1" placeholder="Type a message or task goal..."
-                        class="w-full rounded-xl bg-slate-900/90 border border-white/10 focus:border-brand-500 px-4 py-3.5 text-sm text-white placeholder:text-slate-500 focus:outline-none resize-none min-h-[50px] max-h-[160px] leading-relaxed transition-[height] duration-75"></textarea>
+                        class="w-full rounded-xl bg-app-highlight border border-app-border focus:border-brand-500 px-4 py-3.5 text-sm text-app-text placeholder:text-app-text placeholder:opacity-40 focus:outline-none resize-none min-h-[50px] max-h-[160px] leading-relaxed transition-[height] duration-75"></textarea>
               <button id="chat-send-btn" type="submit" class="h-12 px-5 rounded-xl bg-brand-600 hover:bg-brand-500 text-white font-bold text-sm flex items-center justify-center transition shadow-lg shadow-brand-600/20 shrink-0 active:scale-95">
                 <span>Send</span>
               </button>
@@ -461,10 +493,10 @@ export function renderUserDashboardHtml(): string {
 
       <!-- TAB 2: SCHEDULED TASKS -->
       <section id="tab-view-tasks" class="hidden flex-1 overflow-y-auto p-4 sm:p-8 max-w-5xl w-full mx-auto space-y-6 pb-28 sm:pb-36">
-        <div class="flex items-center justify-between border-b border-white/5 pb-4">
+        <div class="flex items-center justify-between border-b border-app-border pb-4">
           <div>
-            <h2 class="text-xl font-bold text-white">Scheduled Tasks &amp; Autonomous Digests</h2>
-            <p class="text-xs text-slate-400 mt-1">Autonomous multi-step jobs executing in background and publishing digests to Telegram &amp; Web.</p>
+            <h2 class="text-xl font-bold text-app-text">Scheduled Tasks &amp; Autonomous Digests</h2>
+            <p class="text-xs text-app-text opacity-60 mt-1">Autonomous multi-step jobs executing in background and publishing digests to Telegram &amp; Web.</p>
           </div>
           <button onclick="openCreateTaskModal()" class="px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold transition flex items-center gap-2">
             <span>+ Create Task</span>
@@ -473,16 +505,16 @@ export function renderUserDashboardHtml(): string {
 
         <div id="tasks-list" class="grid grid-cols-1 gap-4">
           <!-- Tasks dynamically rendered here -->
-          <div class="text-center py-12 text-slate-500 text-xs">Loading active tasks...</div>
+          <div class="text-center py-12 text-app-text opacity-40 text-xs">Loading active tasks...</div>
         </div>
       </section>
 
       <!-- TAB 3: MEMORY VAULT -->
       <section id="tab-view-memory" class="hidden flex-1 overflow-y-auto p-4 sm:p-8 max-w-5xl w-full mx-auto space-y-6 pb-28 sm:pb-36">
-        <div class="flex items-center justify-between border-b border-white/5 pb-4">
+        <div class="flex items-center justify-between border-b border-app-border pb-4">
           <div>
-            <h2 class="text-xl font-bold text-white">Persistent Memory Vault</h2>
-            <p class="text-xs text-slate-400 mt-1">Multi-tenant isolated long-term knowledge learned across Telegram and Web.</p>
+            <h2 class="text-xl font-bold text-app-text">Persistent Memory Vault</h2>
+            <p class="text-xs text-app-text opacity-60 mt-1">Multi-tenant isolated long-term knowledge learned across Telegram and Web.</p>
           </div>
           <button onclick="openCreateMemoryModal()" class="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition flex items-center gap-2">
             <span>+ Add Memory</span>
@@ -491,16 +523,16 @@ export function renderUserDashboardHtml(): string {
 
         <div id="memory-list" class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <!-- Memories dynamically rendered here -->
-          <div class="text-center py-12 text-slate-500 text-xs">Loading user memory vault...</div>
+          <div class="text-center py-12 text-app-text opacity-40 text-xs">Loading user memory vault...</div>
         </div>
       </section>
 
       <!-- TAB 4: REMINDERS -->
       <section id="tab-view-reminders" class="hidden flex-1 overflow-y-auto p-4 sm:p-8 max-w-5xl w-full mx-auto space-y-6 pb-28 sm:pb-36">
-        <div class="flex items-center justify-between border-b border-white/5 pb-4">
+        <div class="flex items-center justify-between border-b border-app-border pb-4">
           <div>
-            <h2 class="text-xl font-bold text-white">Proactive Reminders &amp; Alarms</h2>
-            <p class="text-xs text-slate-400 mt-1">Scheduled alerts pushed to your Telegram and active Web workspace.</p>
+            <h2 class="text-xl font-bold text-app-text">Proactive Reminders &amp; Alarms</h2>
+            <p class="text-xs text-app-text opacity-60 mt-1">Scheduled alerts pushed to your Telegram and active Web workspace.</p>
           </div>
           <button onclick="openCreateReminderModal()" class="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold transition flex items-center gap-2">
             <span>+ Create Reminder</span>
@@ -509,34 +541,34 @@ export function renderUserDashboardHtml(): string {
 
         <div id="reminders-list" class="space-y-3">
           <!-- Reminders dynamically rendered here -->
-          <div class="text-center py-12 text-slate-500 text-xs">Loading reminders...</div>
+          <div class="text-center py-12 text-app-text opacity-40 text-xs">Loading reminders...</div>
         </div>
       </section>
 
       <!-- TAB 5: TELEGRAM & SYNC SETTINGS -->
       <section id="tab-view-settings" class="hidden flex-1 overflow-y-auto p-4 sm:p-8 max-w-4xl w-full mx-auto space-y-6 pb-28 sm:pb-36">
-        <div class="border-b border-white/5 pb-4">
-          <h2 class="text-xl font-bold text-white">Account Profile &amp; Telegram Synchronization</h2>
-          <p class="text-xs text-slate-400 mt-1">Manage single display name resolution, cross-platform linking, and notification dispatch controls.</p>
+        <div class="border-b border-app-border pb-4">
+          <h2 class="text-xl font-bold text-app-text">Account Profile &amp; Telegram Synchronization</h2>
+          <p class="text-xs text-app-text opacity-60 mt-1">Manage single display name resolution, cross-platform linking, and notification dispatch controls.</p>
         </div>
 
         <!-- User Identity & Preferred Name Card -->
         <div class="glass-panel rounded-2xl p-6 space-y-4 border border-brand-500/20">
-          <div class="flex items-center gap-3 border-b border-white/5 pb-3">
+          <div class="flex items-center gap-3 border-b border-app-border pb-3">
             <div class="w-10 h-10 rounded-xl bg-brand-500/10 border border-brand-500/30 flex items-center justify-center text-brand-400 text-xl">
               👤
             </div>
             <div>
-              <h3 class="font-bold text-white text-sm">Authoritative Identity &amp; Preferred Name</h3>
-              <p class="text-xs text-slate-400">Single source of truth used across Web Chat, Telegram Bot, and AI Assistant.</p>
+              <h3 class="font-bold text-app-text text-sm">Authoritative Identity &amp; Preferred Name</h3>
+              <p class="text-xs text-app-text opacity-60">Single source of truth used across Web Chat, Telegram Bot, and AI Assistant.</p>
             </div>
           </div>
 
           <div class="space-y-3">
             <div>
-              <label class="block text-xs font-semibold text-slate-300 mb-1">Preferred Name</label>
+              <label class="block text-xs font-semibold text-app-text opacity-70 mb-1">Preferred Name</label>
               <div class="flex items-center gap-2">
-                <input id="settings-pref-name-input" type="text" placeholder="e.g. Lekzy or Femi" maxlength="40" class="flex-1 bg-black/40 border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-brand-500/50" />
+                <input id="settings-pref-name-input" type="text" placeholder="e.g. Lekzy or Femi" maxlength="40" class="flex-1 bg-app-highlight border border-app-border rounded-xl px-3.5 py-2.5 text-xs text-app-text placeholder-app-text placeholder-opacity-40 focus:outline-none focus:border-brand-500/50" />
                 <button onclick="savePreferredNameSettings()" class="px-4 py-2.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-xs font-bold transition shadow-sm">
                   Save Name
                 </button>
@@ -545,15 +577,56 @@ export function renderUserDashboardHtml(): string {
             </div>
 
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs pt-1">
-              <div class="p-3 rounded-xl bg-slate-900/60 border border-white/5">
-                <div class="text-[11px] text-slate-400 font-medium">Resolved Display Name</div>
-                <div id="settings-resolved-display-name" class="font-bold text-brand-300 mt-0.5">Loading...</div>
+              <div class="p-3 rounded-xl bg-app-highlight border border-app-border">
+                <div class="text-[11px] text-app-text opacity-50 font-medium">Resolved Display Name</div>
+                <div id="settings-resolved-display-name" class="font-bold text-brand-600 dark:text-brand-300 mt-0.5">Loading...</div>
               </div>
-              <div class="p-3 rounded-xl bg-slate-900/60 border border-white/5">
-                <div class="text-[11px] text-slate-400 font-medium">Name Source Priority</div>
-                <div id="settings-name-source-label" class="font-bold text-slate-300 mt-0.5">Loading...</div>
+              <div class="p-3 rounded-xl bg-app-highlight border border-app-border">
+                <div class="text-[11px] text-app-text opacity-50 font-medium">Name Source Priority</div>
+                <div id="settings-name-source-label" class="font-bold text-app-text mt-0.5">Loading...</div>
               </div>
             </div>
+          </div>
+        </div>
+
+        <!-- Interface Theme Switcher -->
+        <div class="glass-panel rounded-2xl p-6 space-y-4 border border-app-border">
+          <div class="flex items-center gap-3 border-b border-app-border pb-3">
+            <div class="w-10 h-10 rounded-xl bg-brand-500/10 border border-brand-500/30 flex items-center justify-center text-brand-400 text-xl">
+              🌓
+            </div>
+            <div>
+              <h3 class="font-bold text-app-text text-sm">Interface Visual Theme</h3>
+              <p class="text-xs text-app-text opacity-60">Adaptive UI mode for high-focus or late-night sessions.</p>
+            </div>
+          </div>
+          <div class="flex items-center gap-2 p-1.5 bg-app-highlight rounded-2xl border border-app-border w-fit">
+            <button onclick="updateTheme('light')" id="theme-btn-light" class="px-5 py-2 rounded-xl text-xs font-bold transition-all active:scale-95">Light</button>
+            <button onclick="updateTheme('dark')" id="theme-btn-dark" class="px-5 py-2 rounded-xl text-xs font-bold transition-all active:scale-95">Dark</button>
+            <button onclick="updateTheme('system')" id="theme-btn-system" class="px-5 py-2 rounded-xl text-xs font-bold transition-all active:scale-95">System</button>
+          </div>
+        </div>
+
+        <!-- Admin: Persona Registry -->
+        <div id="admin-persona-section" class="hidden glass-panel rounded-2xl p-6 space-y-4 border border-indigo-500/30">
+          <div class="flex items-center justify-between border-b border-app-border pb-3">
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center text-indigo-400 text-xl">
+                🎭
+              </div>
+              <div>
+                <h3 class="font-bold text-app-text text-sm">Staff AI Persona Registry</h3>
+                <p class="text-xs text-app-text opacity-60">Authoritative control over system instructions and availability.</p>
+              </div>
+            </div>
+            <button onclick="loadAdminPersonas()" class="p-2 rounded-xl bg-app-highlight hover:bg-app-highlight/80 text-app-text opacity-70 transition flex items-center gap-1 text-xs font-bold" title="Refresh Registry">
+              <span>🔄</span>
+              <span class="hidden sm:inline">Refresh</span>
+            </button>
+          </div>
+          
+          <div id="admin-persona-list" class="space-y-4">
+            <div class="text-center py-8 text-app-text opacity-40 text-xs italic">Loading persona registry...</div>
           </div>
         </div>
 
@@ -565,8 +638,8 @@ export function renderUserDashboardHtml(): string {
                 📱
               </div>
               <div>
-                <h3 class="font-bold text-white text-sm">Telegram Bot Synchronization</h3>
-                <p id="settings-tg-desc" class="text-xs text-slate-400 mt-0.5">Link your Telegram account to chat and receive automated digests on mobile.</p>
+                <h3 class="font-bold text-app-text text-sm">Telegram Bot Synchronization</h3>
+                <p id="settings-tg-desc" class="text-xs text-app-text opacity-60 mt-0.5">Link your Telegram account to chat and receive automated digests on mobile.</p>
               </div>
             </div>
             <div id="settings-tg-action">
@@ -576,40 +649,40 @@ export function renderUserDashboardHtml(): string {
             </div>
           </div>
 
-          <div id="settings-pairing-box" class="hidden p-4 rounded-xl bg-slate-900 border border-brand-500/30 space-y-3">
-            <div class="text-xs font-bold text-brand-400">⚡ Single-Use Connection Link (10-minute TTL):</div>
+          <div id="settings-pairing-box" class="hidden p-4 rounded-xl bg-app-highlight border border-brand-500/30 space-y-3">
+            <div class="text-xs font-bold text-brand-500 dark:text-brand-400">⚡ Single-Use Connection Link (10-minute TTL):</div>
             <div class="flex items-center gap-2">
-              <input id="pairing-link-input" readonly class="flex-1 bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs font-mono text-slate-200" />
-              <button onclick="copyPairingLink()" class="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-xs font-semibold text-white">Copy</button>
+              <input id="pairing-link-input" readonly class="flex-1 bg-app-surface border border-app-border rounded-lg px-3 py-2 text-xs font-mono text-app-text opacity-80" />
+              <button onclick="copyPairingLink()" class="px-3 py-2 rounded-lg bg-app-highlight hover:bg-app-highlight/80 text-xs font-semibold text-app-text">Copy</button>
               <a id="pairing-link-open" target="_blank" class="px-3 py-2 rounded-lg bg-[#229ED9] hover:bg-[#1e8cc0] text-xs font-bold text-white">Open in Telegram</a>
             </div>
-            <p class="text-[11px] text-slate-400">Or type <code class="text-brand-400">/start</code> in <a id="pairing-bot-link" target="_blank" class="text-sky-400 underline font-mono">Telegram Bot</a> with this link token.</p>
+            <p class="text-[11px] text-app-text opacity-50">Or type <code class="text-brand-500 font-bold">/start</code> in <a id="pairing-bot-link" target="_blank" class="text-sky-500 dark:text-sky-400 underline font-mono">Telegram Bot</a> with this link token.</p>
           </div>
         </div>
 
         <!-- Notification Policy -->
         <div class="glass-panel rounded-2xl p-6 space-y-4">
-          <h3 class="font-bold text-white text-sm">Granular Notification Mode</h3>
+          <h3 class="font-bold text-app-text text-sm">Granular Notification Mode</h3>
           <div class="space-y-2">
-            <label class="flex items-start gap-3 p-3 rounded-xl bg-slate-900/60 border border-white/5 cursor-pointer hover:border-brand-500/30 transition">
+            <label class="flex items-start gap-3 p-3 rounded-xl bg-app-highlight border border-app-border cursor-pointer hover:border-brand-500/30 transition">
               <input type="radio" name="radio-notify" value="full" onchange="updateNotifyPreference(this.value)" class="mt-1 text-brand-500" checked />
               <div>
-                <div class="text-xs font-bold text-white">Full Cross-Interaction Mode</div>
-                <div class="text-[11px] text-slate-400">Receive Telegram copies of all answers generated in the web workspace.</div>
+                <div class="text-xs font-bold text-app-text">Full Cross-Interaction Mode</div>
+                <div class="text-[11px] text-app-text opacity-60">Receive Telegram copies of all answers generated in the web workspace.</div>
               </div>
             </label>
-            <label class="flex items-start gap-3 p-3 rounded-xl bg-slate-900/60 border border-white/5 cursor-pointer hover:border-brand-500/30 transition">
+            <label class="flex items-start gap-3 p-3 rounded-xl bg-app-highlight border border-app-border cursor-pointer hover:border-brand-500/30 transition">
               <input type="radio" name="radio-notify" value="digest_only" onchange="updateNotifyPreference(this.value)" class="mt-1 text-brand-500" />
               <div>
-                <div class="text-xs font-bold text-white">Digest &amp; Alerts Only (Recommended)</div>
-                <div class="text-[11px] text-slate-400">Only receive morning automated task digests (e.g. Remote Job alerts) and reminder alarms on Telegram.</div>
+                <div class="text-xs font-bold text-app-text">Digest &amp; Alerts Only (Recommended)</div>
+                <div class="text-[11px] text-app-text opacity-60">Only receive morning automated task digests (e.g. Remote Job alerts) and reminder alarms on Telegram.</div>
               </div>
             </label>
-            <label class="flex items-start gap-3 p-3 rounded-xl bg-slate-900/60 border border-white/5 cursor-pointer hover:border-brand-500/30 transition">
+            <label class="flex items-start gap-3 p-3 rounded-xl bg-app-highlight border border-app-border cursor-pointer hover:border-brand-500/30 transition">
               <input type="radio" name="radio-notify" value="silent" onchange="updateNotifyPreference(this.value)" class="mt-1 text-brand-500" />
               <div>
-                <div class="text-xs font-bold text-white">Silent History Sync</div>
-                <div class="text-[11px] text-slate-400">Maintain database synchronization without triggering push notifications on Telegram.</div>
+                <div class="text-xs font-bold text-app-text">Silent History Sync</div>
+                <div class="text-[11px] text-app-text opacity-60">Maintain database synchronization without triggering push notifications on Telegram.</div>
               </div>
             </label>
           </div>
@@ -617,8 +690,8 @@ export function renderUserDashboardHtml(): string {
 
         <!-- Magic Link Generator -->
         <div class="glass-panel rounded-2xl p-6 space-y-3">
-          <h3 class="font-bold text-white text-sm">Mobile Magic Login SSO</h3>
-          <p class="text-xs text-slate-400">Generate a one-time login link from your Telegram bot anytime by typing <code class="text-brand-400">/web</code> in the bot chat.</p>
+          <h3 class="font-bold text-app-text text-sm">Mobile Magic Login SSO</h3>
+          <p class="text-xs text-app-text opacity-60">Generate a one-time login link from your Telegram bot anytime by typing <code class="text-brand-500 font-bold">/web</code> in the bot chat.</p>
         </div>
       </section>
 
@@ -626,57 +699,56 @@ export function renderUserDashboardHtml(): string {
   </div>
 
   <!-- UNIFIED FLOATING BOTTOM NAVIGATION DOCK -->
-  <nav id="unified-bottom-nav" class="fixed bottom-0 sm:bottom-4 left-0 right-0 sm:left-1/2 sm:-translate-x-1/2 sm:w-auto z-40 bg-[#090d16]/95 sm:bg-[#0c1220]/95 backdrop-blur-xl sm:backdrop-blur-2xl border-t sm:border border-white/10 sm:border-white/15 px-2 sm:px-3 py-1.5 sm:py-2 flex items-center justify-around sm:justify-center gap-1 sm:gap-2 shadow-2xl sm:shadow-[0_20px_50px_rgba(0,0,0,0.85)] sm:rounded-2xl">
-    <button onclick="switchTab('overview')" id="mobile-nav-btn-overview" class="flex flex-col sm:flex-row items-center gap-0.5 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-brand-300 bg-brand-500/20 border border-brand-500/40 text-[10px] sm:text-xs font-bold transition shadow-sm">
+  <nav id="unified-bottom-nav" class="fixed bottom-0 sm:bottom-4 left-0 right-0 sm:left-1/2 sm:-translate-x-1/2 sm:w-auto z-40 bg-app-bg/95 sm:bg-app-surface/95 backdrop-blur-xl sm:backdrop-blur-2xl border-t sm:border border-app-border px-2 sm:px-3 py-1.5 sm:py-2 flex items-center justify-around sm:justify-center gap-1 sm:gap-2 shadow-2xl sm:shadow-[0_20px_50px_rgba(0,0,0,0.85)] sm:rounded-2xl">
+    <button onclick="switchTab('overview')" id="mobile-nav-btn-overview" class="flex flex-col sm:flex-row items-center gap-0.5 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-brand-600 dark:text-brand-300 bg-brand-500/10 dark:bg-brand-500/20 border border-brand-500/30 dark:border-brand-500/40 text-[10px] sm:text-xs font-bold transition shadow-sm">
       <span class="text-base sm:text-lg">📊</span>
       <span>Overview</span>
     </button>
-    <button onclick="switchTab('chat')" id="mobile-nav-btn-chat" class="flex flex-col sm:flex-row items-center gap-0.5 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-white/5 border border-transparent text-[10px] sm:text-xs font-semibold transition">
+    <button onclick="switchTab('chat')" id="mobile-nav-btn-chat" class="flex flex-col sm:flex-row items-center gap-0.5 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-app-text/50 hover:text-app-text hover:bg-app-highlight border border-transparent text-[10px] sm:text-xs font-semibold transition">
       <span class="text-base sm:text-lg">💬</span>
       <span>Chat</span>
     </button>
-    <button onclick="switchTab('tasks')" id="mobile-nav-btn-tasks" class="flex flex-col sm:flex-row items-center gap-0.5 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-white/5 border border-transparent text-[10px] sm:text-xs font-semibold transition relative">
+    <button onclick="switchTab('tasks')" id="mobile-nav-btn-tasks" class="flex flex-col sm:flex-row items-center gap-0.5 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-app-text/50 hover:text-app-text hover:bg-app-highlight border border-transparent text-[10px] sm:text-xs font-semibold transition relative">
       <span class="text-base sm:text-lg">⚡</span>
       <span>Tasks</span>
-      <span id="badge-task-count" class="px-1.5 py-0.2 rounded-full bg-brand-500/20 text-brand-400 text-[10px] font-bold">0</span>
+      <span id="badge-task-count" class="px-1.5 py-0.2 rounded-full bg-brand-500/20 text-brand-600 dark:text-brand-400 text-[10px] font-bold">0</span>
     </button>
-    <button onclick="switchTab('memory')" id="mobile-nav-btn-memory" class="flex flex-col sm:flex-row items-center gap-0.5 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-white/5 border border-transparent text-[10px] sm:text-xs font-semibold transition">
+    <button onclick="switchTab('memory')" id="mobile-nav-btn-memory" class="flex flex-col sm:flex-row items-center gap-0.5 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-app-text/50 hover:text-app-text hover:bg-app-highlight border border-transparent text-[10px] sm:text-xs font-semibold transition">
       <span class="text-base sm:text-lg">🧠</span>
       <span>Memory</span>
     </button>
-    <button onclick="switchTab('reminders')" id="mobile-nav-btn-reminders" class="flex flex-col sm:flex-row items-center gap-0.5 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-white/5 border border-transparent text-[10px] sm:text-xs font-semibold transition">
+    <button onclick="switchTab('reminders')" id="mobile-nav-btn-reminders" class="flex flex-col sm:flex-row items-center gap-0.5 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-app-text/50 hover:text-app-text hover:bg-app-highlight border border-transparent text-[10px] sm:text-xs font-semibold transition">
       <span class="text-base sm:text-lg">⏰</span>
       <span>Reminders</span>
     </button>
-    <button onclick="switchTab('settings')" id="mobile-nav-btn-settings" class="flex flex-col sm:flex-row items-center gap-0.5 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-white/5 border border-transparent text-[10px] sm:text-xs font-semibold transition">
+    <button onclick="switchTab('settings')" id="mobile-nav-btn-settings" class="flex flex-col sm:flex-row items-center gap-0.5 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-app-text/50 hover:text-app-text hover:bg-app-highlight border border-transparent text-[10px] sm:text-xs font-semibold transition">
       <span class="text-base sm:text-lg">⚙️</span>
       <span>Sync</span>
     </button>
   </nav>
 
   <!-- MODALS -->
-  <!-- MODAL: CREATE TASK -->
   <div id="modal-create-task" class="hidden fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-    <div class="glass-panel rounded-2xl p-6 max-w-lg w-full space-y-4 border border-white/10 shadow-2xl">
-      <div class="flex items-center justify-between border-b border-white/5 pb-3">
-        <h3 class="font-bold text-white text-base flex items-center gap-2">
+    <div class="glass-panel rounded-2xl p-6 max-w-lg w-full space-y-4 border border-app-border shadow-2xl">
+      <div class="flex items-center justify-between border-b border-app-border pb-3">
+        <h3 class="font-bold text-app-text text-base flex items-center gap-2">
           <span>⚡</span>
           <span>Create Autonomous Task</span>
         </h3>
-        <button onclick="closeCreateTaskModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
+        <button onclick="closeCreateTaskModal()" class="text-app-text opacity-40 hover:opacity-100 text-xl leading-none">&times;</button>
       </div>
       <form onsubmit="handleCreateTaskSubmit(event)" class="space-y-3">
         <div>
-          <label class="block text-xs font-bold text-slate-300 mb-1">Task Title</label>
-          <input id="task-input-title" required placeholder="e.g., Remote AI Engineer Job Search" class="w-full bg-slate-900/90 border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-brand-500" />
+          <label class="block text-xs font-bold text-app-text opacity-70 mb-1">Task Title</label>
+          <input id="task-input-title" required placeholder="e.g., Remote AI Engineer Job Search" class="w-full bg-app-highlight border border-app-border rounded-xl px-3.5 py-2.5 text-xs text-app-text placeholder:text-app-text placeholder:opacity-40 focus:outline-none focus:border-brand-500" />
         </div>
         <div>
-          <label class="block text-xs font-bold text-slate-300 mb-1">Execution Goal &amp; Instructions</label>
-          <textarea id="task-input-goal" rows="3" required placeholder="e.g., Scan job platforms for remote senior roles paying $160k+ and compile links..." class="w-full bg-slate-900/90 border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-brand-500 resize-none"></textarea>
+          <label class="block text-xs font-bold text-app-text opacity-70 mb-1">Execution Goal &amp; Instructions</label>
+          <textarea id="task-input-goal" rows="3" required placeholder="e.g., Scan job platforms for remote senior roles paying $160k+ and compile links..." class="w-full bg-app-highlight border border-app-border rounded-xl px-3.5 py-2.5 text-xs text-app-text placeholder:text-app-text placeholder:opacity-40 focus:outline-none focus:border-brand-500 resize-none"></textarea>
         </div>
         <div>
-          <label class="block text-xs font-bold text-slate-300 mb-1">Task Category</label>
-          <select id="task-input-type" class="w-full bg-slate-900/90 border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-brand-500">
+          <label class="block text-xs font-bold text-app-text opacity-70 mb-1">Task Category</label>
+          <select id="task-input-type" class="w-full bg-app-highlight border border-app-border rounded-xl px-3.5 py-2.5 text-xs text-app-text focus:outline-none focus:border-brand-500">
             <option value="research">Web &amp; Intelligence Research</option>
             <option value="job_search">Job &amp; Career Search</option>
             <option value="coding">Software &amp; Coding Analysis</option>
@@ -685,35 +757,34 @@ export function renderUserDashboardHtml(): string {
         </div>
         <div id="task-submit-error" class="hidden text-xs text-red-400 bg-red-500/10 p-2.5 rounded-lg border border-red-500/20"></div>
         <div class="flex items-center justify-end gap-2 pt-2">
-          <button type="button" onclick="closeCreateTaskModal()" class="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-semibold">Cancel</button>
+          <button type="button" onclick="closeCreateTaskModal()" class="px-4 py-2 rounded-xl bg-app-highlight hover:bg-app-highlight/80 text-app-text opacity-70 text-xs font-semibold">Cancel</button>
           <button id="task-btn-submit" type="submit" class="px-5 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold shadow-lg shadow-brand-600/20">Create Task</button>
         </div>
       </form>
     </div>
   </div>
 
-  <!-- MODAL: ADD MEMORY -->
   <div id="modal-create-memory" class="hidden fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-    <div class="glass-panel rounded-2xl p-6 max-w-lg w-full space-y-4 border border-white/10 shadow-2xl">
-      <div class="flex items-center justify-between border-b border-white/5 pb-3">
-        <h3 class="font-bold text-white text-base flex items-center gap-2">
+    <div class="glass-panel rounded-2xl p-6 max-w-lg w-full space-y-4 border border-app-border shadow-2xl">
+      <div class="flex items-center justify-between border-b border-app-border pb-3">
+        <h3 class="font-bold text-app-text text-base flex items-center gap-2">
           <span>🧠</span>
           <span>Add Long-Term Memory</span>
         </h3>
-        <button onclick="closeCreateMemoryModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
+        <button onclick="closeCreateMemoryModal()" class="text-app-text opacity-40 hover:opacity-100 text-xl leading-none">&times;</button>
       </div>
       <form onsubmit="handleCreateMemorySubmit(event)" class="space-y-3">
         <div>
-          <label class="block text-xs font-bold text-slate-300 mb-1">Key / Topic Name</label>
-          <input id="mem-input-key" required placeholder="e.g., preferred_ide, tech_stack, location" class="w-full bg-slate-900/90 border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-purple-500" />
+          <label class="block text-xs font-bold text-app-text opacity-70 mb-1">Key / Topic Name</label>
+          <input id="mem-input-key" required placeholder="e.g., preferred_ide, tech_stack, location" class="w-full bg-app-highlight border border-app-border rounded-xl px-3.5 py-2.5 text-xs text-app-text placeholder:text-app-text placeholder:opacity-40 focus:outline-none focus:border-purple-500" />
         </div>
         <div>
-          <label class="block text-xs font-bold text-slate-300 mb-1">Memory Content</label>
-          <textarea id="mem-input-content" rows="3" required placeholder="Describe what Wingbuddy should remember about you across sessions..." class="w-full bg-slate-900/90 border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-purple-500 resize-none"></textarea>
+          <label class="block text-xs font-bold text-app-text opacity-70 mb-1">Memory Content</label>
+          <textarea id="mem-input-content" rows="3" required placeholder="Describe what Wingbuddy should remember about you across sessions..." class="w-full bg-app-highlight border border-app-border rounded-xl px-3.5 py-2.5 text-xs text-app-text placeholder:text-app-text placeholder:opacity-40 focus:outline-none focus:border-purple-500 resize-none"></textarea>
         </div>
         <div>
-          <label class="block text-xs font-bold text-slate-300 mb-1">Category</label>
-          <select id="mem-input-category" class="w-full bg-slate-900/90 border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-purple-500">
+          <label class="block text-xs font-bold text-app-text opacity-70 mb-1">Category</label>
+          <select id="mem-input-category" class="w-full bg-app-highlight border border-app-border rounded-xl px-3.5 py-2.5 text-xs text-app-text focus:outline-none focus:border-purple-500">
             <option value="preference">User Preference</option>
             <option value="profile">Profile Fact</option>
             <option value="workflow">Workflow &amp; Habits</option>
@@ -722,31 +793,30 @@ export function renderUserDashboardHtml(): string {
         </div>
         <div id="mem-submit-error" class="hidden text-xs text-red-400 bg-red-500/10 p-2.5 rounded-lg border border-red-500/20"></div>
         <div class="flex items-center justify-end gap-2 pt-2">
-          <button type="button" onclick="closeCreateMemoryModal()" class="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-semibold">Cancel</button>
+          <button type="button" onclick="closeCreateMemoryModal()" class="px-4 py-2 rounded-xl bg-app-highlight hover:bg-app-highlight/80 text-app-text opacity-70 text-xs font-semibold">Cancel</button>
           <button id="mem-btn-submit" type="submit" class="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold shadow-lg shadow-purple-600/20">Save Memory</button>
         </div>
       </form>
     </div>
   </div>
 
-  <!-- MODAL: CREATE REMINDER -->
   <div id="modal-create-reminder" class="hidden fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-    <div class="glass-panel rounded-2xl p-6 max-w-lg w-full space-y-4 border border-white/10 shadow-2xl">
-      <div class="flex items-center justify-between border-b border-white/5 pb-3">
-        <h3 class="font-bold text-white text-base flex items-center gap-2">
+    <div class="glass-panel rounded-2xl p-6 max-w-lg w-full space-y-4 border border-app-border shadow-2xl">
+      <div class="flex items-center justify-between border-b border-app-border pb-3">
+        <h3 class="font-bold text-app-text text-base flex items-center gap-2">
           <span>⏰</span>
           <span>Schedule Proactive Reminder</span>
         </h3>
-        <button onclick="closeCreateReminderModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
+        <button onclick="closeCreateReminderModal()" class="text-app-text opacity-40 hover:opacity-100 text-xl leading-none">&times;</button>
       </div>
       <form onsubmit="handleCreateReminderSubmit(event)" class="space-y-3">
         <div>
-          <label class="block text-xs font-bold text-slate-300 mb-1">Reminder Alert Prompt</label>
-          <input id="rem-input-prompt" required placeholder="e.g., Review weekly analytics report and sync with team..." class="w-full bg-slate-900/90 border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-amber-500" />
+          <label class="block text-xs font-bold text-app-text opacity-70 mb-1">Reminder Alert Prompt</label>
+          <input id="rem-input-prompt" required placeholder="e.g., Review weekly analytics report and sync with team..." class="w-full bg-app-highlight border border-app-border rounded-xl px-3.5 py-2.5 text-xs text-app-text placeholder:text-app-text placeholder:opacity-40 focus:outline-none focus:border-amber-500" />
         </div>
         <div>
-          <label class="block text-xs font-bold text-slate-300 mb-1">Remind In</label>
-          <select id="rem-input-time" class="w-full bg-slate-900/90 border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-amber-500">
+          <label class="block text-xs font-bold text-app-text opacity-70 mb-1">Remind In</label>
+          <select id="rem-input-time" class="w-full bg-app-highlight border border-app-border rounded-xl px-3.5 py-2.5 text-xs text-app-text focus:outline-none focus:border-amber-500">
             <option value="15">In 15 minutes</option>
             <option value="30">In 30 minutes</option>
             <option value="60" selected>In 1 hour</option>
@@ -756,26 +826,63 @@ export function renderUserDashboardHtml(): string {
         </div>
         <div id="rem-submit-error" class="hidden text-xs text-red-400 bg-red-500/10 p-2.5 rounded-lg border border-red-500/20"></div>
         <div class="flex items-center justify-end gap-2 pt-2">
-          <button type="button" onclick="closeCreateReminderModal()" class="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-semibold">Cancel</button>
+          <button type="button" onclick="closeCreateReminderModal()" class="px-4 py-2 rounded-xl bg-app-highlight hover:bg-app-highlight/80 text-app-text opacity-70 text-xs font-semibold">Cancel</button>
           <button id="rem-btn-submit" type="submit" class="px-5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold shadow-lg shadow-amber-600/20">Schedule Reminder</button>
         </div>
       </form>
     </div>
   </div>
 
-  <!-- MODAL: CONVERSATIONS HISTORY & MANAGEMENT -->
+  <div id="modal-edit-persona" class="hidden fixed inset-0 z-[60] bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+    <div class="glass-panel rounded-3xl p-6 max-w-2xl w-full space-y-5 border border-indigo-500/30 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div class="flex items-center justify-between border-b border-app-border pb-4 shrink-0">
+        <div class="flex items-center gap-3">
+          <span id="edit-persona-emoji" class="text-2xl">🎭</span>
+          <div>
+            <h3 class="font-extrabold text-app-text text-base">Edit AI Persona</h3>
+            <p id="edit-persona-id-label" class="text-[10px] font-mono text-indigo-500 dark:text-indigo-400 uppercase tracking-widest mt-0.5"></p>
+          </div>
+        </div>
+        <button onclick="closeEditPersonaModal()" class="w-8 h-8 rounded-full bg-app-highlight flex items-center justify-center text-app-text opacity-40 hover:opacity-100 transition">&times;</button>
+      </div>
+      
+      <div class="flex-1 overflow-y-auto pr-1 space-y-4">
+        <div>
+          <label class="block text-[11px] font-bold text-app-text opacity-50 uppercase tracking-wider mb-2">Display Name</label>
+          <input id="edit-persona-name" class="w-full bg-app-highlight border border-app-border rounded-xl px-4 py-3 text-sm text-app-text focus:outline-none focus:border-indigo-500 transition" />
+        </div>
+        <div>
+          <label class="block text-[11px] font-bold text-app-text opacity-50 uppercase tracking-wider mb-2">Tagline / Mission</label>
+          <input id="edit-persona-tagline" class="w-full bg-app-highlight border border-app-border rounded-xl px-4 py-3 text-sm text-app-text focus:outline-none focus:border-indigo-500 transition" />
+        </div>
+        <div>
+          <label class="block text-[11px] font-bold text-app-text opacity-50 uppercase tracking-wider mb-2">Core System Instructions</label>
+          <textarea id="edit-persona-prompt" rows="8" class="w-full bg-app-highlight border border-app-border rounded-xl px-4 py-3 text-sm text-app-text font-mono leading-relaxed focus:outline-none focus:border-indigo-500 transition resize-none"></textarea>
+          <p class="text-[10px] text-app-text opacity-40 mt-2">These instructions define the model's identity, tone, and logical constraints.</p>
+        </div>
+      </div>
+
+      <div id="edit-persona-error" class="hidden p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-medium"></div>
+
+      <div class="flex items-center justify-end gap-3 pt-2 border-t border-app-border shrink-0">
+        <button onclick="closeEditPersonaModal()" class="px-6 py-2.5 rounded-xl bg-app-highlight hover:bg-app-highlight/80 text-app-text opacity-70 text-xs font-bold transition">Cancel</button>
+        <button id="btn-save-persona" onclick="savePersonaEdits()" class="px-8 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-extrabold shadow-lg shadow-indigo-600/20 transition active:scale-95">Save Changes</button>
+      </div>
+    </div>
+  </div>
+
   <div id="modal-conversations" class="hidden fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-    <div class="glass-panel rounded-2xl p-5 sm:p-6 max-w-lg w-full space-y-4 border border-white/10 shadow-2xl flex flex-col max-h-[85vh]">
-      <div class="flex items-center justify-between border-b border-white/5 pb-3">
+    <div class="glass-panel rounded-2xl p-5 sm:p-6 max-w-lg w-full space-y-4 border border-app-border shadow-2xl flex flex-col max-h-[85vh]">
+      <div class="flex items-center justify-between border-b border-app-border pb-3">
         <div class="flex items-center gap-2">
           <span class="text-brand-400 text-lg">💬</span>
-          <h3 class="font-bold text-white text-base">Conversations History</h3>
+          <h3 class="font-bold text-app-text text-base">Conversations History</h3>
         </div>
-        <button onclick="closeConversationsDrawer()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
+        <button onclick="closeConversationsDrawer()" class="text-app-text opacity-40 hover:opacity-100 text-xl leading-none">&times;</button>
       </div>
 
       <div class="flex items-center justify-between gap-2">
-        <span class="text-xs text-slate-400" id="conv-count-label">Saved chat threads</span>
+        <span class="text-xs text-app-text opacity-60" id="conv-count-label">Saved chat threads</span>
         <button onclick="createNewChat(); closeConversationsDrawer();" class="px-3 py-1.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/></svg>
           <span>Start New Chat</span>
@@ -783,12 +890,12 @@ export function renderUserDashboardHtml(): string {
       </div>
 
       <div id="conversations-list-container" class="flex-1 overflow-y-auto space-y-2 pr-1 min-h-[160px] max-h-[380px]">
-        <div class="text-center py-8 text-slate-500 text-xs">Loading conversations...</div>
+        <div class="text-center py-8 text-app-text opacity-40 text-xs">Loading conversations...</div>
       </div>
 
-      <div class="border-t border-white/5 pt-3 flex items-center justify-between">
-        <span class="text-[11px] text-slate-500">Threads persist permanently</span>
-        <button type="button" onclick="closeConversationsDrawer()" class="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-semibold">Close</button>
+      <div class="border-t border-app-border pt-3 flex items-center justify-between">
+        <span class="text-[11px] text-app-text opacity-50">Threads persist permanently</span>
+        <button type="button" onclick="closeConversationsDrawer()" class="px-4 py-2 rounded-xl bg-app-highlight hover:bg-black/5 dark:hover:bg-white/10 text-app-text opacity-70 text-xs font-semibold">Close</button>
       </div>
     </div>
   </div>
@@ -866,7 +973,7 @@ export function renderUserDashboardHtml(): string {
       }
 
       if (!sessionToken) {
-        let savedEmail = 'olalekan4565@gmail.com';
+        let savedEmail = null;
         try {
           const userStr = localStorage.getItem('wb_user');
           if (userStr) {
@@ -875,21 +982,23 @@ export function renderUserDashboardHtml(): string {
           }
         } catch(e) {}
 
-        try {
-          const autoRes = await fetch('/api/auth/instant-login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: savedEmail, name: 'Olalekan' })
-          });
-          const autoData = await autoRes.json();
-          if (autoData.sessionToken) {
-            sessionToken = autoData.sessionToken;
-            localStorage.setItem('wb_session_token', sessionToken);
-            localStorage.setItem('wb_user', JSON.stringify(autoData.user));
-            document.cookie = 'wb_session_token=' + encodeURIComponent(sessionToken) + '; path=/; max-age=2592000; SameSite=Lax';
+        if (savedEmail) {
+          try {
+            const autoRes = await fetch('/api/auth/instant-login', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email: savedEmail })
+            });
+            const autoData = await autoRes.json();
+            if (autoData.sessionToken) {
+              sessionToken = autoData.sessionToken;
+              localStorage.setItem('wb_session_token', sessionToken);
+              localStorage.setItem('wb_user', JSON.stringify(autoData.user));
+              document.cookie = 'wb_session_token=' + encodeURIComponent(sessionToken) + '; path=/; max-age=2592000; SameSite=Lax';
+            }
+          } catch (e) {
+            console.error('Auto login recovery error:', e);
           }
-        } catch (e) {
-          console.error('Auto login recovery error:', e);
         }
       }
 
@@ -903,7 +1012,7 @@ export function renderUserDashboardHtml(): string {
           headers: { 'Authorization': 'Bearer ' + sessionToken }
         });
         if (!res.ok) {
-          let savedEmail = 'olalekan4565@gmail.com';
+          let savedEmail = null;
           try {
             const userStr = localStorage.getItem('wb_user');
             if (userStr) {
@@ -912,20 +1021,22 @@ export function renderUserDashboardHtml(): string {
             }
           } catch(e) {}
 
-          const refreshRes = await fetch('/api/auth/instant-login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: savedEmail, name: 'Olalekan' })
-          });
-          const refreshData = await refreshRes.json();
-          if (refreshData.sessionToken) {
-            sessionToken = refreshData.sessionToken;
-            localStorage.setItem('wb_session_token', sessionToken);
-            localStorage.setItem('wb_user', JSON.stringify(refreshData.user));
-            document.cookie = 'wb_session_token=' + encodeURIComponent(sessionToken) + '; path=/; max-age=2592000; SameSite=Lax';
-            res = await fetch('/api/auth/me', {
-              headers: { 'Authorization': 'Bearer ' + sessionToken }
+          if (savedEmail) {
+            const refreshRes = await fetch('/api/auth/instant-login', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email: savedEmail })
             });
+            const refreshData = await refreshRes.json();
+            if (refreshData.sessionToken) {
+              sessionToken = refreshData.sessionToken;
+              localStorage.setItem('wb_session_token', sessionToken);
+              localStorage.setItem('wb_user', JSON.stringify(refreshData.user));
+              document.cookie = 'wb_session_token=' + encodeURIComponent(sessionToken) + '; path=/; max-age=2592000; SameSite=Lax';
+              res = await fetch('/api/auth/me', {
+                headers: { 'Authorization': 'Bearer ' + sessionToken }
+              });
+            }
           }
         }
         if (!res.ok) {
@@ -938,6 +1049,7 @@ export function renderUserDashboardHtml(): string {
         const data = await res.json();
         currentUser = data.user;
         renderUserProfile(currentUser);
+        applyTheme(currentUser.themePreference || 'system');
         initSSE(sessionToken);
         loadOverview();
         loadConversations();
@@ -971,6 +1083,8 @@ export function renderUserDashboardHtml(): string {
       // Admin button
       if (user.role === 'admin') {
         document.getElementById('admin-portal-link').classList.remove('hidden');
+        document.getElementById('admin-persona-section').classList.remove('hidden');
+        loadAdminPersonas();
       }
 
       // Telegram Sync Pill
@@ -990,6 +1104,197 @@ export function renderUserDashboardHtml(): string {
       }
     }
 
+    // Theme Management
+    let themeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    
+    function applyTheme(theme) {
+      const html = document.documentElement;
+      const isDark = theme === 'dark' || (theme === 'system' && themeMediaQuery.matches);
+      
+      if (isDark) {
+        html.classList.add('dark');
+      } else {
+        html.classList.remove('dark');
+      }
+
+      // Update buttons UI
+      ['light', 'dark', 'system'].forEach(t => {
+        const btn = document.getElementById('theme-btn-' + t);
+        if (!btn) return;
+        if (t === theme) {
+          btn.className = 'px-5 py-2 rounded-xl text-xs font-extrabold bg-brand-500 text-white shadow-md shadow-brand-500/20';
+        } else {
+          btn.className = 'px-5 py-2 rounded-xl text-xs font-bold text-app-text opacity-50 hover:opacity-100 transition-colors';
+        }
+      });
+
+      const headerSelect = document.getElementById('header-theme-select');
+      if (headerSelect) headerSelect.value = theme;
+    }
+
+    // Listen for system theme changes
+    themeMediaQuery.addEventListener('change', () => {
+      if (currentUser && currentUser.themePreference === 'system') {
+        applyTheme('system');
+      }
+    });
+
+    async function updateTheme(theme) {
+      applyTheme(theme);
+      if (currentUser) currentUser.themePreference = theme;
+      
+      const token = localStorage.getItem('wb_session_token');
+      try {
+        await fetch('/api/user/profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+          body: JSON.stringify({ themePreference: theme })
+        });
+      } catch (err) {
+        console.warn('Failed saving theme preference:', err);
+      }
+    }
+
+    // Admin: Persona Management
+    let allPersonas = [];
+    let editingPersonaId = null;
+
+    async function loadAdminPersonas() {
+      if (currentUser?.role !== 'admin') return;
+      const token = localStorage.getItem('wb_session_token');
+      const list = document.getElementById('admin-persona-list');
+      
+      try {
+        const res = await fetch('/api/personas', {
+          headers: { 'Authorization': 'Bearer ' + token }
+        });
+        const data = await res.json();
+        if (data.success) {
+          allPersonas = data.personas;
+          renderAdminPersonas(allPersonas);
+        }
+      } catch (err) {
+        list.innerHTML = '<div class="text-red-400 text-xs text-center py-4">Failed to load personas registry.</div>';
+      }
+    }
+
+    function renderAdminPersonas(personas) {
+      const list = document.getElementById('admin-persona-list');
+      list.innerHTML = '';
+      
+      personas.forEach(p => {
+        const card = document.createElement('div');
+        card.className = 'glass-panel rounded-2xl p-5 space-y-4 border ' + (p.enabled ? 'border-app-border' : 'border-red-500/20 opacity-70');
+        card.innerHTML = \`
+          <div class="flex items-start justify-between gap-4">
+            <div class="flex items-center gap-3">
+              <span class="text-2xl">${p.emoji}</span>
+              <div>
+                <div class="flex items-center gap-2">
+                  <h4 class="font-bold text-app-text text-sm">${escapeHtml(p.name)}</h4>
+                  <span class="text-[9px] font-mono text-app-text opacity-50 tracking-tighter uppercase px-1.5 py-0.5 rounded bg-app-highlight">${p.id}</span>
+                </div>
+                <p class="text-[11px] text-app-text opacity-60 mt-0.5">${escapeHtml(p.tagline)}</p>
+              </div>
+            </div>
+            <div class="flex items-center gap-2">
+              <button onclick="togglePersona('${p.id}', ${!p.enabled})" class="px-3 py-1.5 rounded-lg text-[10px] font-bold transition ${p.enabled ? 'bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-500 dark:text-red-400 border border-red-500/20'}">
+                ${p.enabled ? '🟢 Enabled' : '🔴 Disabled'}
+              </button>
+              <button onclick="openEditPersonaModal('${p.id}')" class="p-2 rounded-lg bg-app-highlight hover:bg-app-highlight/80 text-app-text opacity-60 hover:opacity-100 transition">✏️</button>
+            </div>
+          </div>
+          <div class="p-3 bg-app-highlight rounded-xl border border-app-border">
+            <div class="text-[9px] font-bold text-app-text opacity-50 uppercase tracking-widest mb-1.5 flex items-center justify-between">
+              <span>System Instructions</span>
+              <span class="${p.isBuiltIn ? 'text-indigo-600 dark:text-indigo-400' : 'text-amber-600 dark:text-amber-400'}">${p.isBuiltIn ? 'Built-in' : 'Custom'}</span>
+            </div>
+            <p class="text-[11px] text-app-text opacity-80 font-mono leading-relaxed line-clamp-3">${escapeHtml(p.systemPrompt)}</p>
+          </div>
+        \`;
+        list.appendChild(card);
+      });
+    }
+
+    async function togglePersona(id, enabled) {
+      const token = localStorage.getItem('wb_session_token');
+      try {
+        const res = await fetch(\`/api/personas/\${id}/toggle\`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+          body: JSON.stringify({ enabled })
+        });
+        const data = await res.json();
+        if (data.success) {
+          loadAdminPersonas();
+          if (window.toast) window.toast('✓ Persona status updated');
+        }
+      } catch (err) {
+        alert('Failed to toggle persona');
+      }
+    }
+
+    function openEditPersonaModal(id) {
+      const p = allPersonas.find(x => x.id === id);
+      if (!p) return;
+      
+      editingPersonaId = id;
+      document.getElementById('edit-persona-id-label').innerText = 'ID: ' + p.id;
+      document.getElementById('edit-persona-emoji').innerText = p.emoji;
+      document.getElementById('edit-persona-name').value = p.name;
+      document.getElementById('edit-persona-tagline').value = p.tagline;
+      document.getElementById('edit-persona-prompt').value = p.systemPrompt;
+      document.getElementById('edit-persona-error').classList.add('hidden');
+      
+      document.getElementById('modal-edit-persona').classList.remove('hidden');
+    }
+
+    function closeEditPersonaModal() {
+      document.getElementById('modal-edit-persona').classList.add('hidden');
+      editingPersonaId = null;
+    }
+
+    async function savePersonaEdits() {
+      if (!editingPersonaId) return;
+      const token = localStorage.getItem('wb_session_token');
+      const name = document.getElementById('edit-persona-name').value.trim();
+      const tagline = document.getElementById('edit-persona-tagline').value.trim();
+      const systemPrompt = document.getElementById('edit-persona-prompt').value.trim();
+      const btn = document.getElementById('btn-save-persona');
+      const errEl = document.getElementById('edit-persona-error');
+
+      if (!name || !systemPrompt) {
+        errEl.innerText = 'Name and system instructions are required.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+
+      btn.disabled = true;
+      btn.innerText = 'Saving...';
+      
+      try {
+        const res = await fetch(\`/api/personas/\${editingPersonaId}\`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+          body: JSON.stringify({ name, tagline, systemPrompt })
+        });
+        const data = await res.json();
+        if (data.success) {
+          closeEditPersonaModal();
+          loadAdminPersonas();
+          if (window.toast) window.toast('✓ Persona changes saved');
+        } else {
+          throw new Error(data.error || 'Failed to save changes');
+        }
+      } catch (err) {
+        errEl.innerText = err.message;
+        errEl.classList.remove('hidden');
+      } finally {
+        btn.disabled = false;
+        btn.innerText = 'Save Changes';
+      }
+    }
+
     const renderedMessageIds = new Set();
     let sseReconnectTimer = null;
 
@@ -1003,6 +1308,14 @@ export function renderUserDashboardHtml(): string {
 
       sseEventSource.onopen = () => {
         console.log('Realtime workspace event stream connected');
+        const dot = document.getElementById('sse-status-dot');
+        const text = document.getElementById('sse-status-text');
+        if (dot) {
+          dot.className = 'w-2 h-2 rounded-full bg-emerald-400 animate-pulse';
+        }
+        if (text) {
+          text.innerText = 'Live Event Bus';
+        }
       };
 
       sseEventSource.addEventListener('chat_message', (e) => {
@@ -1037,6 +1350,14 @@ export function renderUserDashboardHtml(): string {
 
       sseEventSource.onerror = (err) => {
         console.warn('SSE disconnected; reconnecting in 5s...');
+        const dot = document.getElementById('sse-status-dot');
+        const text = document.getElementById('sse-status-text');
+        if (dot) {
+          dot.className = 'w-2 h-2 rounded-full bg-rose-500';
+        }
+        if (text) {
+          text.innerText = 'Sync Offline';
+        }
         try { sseEventSource.close(); } catch(e) {}
         sseReconnectTimer = setTimeout(() => {
           const currentToken = localStorage.getItem('wb_session_token');
@@ -1082,7 +1403,7 @@ export function renderUserDashboardHtml(): string {
       }
 
       if (conversationsList.length === 0) {
-        container.innerHTML = '<div class="text-center py-8 text-slate-500 text-xs">No saved conversations yet. Click "Start New Chat" above.</div>';
+        container.innerHTML = '<div class="text-center py-8 text-app-text opacity-50 text-xs">No saved conversations yet. Click "Start New Chat" above.</div>';
         return;
       }
 
@@ -1092,22 +1413,22 @@ export function renderUserDashboardHtml(): string {
         const snippet = c.lastMessageSnippet ? escapeHtml(c.lastMessageSnippet) : 'No messages yet';
         
         return \`
-          <div onclick="switchConversation(\${c.id})" class="group cursor-pointer p-3 rounded-xl border transition flex items-center justify-between gap-3 \${isActive ? 'bg-brand-600/20 border-brand-500/40 text-white shadow-sm' : 'bg-slate-900/60 border-white/5 text-slate-300 hover:bg-slate-800/80 hover:border-white/10'}">
+          <div onclick="switchConversation(${c.id})" class="group cursor-pointer p-3 rounded-xl border transition flex items-center justify-between gap-3 ${isActive ? 'bg-brand-500/10 dark:bg-brand-600/20 border-brand-500/30 dark:border-brand-500/40 text-app-text shadow-sm' : 'bg-app-highlight border-app-border text-app-text opacity-70 hover:opacity-100 hover:bg-app-highlight/80'}">
             <div class="flex items-center gap-3 min-w-0 flex-1">
-              <div class="w-8 h-8 rounded-lg flex items-center justify-center text-sm shrink-0 \${isActive ? 'bg-brand-500 text-white' : 'bg-white/5 text-slate-400 group-hover:text-white'}">
+              <div class="w-8 h-8 rounded-lg flex items-center justify-center text-sm shrink-0 ${isActive ? 'bg-brand-500 text-white' : 'bg-app-highlight text-app-text opacity-50 group-hover:opacity-100'}">
                 💬
               </div>
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2">
-                  <h4 class="font-bold text-xs truncate \${isActive ? 'text-brand-300 font-extrabold' : 'text-slate-200'}">\${escapeHtml(c.title || 'New Chat')}</h4>
-                  \${isActive ? '<span class="px-1.5 py-0.2 text-[9px] font-mono font-bold rounded bg-brand-500/30 text-brand-300 border border-brand-500/40">ACTIVE</span>' : ''}
+                  <h4 class="font-bold text-xs truncate ${isActive ? 'text-brand-600 dark:text-brand-300 font-extrabold' : 'text-app-text'}">${escapeHtml(c.title || 'New Chat')}</h4>
+                  ${isActive ? '<span class="px-1.5 py-0.2 text-[9px] font-mono font-bold rounded bg-brand-500/20 text-brand-600 dark:text-brand-300 border border-brand-500/30 dark:border-brand-500/40">ACTIVE</span>' : ''}
                 </div>
-                <p class="text-[11px] text-slate-500 truncate mt-0.5">\${snippet}</p>
+                <p class="text-[11px] text-app-text opacity-50 truncate mt-0.5">${snippet}</p>
               </div>
             </div>
             <div class="flex items-center gap-2 shrink-0">
-              <span class="text-[10px] text-slate-500 font-mono hidden sm:inline-block">\${timeStr}</span>
-              <button onclick="deleteConversation(\${c.id}, event)" class="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition cursor-pointer" title="Delete this conversation">
+              <span class="text-[10px] text-app-text opacity-40 font-mono hidden sm:inline-block">${timeStr}</span>
+              <button onclick="deleteConversation(${c.id}, event)" class="p-1.5 rounded-lg text-app-text opacity-40 hover:opacity-100 hover:text-red-500 transition cursor-pointer" title="Delete this conversation">
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
               </button>
             </div>
@@ -1163,7 +1484,7 @@ export function renderUserDashboardHtml(): string {
           
           const thread = document.getElementById('chat-thread');
           if (thread) {
-            thread.innerHTML = '<div id="chat-empty-state" class="text-center py-12 text-slate-500 text-xs"><div class="w-12 h-12 rounded-2xl bg-brand-500/10 border border-brand-500/20 text-brand-400 flex items-center justify-center text-xl mx-auto mb-3">⚡</div><div class="font-bold text-slate-300 text-sm mb-1">Wingbuddy Workspace Ready</div><p>Ask anything, plan autonomous tasks, or sync with your Telegram bot.</p></div>';
+            thread.innerHTML = '<div id="chat-empty-state" class="text-center py-12 text-app-text opacity-50 text-xs"><div class="w-12 h-12 rounded-2xl bg-brand-500/10 border border-brand-500/20 text-brand-400 flex items-center justify-center text-xl mx-auto mb-3">⚡</div><div class="font-bold text-app-text opacity-80 text-sm mb-1">Wingbuddy Workspace Ready</div><p>Ask anything, plan autonomous tasks, or sync with your Telegram bot.</p></div>';
           }
           renderedMessageIds.clear();
           await loadConversations();
@@ -1221,7 +1542,7 @@ export function renderUserDashboardHtml(): string {
         renderedMessageIds.clear();
 
         if (!data.messages || data.messages.length === 0) {
-          thread.innerHTML = '<div id="chat-empty-state" class="text-center py-12 text-slate-500 text-xs"><div class="w-12 h-12 rounded-2xl bg-brand-500/10 border border-brand-500/20 text-brand-400 flex items-center justify-center text-xl mx-auto mb-3">⚡</div><div class="font-bold text-slate-300 text-sm mb-1">Wingbuddy Workspace Ready</div><p>Ask anything, plan autonomous tasks, or sync with your Telegram bot.</p></div>';
+          thread.innerHTML = '<div id="chat-empty-state" class="text-center py-12 text-app-text opacity-50 text-xs"><div class="w-12 h-12 rounded-2xl bg-brand-500/10 border border-brand-500/20 text-brand-400 flex items-center justify-center text-xl mx-auto mb-3">⚡</div><div class="font-bold text-app-text opacity-80 text-sm mb-1">Wingbuddy Workspace Ready</div><p>Ask anything, plan autonomous tasks, or sync with your Telegram bot.</p></div>';
           return;
         }
 
@@ -1242,7 +1563,7 @@ export function renderUserDashboardHtml(): string {
       bubble.id = 'chat-thinking-bubble';
       bubble.className = 'flex justify-start';
       bubble.innerHTML = \`
-        <div class="max-w-[85%] sm:max-w-[75%] rounded-2xl p-4 chat-bubble-ai rounded-tl-sm space-y-2 shadow-md border border-brand-500/20 bg-slate-900/90">
+        <div class="max-w-[85%] sm:max-w-[75%] rounded-2xl p-4 chat-bubble-ai rounded-tl-sm space-y-2 shadow-md border border-brand-500/20 bg-app-surface/90">
           <div class="flex items-center gap-2 text-[10px] text-brand-400 font-semibold tracking-wide uppercase">
             <span class="inline-block w-2 h-2 rounded-full bg-brand-400 animate-ping"></span>
             <span>Wingbuddy is thinking...</span>
@@ -1334,7 +1655,7 @@ export function renderUserDashboardHtml(): string {
       } else if (msg.source === 'telegram') {
         sourceBadge = '<span class="px-1.5 py-0.2 rounded bg-sky-500/20 text-sky-300 border border-sky-500/30 text-[9px] font-mono">📱 Telegram</span>';
       } else {
-        sourceBadge = '<span class="px-1.5 py-0.2 rounded bg-white/10 text-slate-300 text-[9px] font-mono">💻 Web</span>';
+        sourceBadge = '<span class="px-1.5 py-0.2 rounded bg-app-highlight text-app-text opacity-70 text-[9px] font-mono">💻 Web</span>';
       }
 
       const formattedContent = isUser ? escapeHtml(msg.content) : (typeof marked !== 'undefined' ? marked.parse(msg.content || '') : escapeHtml(msg.content || ''));
@@ -1400,19 +1721,8 @@ export function renderUserDashboardHtml(): string {
 
       let token = localStorage.getItem('wb_session_token');
       if (!token) {
-        try {
-          const authRes = await fetch('/api/auth/instant-login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: 'olalekan4565@gmail.com', name: 'Olalekan' })
-          });
-          const authData = await authRes.json();
-          if (authData.sessionToken) {
-            token = authData.sessionToken;
-            localStorage.setItem('wb_session_token', token);
-            localStorage.setItem('wb_user', JSON.stringify(authData.user));
-          }
-        } catch (e) {}
+        window.location.replace('/');
+        return;
       }
 
       try {
@@ -1426,25 +1736,9 @@ export function renderUserDashboardHtml(): string {
         });
 
         if (res.status === 401) {
-          const authRes = await fetch('/api/auth/instant-login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: 'olalekan4565@gmail.com', name: 'Olalekan' })
-          });
-          const authData = await authRes.json();
-          if (authData.sessionToken) {
-            token = authData.sessionToken;
-            localStorage.setItem('wb_session_token', token);
-            localStorage.setItem('wb_user', JSON.stringify(authData.user));
-            res = await fetch('/api/user/chat/send', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + token
-              },
-              body: JSON.stringify({ content, clientMsgId, conversationId: currentConversationId })
-            });
-          }
+          localStorage.removeItem('wb_session_token');
+          window.location.replace('/');
+          return;
         }
 
         const data = await res.json();
@@ -1498,7 +1792,7 @@ export function renderUserDashboardHtml(): string {
           headers: { 'Authorization': 'Bearer ' + token }
         });
         const thread = document.getElementById('chat-thread');
-        thread.innerHTML = '<div id="chat-empty-state" class="text-center py-12 text-slate-500 text-xs"><div class="w-12 h-12 rounded-2xl bg-brand-500/10 border border-brand-500/20 text-brand-400 flex items-center justify-center text-xl mx-auto mb-3">⚡</div><div class="font-bold text-slate-300 text-sm mb-1">Wingbuddy Workspace Ready</div><p>Ask anything, plan autonomous tasks, or sync with your Telegram bot.</p></div>';
+        thread.innerHTML = '<div id="chat-empty-state" class="text-center py-12 text-app-text opacity-50 text-xs"><div class="w-12 h-12 rounded-2xl bg-brand-500/10 border border-brand-500/20 text-brand-400 flex items-center justify-center text-xl mx-auto mb-3">⚡</div><div class="font-bold text-app-text opacity-80 text-sm mb-1">Wingbuddy Workspace Ready</div><p>Ask anything, plan autonomous tasks, or sync with your Telegram bot.</p></div>';
         renderedMessageIds.clear();
         await loadConversations();
       } catch (err) {
@@ -1537,7 +1831,7 @@ export function renderUserDashboardHtml(): string {
         list.innerHTML = '';
 
         if (!data.tasks || data.tasks.length === 0) {
-          list.innerHTML = '<div class="glass-panel rounded-2xl p-8 text-center text-slate-400 text-xs">No autonomous tasks created yet. Click "+ Create Task" to automate recurring research or workflows.</div>';
+          list.innerHTML = '<div class="glass-panel rounded-2xl p-8 text-center text-app-text opacity-50 text-xs">No autonomous tasks created yet. Click "+ Create Task" to automate recurring research or workflows.</div>';
           return;
         }
 
@@ -1549,26 +1843,26 @@ export function renderUserDashboardHtml(): string {
           card.innerHTML = \`
             <div class="flex items-center justify-between">
               <div class="flex items-center gap-2.5">
-                <span class="w-8 h-8 rounded-lg bg-brand-500/10 text-brand-400 flex items-center justify-center font-bold text-sm">⚡</span>
+                <span class="w-8 h-8 rounded-lg bg-brand-500/10 text-brand-500 dark:text-brand-400 flex items-center justify-center font-bold text-sm">⚡</span>
                 <div>
-                  <h3 class="font-bold text-white text-sm">\${escapeHtml(task.title)} <span class="text-slate-500 text-xs font-mono font-normal">#\${task.id}</span></h3>
-                  <p class="text-xs text-slate-400 mt-0.5">\${escapeHtml(task.goal)}</p>
+                  <h3 class="font-bold text-app-text text-sm">${escapeHtml(task.title)} <span class="text-app-text opacity-40 text-xs font-mono font-normal">#${task.id}</span></h3>
+                  <p class="text-xs text-app-text opacity-60 mt-0.5">${escapeHtml(task.goal)}</p>
                 </div>
               </div>
               <div class="flex items-center gap-2">
-                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase \${task.status === 'active' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-700 text-slate-300'}">\${task.status}</span>
-                <button onclick="runTaskNow('\${task.id}')" class="px-3 py-1 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold transition flex items-center gap-1">
+                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${task.status === 'active' ? 'bg-emerald-500/20 text-emerald-500 dark:text-emerald-400' : 'bg-app-highlight text-app-text opacity-50'}">${task.status}</span>
+                <button onclick="runTaskNow('${task.id}')" class="px-3 py-1 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold transition flex items-center gap-1">
                   <span>⚡ Run Now</span>
                 </button>
               </div>
             </div>
             \${task.steps && task.steps.length > 0 ? \`
-              <div class="pt-2 border-t border-white/5 space-y-1.5">
-                <div class="text-[11px] font-bold text-slate-400">Execution Plan Steps:</div>
+              <div class="pt-2 border-t border-app-border space-y-1.5">
+                <div class="text-[11px] font-bold text-app-text opacity-50">Execution Plan Steps:</div>
                 \${task.steps.map(s => \`
-                  <div class="flex items-center justify-between text-xs py-1 px-2 rounded bg-slate-900/60">
-                    <span class="text-slate-300">\${s.step_order}. \${escapeHtml(s.title)}</span>
-                    <span class="text-[10px] font-mono text-slate-400">\${s.status}</span>
+                  <div class="flex items-center justify-between text-xs py-1 px-2 rounded bg-app-highlight">
+                    <span class="text-app-text opacity-80">${s.step_order}. ${escapeHtml(s.title)}</span>
+                    <span class="text-[10px] font-mono text-app-text opacity-40">${s.status}</span>
                   </div>
                 \`).join('')}
               </div>
@@ -1618,7 +1912,7 @@ export function renderUserDashboardHtml(): string {
         list.innerHTML = '';
 
         if (!data.memories || data.memories.length === 0) {
-          list.innerHTML = '<div class="glass-panel col-span-2 rounded-2xl p-8 text-center text-slate-400 text-xs">No memories recorded yet. Wingbuddy automatically learns facts as you chat or you can manually add facts.</div>';
+          list.innerHTML = '<div class="glass-panel col-span-2 rounded-2xl p-8 text-center text-app-text opacity-50 text-xs">No memories recorded yet. Wingbuddy automatically learns facts as you chat or you can manually add facts.</div>';
           return;
         }
 
@@ -1627,11 +1921,11 @@ export function renderUserDashboardHtml(): string {
           card.className = 'glass-panel rounded-2xl p-4 space-y-2';
           card.innerHTML = \`
             <div class="flex items-center justify-between text-xs">
-              <span class="px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 font-bold uppercase text-[10px]">\${escapeHtml(mem.category || 'general')}</span>
-              <button onclick="deleteMemory('\${encodeURIComponent(mem.key)}')" class="text-slate-500 hover:text-red-400 transition text-[11px]">Delete</button>
+              <span class="px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-600 dark:text-purple-300 font-bold uppercase text-[10px]">${escapeHtml(mem.category || 'general')}</span>
+              <button onclick="deleteMemory('${encodeURIComponent(mem.key)}')" class="text-app-text opacity-40 hover:opacity-100 hover:text-red-500 transition text-[11px]">Delete</button>
             </div>
-            <div class="font-bold text-white text-xs font-mono">\${escapeHtml(mem.key)}</div>
-            <p class="text-xs text-slate-300 leading-relaxed">\${escapeHtml(mem.content)}</p>
+            <div class="font-bold text-app-text text-xs font-mono">${escapeHtml(mem.key)}</div>
+            <p class="text-xs text-app-text opacity-70 leading-relaxed">\${escapeHtml(mem.content)}</p>
           \`;
           list.appendChild(card);
         });
@@ -1666,7 +1960,7 @@ export function renderUserDashboardHtml(): string {
         list.innerHTML = '';
 
         if (!data.reminders || data.reminders.length === 0) {
-          list.innerHTML = '<div class="glass-panel rounded-2xl p-8 text-center text-slate-400 text-xs">No active reminders. Tell Wingbuddy "Remind me to..." anytime in chat.</div>';
+          list.innerHTML = '<div class="glass-panel rounded-2xl p-8 text-center text-app-text opacity-50 text-xs">No active reminders. Tell Wingbuddy "Remind me to..." anytime in chat.</div>';
           return;
         }
 
@@ -1675,12 +1969,12 @@ export function renderUserDashboardHtml(): string {
           card.className = 'glass-panel rounded-2xl p-4 flex items-center justify-between';
           card.innerHTML = \`
             <div class="space-y-1">
-              <div class="text-xs font-bold text-white">\${escapeHtml(rem.prompt)}</div>
-              <div class="text-[11px] text-slate-400 font-mono">Due: \${new Date(rem.due_at).toLocaleString()}</div>
+              <div class="text-xs font-bold text-app-text">${escapeHtml(rem.prompt)}</div>
+              <div class="text-[11px] text-app-text opacity-50 font-mono">Due: ${new Date(rem.due_at).toLocaleString()}</div>
             </div>
             <div class="flex items-center gap-2">
-              <button onclick="snoozeReminder('\${rem.id}', 60)" class="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-xs text-slate-200">+1h</button>
-              <button onclick="completeReminder('\${rem.id}')" class="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white">Done</button>
+              <button onclick="snoozeReminder('${rem.id}', 60)" class="px-2.5 py-1 rounded-lg bg-app-highlight hover:bg-app-highlight/80 text-xs text-app-text opacity-80">+1h</button>
+              <button onclick="completeReminder('${rem.id}')" class="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white">Done</button>
             </div>
           \`;
           list.appendChild(card);
@@ -1810,10 +2104,10 @@ export function renderUserDashboardHtml(): string {
           if (tgBadge) tgBadge.innerHTML = '<span class="px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">🟢 Synced &amp; Active</span>';
           if (tgTitle) tgTitle.innerText = 'Telegram Linked (' + handle + ')';
           if (tgSubtitle) tgSubtitle.innerText = 'Real-time bidirectional message and alert mirroring active.';
-          if (tgAction) tgAction.innerHTML = '<button onclick="openTelegramSettings()" class="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white text-xs font-semibold border border-white/10 transition">Sync Settings</button>';
+          if (tgAction) tgAction.innerHTML = '<button onclick="openTelegramSettings()" class="px-3 py-1.5 rounded-lg bg-app-highlight hover:bg-app-highlight/80 text-app-text opacity-70 hover:opacity-100 text-xs font-semibold border border-app-border transition">Sync Settings</button>';
           if (btnTgSync) btnTgSync.classList.add('hidden');
         } else {
-          if (tgBadge) tgBadge.innerHTML = '<span class="px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">🟡 Telegram Not Connected</span>';
+          if (tgBadge) tgBadge.innerHTML = '<span class="px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">🟡 Telegram Not Connected</span>';
           if (tgTitle) tgTitle.innerText = 'Telegram Bot Unpaired';
           if (tgSubtitle) tgSubtitle.innerText = 'Connect your Telegram account to chat on mobile and receive morning alerts.';
           if (tgAction) tgAction.innerHTML = '<button onclick="openTelegramSyncModal()" class="px-3.5 py-1.5 rounded-lg bg-[#229ED9] hover:bg-[#1e8cc0] text-white text-xs font-bold transition shadow-sm">Connect Telegram</button>';
@@ -1835,21 +2129,21 @@ export function renderUserDashboardHtml(): string {
           if (dot) dot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse';
           if (label) label.innerText = agent.statusLabel || 'Agent Online • Ready';
           if (pill) {
-            pill.className = 'px-2.5 py-1 rounded-full text-[10px] font-mono font-bold tracking-wide uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
+            pill.className = 'px-2.5 py-1 rounded-full text-[10px] font-mono font-bold tracking-wide uppercase bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20';
             pill.innerText = 'Online';
           }
         } else if (agent.status === 'degraded') {
           if (dot) dot.className = 'w-2.5 h-2.5 rounded-full bg-amber-400';
           if (label) label.innerText = agent.statusLabel || 'Degraded • Key Cooldown';
           if (pill) {
-            pill.className = 'px-2.5 py-1 rounded-full text-[10px] font-mono font-bold tracking-wide uppercase bg-amber-500/10 text-amber-400 border border-amber-500/20';
+            pill.className = 'px-2.5 py-1 rounded-full text-[10px] font-mono font-bold tracking-wide uppercase bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20';
             pill.innerText = 'Degraded';
           }
         } else {
           if (dot) dot.className = 'w-2.5 h-2.5 rounded-full bg-red-400';
           if (label) label.innerText = agent.statusLabel || 'Provider Offline';
           if (pill) {
-            pill.className = 'px-2.5 py-1 rounded-full text-[10px] font-mono font-bold tracking-wide uppercase bg-red-500/10 text-red-400 border border-red-500/20';
+            pill.className = 'px-2.5 py-1 rounded-full text-[10px] font-mono font-bold tracking-wide uppercase bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20';
             pill.innerText = 'Offline';
           }
         }
@@ -1895,7 +2189,10 @@ export function renderUserDashboardHtml(): string {
           const qUsed = document.getElementById('ov-quota-used');
           const qLimit = document.getElementById('ov-quota-limit');
           const qRem = document.getElementById('ov-quota-remaining');
-          if (qTier) qTier.innerText = m.quota.tier || 'Free';
+          if (qTier) {
+            qTier.innerText = m.quota.tier || 'Free';
+            qTier.className = 'px-2 py-0.2 rounded-full bg-brand-500/20 text-brand-600 dark:text-brand-300 text-[10px] uppercase font-bold';
+          }
           if (qUsed) qUsed.innerText = m.quota.requestsToday ?? 0;
           if (qLimit) qLimit.innerText = m.quota.dailyQuota ?? 50;
           if (qRem) qRem.innerText = m.quota.remaining ?? 50;
@@ -1908,15 +2205,15 @@ export function renderUserDashboardHtml(): string {
         if (tasksList) {
           const rows = data.recentTasks || [];
           if (rows.length === 0) {
-            tasksList.innerHTML = '<div class="p-4 rounded-xl bg-slate-900/40 text-center text-slate-500 text-xs">No autonomous tasks created yet. Click "+ Create Task" to start automated research or digests.</div>';
+            tasksList.innerHTML = '<div class="p-4 rounded-xl bg-app-highlight text-center text-app-text opacity-40 text-xs">No autonomous tasks created yet. Click "+ Create Task" to start automated research or digests.</div>';
           } else {
             tasksList.innerHTML = rows.map(t => \`
-              <div class="p-3 rounded-xl bg-slate-900/60 border border-white/5 flex items-center justify-between gap-3">
+              <div class="p-3 rounded-xl bg-app-highlight border border-app-border flex items-center justify-between gap-3">
                 <div class="min-w-0 flex-1">
-                  <div class="font-bold text-white text-xs truncate">\${escapeHtml(t.title)}</div>
-                  <div class="text-[11px] text-slate-400 truncate mt-0.5">\${escapeHtml(t.goal)}</div>
+                  <div class="font-bold text-app-text text-xs truncate">${escapeHtml(t.title)}</div>
+                  <div class="text-[11px] text-app-text opacity-50 truncate mt-0.5">${escapeHtml(t.goal)}</div>
                 </div>
-                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase shrink-0 \${t.status === 'active' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-700 text-slate-300'}">\${escapeHtml(t.status)}</span>
+                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase shrink-0 \${t.status === 'active' ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400' : 'bg-app-highlight text-app-text opacity-50'}">\${escapeHtml(t.status)}</span>
               </div>
             \`).join('');
           }
@@ -1927,15 +2224,15 @@ export function renderUserDashboardHtml(): string {
         if (memList) {
           const rows = data.recentMemories || [];
           if (rows.length === 0) {
-            memList.innerHTML = '<div class="p-4 rounded-xl bg-slate-900/40 text-center text-slate-500 text-xs">No memories stored in context vault yet. Chat with Wingbuddy to retain long-term facts.</div>';
+            memList.innerHTML = '<div class="p-4 rounded-xl bg-app-highlight text-center text-app-text opacity-40 text-xs">No memories stored in context vault yet. Chat with Wingbuddy to retain long-term facts.</div>';
           } else {
             memList.innerHTML = rows.map(m => \`
-              <div class="p-3 rounded-xl bg-slate-900/60 border border-white/5 flex items-center justify-between gap-3">
+              <div class="p-3 rounded-xl bg-app-highlight border border-app-border flex items-center justify-between gap-3">
                 <div class="min-w-0 flex-1">
-                  <div class="font-bold text-white text-xs truncate">\${escapeHtml(m.key)}</div>
-                  <div class="text-[11px] text-slate-400 truncate mt-0.5">\${escapeHtml(m.content)}</div>
+                  <div class="font-bold text-app-text text-xs truncate">${escapeHtml(m.key)}</div>
+                  <div class="text-[11px] text-app-text opacity-50 truncate mt-0.5">${escapeHtml(m.content)}</div>
                 </div>
-                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/20 text-purple-300 uppercase shrink-0">\${escapeHtml(m.category || 'general')}</span>
+                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/20 text-purple-600 dark:text-purple-300 uppercase shrink-0">\${escapeHtml(m.category || 'general')}</span>
               </div>
             \`).join('');
           }
@@ -1960,7 +2257,7 @@ export function renderUserDashboardHtml(): string {
 
       const newName = input.value.trim();
       feedback.classList.remove('hidden', 'text-emerald-400', 'text-rose-400');
-      feedback.classList.add('text-slate-400');
+      feedback.classList.add('text-app-text', 'opacity-50');
       feedback.innerText = 'Saving preferred name...';
 
       try {
@@ -1975,18 +2272,18 @@ export function renderUserDashboardHtml(): string {
         });
         const data = await res.json();
         if (!res.ok || !data.success) {
-          feedback.classList.remove('text-slate-400');
+          feedback.classList.remove('text-app-text', 'opacity-50');
           feedback.classList.add('text-rose-400');
           feedback.innerText = data.error || 'Failed to save name.';
           return;
         }
 
-        feedback.classList.remove('text-slate-400');
+        feedback.classList.remove('text-app-text', 'opacity-50');
         feedback.classList.add('text-emerald-400');
         feedback.innerText = '✅ Preferred name updated to ' + (data.preferredName || newName || 'None') + '!';
         loadOverview(true);
       } catch (err) {
-        feedback.classList.remove('text-slate-400');
+        feedback.classList.remove('text-app-text', 'opacity-50');
         feedback.classList.add('text-rose-400');
         feedback.innerText = 'Network error saving preferred name.';
       }
@@ -2174,9 +2471,9 @@ export function renderUserDashboardHtml(): string {
         if (view) view.classList.toggle('hidden', t !== tabId);
         if (mobileBtn) {
           if (t === tabId) {
-            mobileBtn.className = 'flex flex-col sm:flex-row items-center gap-0.5 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-brand-300 bg-brand-500/20 border border-brand-500/40 text-[10px] sm:text-xs font-bold transition shadow-sm';
+            mobileBtn.className = 'flex flex-col sm:flex-row items-center gap-0.5 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-brand-600 dark:text-brand-300 bg-brand-500/10 dark:bg-brand-500/20 border border-brand-500/30 dark:border-brand-500/40 text-[10px] sm:text-xs font-bold transition shadow-sm';
           } else {
-            mobileBtn.className = 'flex flex-col sm:flex-row items-center gap-0.5 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-white/5 border border-transparent text-[10px] sm:text-xs font-semibold transition';
+            mobileBtn.className = 'flex flex-col sm:flex-row items-center gap-0.5 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-app-text/50 hover:text-app-text hover:bg-app-highlight border border-transparent text-[10px] sm:text-xs font-semibold transition';
           }
         }
       });
@@ -2269,115 +2566,6 @@ export function renderUserDashboardHtml(): string {
     }
 
     window.addEventListener('DOMContentLoaded', initWorkspace);
-  </script>
-  <!-- PWA Manager & Service Worker Installer -->
-  <script>
-    (function() {
-      let deferredPrompt = null;
-      if ('serviceWorker' in navigator) {
-        window.addEventListener('load', function() {
-          navigator.serviceWorker.register('/sw.js').catch(function(e) {
-            console.warn('PWA ServiceWorker registration failed:', e);
-          });
-        });
-      }
-
-      const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
-
-      window.addEventListener('beforeinstallprompt', function(e) {
-        e.preventDefault();
-        deferredPrompt = e;
-        updatePWAInstallUI();
-      });
-
-      window.addEventListener('appinstalled', function() {
-        deferredPrompt = null;
-        updatePWAInstallUI(true);
-        if (window.toast) window.toast('✓ Wingbuddy AI installed successfully!');
-      });
-
-      function isIOS() {
-        return /iphone|ipad|ipod/.test(navigator.userAgent.toLowerCase());
-      }
-
-      function updatePWAInstallUI(installed) {
-        const btns = document.querySelectorAll('.pwa-install-btn, #pwa-install-btn');
-        btns.forEach(function(btn) {
-          if (installed || isStandalone) {
-            btn.classList.add('hidden');
-            btn.style.display = 'none';
-          } else {
-            btn.classList.remove('hidden');
-            btn.style.display = 'inline-flex';
-            if (isIOS()) {
-              btn.innerHTML = '📲 Install on iOS';
-            } else {
-              btn.innerHTML = '📲 Install App';
-            }
-          }
-        });
-      }
-
-      window.triggerPWAInstall = async function() {
-        if (deferredPrompt) {
-          deferredPrompt.prompt();
-          const choice = await deferredPrompt.userChoice;
-          if (choice.outcome === 'accepted') {
-            deferredPrompt = null;
-            updatePWAInstallUI(true);
-          }
-        } else if (isIOS()) {
-          showIOSInstallModal();
-        } else {
-          alert(['To install Wingbuddy as an app:', '', '1. Tap your browser menu (⋮ or Share)', '2. Select "Add to Home Screen" or "Install App"'].join('\\n'));
-        }
-      };
-
-      function showIOSInstallModal() {
-        let modal = document.getElementById('ios-pwa-modal');
-        if (!modal) {
-          modal = document.createElement('div');
-          modal.id = 'ios-pwa-modal';
-          modal.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4';
-          modal.innerHTML =
-            '<div class="w-full max-w-sm rounded-2xl bg-slate-900 border border-white/10 p-6 shadow-2xl text-white">' +
-              '<div class="flex items-center gap-3 mb-4">' +
-                '<img src="/app-icon.svg" class="w-10 h-10 rounded-xl" alt="App Icon" />' +
-                '<div>' +
-                  '<h3 class="font-bold text-base">Install Wingbuddy AI</h3>' +
-                  '<p class="text-xs text-slate-400">Add to iPhone / iPad Home Screen</p>' +
-                '</div>' +
-              '</div>' +
-              '<div class="space-y-3 text-xs text-slate-300 bg-slate-800/60 p-4 rounded-xl border border-white/5">' +
-                '<p>1. Tap the <strong class="text-sky-400">Share button ⎋</strong> in Safari toolbar.</p>' +
-                '<p>2. Scroll down and select <strong class="text-indigo-400">"Add to Home Screen" ➕</strong>.</p>' +
-                '<p>3. Tap <strong class="text-emerald-400">Add</strong> to launch Wingbuddy as a native app!</p>' +
-              '</div>' +
-              '<button onclick="this.closest(\\'#ios-pwa-modal\\').remove()" class="mt-5 w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-200 transition">Close</button>' +
-            '</div>';
-          document.body.appendChild(modal);
-        }
-      }
-
-      window.addEventListener('offline', function() {
-        let banner = document.getElementById('pwa-offline-banner');
-        if (!banner) {
-          banner = document.createElement('div');
-          banner.id = 'pwa-offline-banner';
-          banner.className = 'fixed bottom-4 left-4 z-50 px-4 py-2 rounded-xl bg-amber-500/90 text-white font-bold text-xs shadow-xl flex items-center gap-2 border border-amber-400/40 backdrop-blur-md';
-          banner.innerHTML = '<span class="w-2 h-2 rounded-full bg-white animate-ping"></span> Offline Mode — Cached data active';
-          document.body.appendChild(banner);
-        }
-      });
-
-      window.addEventListener('online', function() {
-        const banner = document.getElementById('pwa-offline-banner');
-        if (banner) banner.remove();
-      });
-
-      document.addEventListener('DOMContentLoaded', updatePWAInstallUI);
-      setTimeout(updatePWAInstallUI, 800);
-    })();
   </script>
 </body>
 </html>`;

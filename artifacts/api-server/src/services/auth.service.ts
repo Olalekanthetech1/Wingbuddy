@@ -21,11 +21,10 @@ export interface AuthenticatedUser {
   telegramUsername?: string;
   notificationPreference: "full" | "digest_only" | "silent";
   contextSyncMode: "compact" | "full";
+  themePreference: "light" | "dark" | "system";
 }
 
 const ADMIN_EMAIL_WHITELIST = new Set([
-  "olalekan4565@gmail.com",
-  "olalekan4587@gmail.com",
   ...(process.env.ADMIN_EMAILS ? process.env.ADMIN_EMAILS.split(",").map((e) => e.trim().toLowerCase()) : []),
 ]);
 
@@ -89,10 +88,8 @@ class AuthService {
     }
 
     // For primary admin email default fallback if not yet set
-    if (cleanEmail === "olalekan4565@gmail.com" && !targetTelegramId) {
-      targetTelegramId = "6307001401";
-      targetTelegramUsername = "LekzyDevX";
-    }
+    // REMOVED hardcoded fallback to comply with Zero-Fallback Policy
+
 
     // Free up this telegram_user_id from other web_users accounts to avoid unique constraint violations
     if (targetTelegramId) {
@@ -113,7 +110,7 @@ class AuthService {
         name = COALESCE(EXCLUDED.name, web_users.name),
         given_name = COALESCE(EXCLUDED.given_name, web_users.given_name),
         picture = COALESCE(EXCLUDED.picture, web_users.picture),
-        role = CASE WHEN EXCLUDED.email = 'olalekan4565@gmail.com' THEN 'admin' ELSE web_users.role END,
+        role = CASE WHEN ADMIN_EMAIL_WHITELIST.has(EXCLUDED.email) THEN 'admin' ELSE web_users.role END,
         telegram_user_id = COALESCE(EXCLUDED.telegram_user_id, web_users.telegram_user_id),
         telegram_username = COALESCE(EXCLUDED.telegram_username, web_users.telegram_username),
         preferred_name = CASE 
@@ -128,7 +125,7 @@ class AuthService {
         END,
         last_login_at = NOW(),
         updated_at = NOW()
-      RETURNING id, email, google_id, name, given_name, picture, role, telegram_user_id, telegram_username, preferred_name, name_source, notification_preference, context_sync_mode;
+      RETURNING id, email, google_id, name, given_name, picture, role, telegram_user_id, telegram_username, preferred_name, name_source, notification_preference, context_sync_mode, theme_preference;
     `;
 
     const res = await pool.query(query, [
@@ -157,6 +154,7 @@ class AuthService {
       telegramUsername: row.telegram_username || undefined,
       notificationPreference: (row.notification_preference as any) || "full",
       contextSyncMode: (row.context_sync_mode as any) || "compact",
+      themePreference: (row.theme_preference as any) || "system",
     };
 
     const partitionId = user.telegramUserId || 9000000000 + user.id;
@@ -177,7 +175,10 @@ class AuthService {
    * Direct email or 1-click workspace access for development/instant login
    */
   public async handleEmailOrInstantLogin(payload: { email?: string; name?: string }): Promise<{ user: AuthenticatedUser; sessionToken: string }> {
-    const rawEmail = (payload.email || "olalekan4565@gmail.com").trim().toLowerCase();
+    if (!payload.email) {
+      throw new Error("Email is required for instant login. No default fallback permitted.");
+    }
+    const rawEmail = payload.email.trim().toLowerCase();
     const cleanEmail = rawEmail.includes("@") ? rawEmail : `${rawEmail}@user.ai`;
     return this.handleGoogleAuth({
       email: cleanEmail,
@@ -195,7 +196,7 @@ class AuthService {
 
     const query = `
       SELECT u.id, u.email, u.google_id, u.name, u.given_name, u.preferred_name, u.name_source, u.full_name, u.picture, u.role, u.telegram_user_id,
-             u.telegram_username, u.notification_preference, u.context_sync_mode, s.expires_at
+             u.telegram_username, u.notification_preference, u.context_sync_mode, u.theme_preference, s.expires_at
       FROM web_sessions s
       JOIN web_users u ON s.web_user_id = u.id
       WHERE s.session_token = $1 AND s.expires_at > NOW();
@@ -220,6 +221,7 @@ class AuthService {
       telegramUsername: row.telegram_username || undefined,
       notificationPreference: (row.notification_preference as any) || "full",
       contextSyncMode: (row.context_sync_mode as any) || "compact",
+      themePreference: (row.theme_preference as any) || "system",
     };
   }
 
@@ -389,6 +391,7 @@ class AuthService {
       telegramUsername: webUser.telegram_username || undefined,
       notificationPreference: (webUser.notification_preference as any) || "full",
       contextSyncMode: (webUser.context_sync_mode as any) || "compact",
+      themePreference: (webUser.theme_preference as any) || "system",
     };
 
     const sessionToken = this.generateToken(32);
@@ -450,7 +453,11 @@ class AuthService {
    */
   public async updatePreferences(
     userId: number,
-    preferences: { notificationPreference?: "full" | "digest_only" | "silent"; contextSyncMode?: "compact" | "full" }
+    preferences: { 
+      notificationPreference?: "full" | "digest_only" | "silent"; 
+      contextSyncMode?: "compact" | "full";
+      themePreference?: "light" | "dark" | "system";
+    }
   ): Promise<AuthenticatedUser | null> {
     const pool = getPool();
     const updates: string[] = [];
@@ -465,6 +472,10 @@ class AuthService {
       updates.push(`context_sync_mode = $${idx++}`);
       values.push(preferences.contextSyncMode);
     }
+    if (preferences.themePreference) {
+      updates.push(`theme_preference = $${idx++}`);
+      values.push(preferences.themePreference);
+    }
 
     if (updates.length === 0) return null;
     updates.push(`updated_at = NOW()`);
@@ -474,7 +485,7 @@ class AuthService {
       UPDATE web_users
       SET ${updates.join(", ")}
       WHERE id = $${idx}
-      RETURNING id, email, google_id, name, picture, role, telegram_user_id, telegram_username, notification_preference, context_sync_mode;
+      RETURNING id, email, google_id, name, picture, role, telegram_user_id, telegram_username, notification_preference, context_sync_mode, theme_preference;
     `;
 
     const res = await pool.query(query, values);
@@ -491,6 +502,7 @@ class AuthService {
       telegramUsername: row.telegram_username || undefined,
       notificationPreference: row.notification_preference,
       contextSyncMode: row.context_sync_mode,
+      themePreference: row.theme_preference,
     };
   }
 

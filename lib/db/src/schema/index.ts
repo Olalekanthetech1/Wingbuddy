@@ -100,6 +100,7 @@ export const webUsersTable = pgTable(
     familyName: text("family_name"),
     notificationPreference: text("notification_preference").default("full").notNull(), // 'full' | 'digest_only' | 'silent'
     contextSyncMode: text("context_sync_mode").default("compact").notNull(), // 'compact' | 'full'
+    themePreference: text("theme_preference").default("system").notNull(), // 'light' | 'dark' | 'system'
     lastLoginAt: timestamp("last_login_at", { withTimezone: true }).defaultNow().notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),

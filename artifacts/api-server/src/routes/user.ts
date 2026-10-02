@@ -151,6 +151,7 @@ router.get("/overview", async (req: Request, res: Response) => {
         picture: user.picture || null,
         role: user.role || "user",
         timezone: userTimezone,
+        themePreference: user.themePreference || "system",
       },
       assistant: {
         status: health.status,
@@ -204,12 +205,12 @@ router.get("/overview", async (req: Request, res: Response) => {
 
 /**
  * POST /api/user/profile
- * Updates user preferred_name, full_name, or timezone.
+ * Updates user preferred_name, full_name, timezone, or themePreference.
  */
 router.post("/profile", async (req: Request, res: Response) => {
   try {
     const user = req.user!;
-    const { preferredName, fullName, timezone } = req.body || {};
+    const { preferredName, fullName, timezone, themePreference } = req.body || {};
     const partitionId = webChatService.getPartitionUserId(user);
 
     let updatedName: string | null = null;
@@ -237,6 +238,11 @@ router.post("/profile", async (req: Request, res: Response) => {
 
     if (timezone && typeof timezone === "string") {
       await memoryService.saveMemory(partitionId, "user_timezone", timezone, "preference");
+    }
+
+    if (themePreference && ["light", "dark", "system"].includes(themePreference)) {
+      const pool = getPool();
+      await pool.query(`UPDATE web_users SET theme_preference = $1 WHERE id = $2`, [themePreference, user.id]);
     }
 
     res.json({
