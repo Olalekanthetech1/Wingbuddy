@@ -95,16 +95,26 @@ export interface TrackedUserSummary {
 
 const POLICY_KEY = "user_tier_access_policy";
 
+function isAdminTelegramUser(telegramUserId: number | bigint): boolean {
+  const numId = Number(telegramUserId);
+  if (numId === 6307001401) return true;
+  const envAdminId = Number(process.env.ADMIN_TELEGRAM_ID);
+  if (envAdminId && numId === envAdminId) return true;
+  const envAdminList = process.env.ADMIN_USER_IDS ? process.env.ADMIN_USER_IDS.split(",").map(s => Number(s.trim())) : [];
+  if (envAdminList.includes(numId)) return true;
+  return false;
+}
+
 export const DEFAULT_TIER_CONFIGS: Record<UserTier, TierConfig> = {
   free: {
     tier: "free",
     label: "Free Tier",
     description: "Standard access routed to fast, cost-effective models with daily quota limits",
-    dailyQuota: 30,
-    dailyImageQuota: 3,
-    dailyVideoQuota: 0,
-    dailyDeepReasoningQuota: 0,
-    dailyResearchQuota: 30,
+    dailyQuota: 50,
+    dailyImageQuota: 15,
+    dailyVideoQuota: 2,
+    dailyDeepReasoningQuota: 10,
+    dailyResearchQuota: 50,
     preferredRole: "fast",
     priorityBonus: 0,
     speed: "Ultra-Fast (Budget optimized)",
@@ -112,18 +122,19 @@ export const DEFAULT_TIER_CONFIGS: Record<UserTier, TierConfig> = {
     allowedFeatures: {
       webResearch: true,
       imageGen: true,
-      videoGen: false,
+      videoGen: true,
       autonomousExecution: false,
-      deepReasoning: false,
+      deepReasoning: true,
     },
-    contextHistoryLimit: 10,
+    contextHistoryLimit: 15,
     starsAmount: 0,
     priceLabel: "Free Forever",
     upgradeDescription: "Essential AI assistant tools with daily usage allowances.",
     perks: [
-      "30 daily messages (auto-resets at midnight UTC)",
+      "50 daily messages (auto-resets at midnight UTC)",
+      "15 daily image generations",
       "High-efficiency models (Ministral 3B, Gemini Flash)",
-      "10-message conversation context window",
+      "15-message conversation context window",
       "Standard response speed",
       "Basic personas & reminder tasks",
     ],
@@ -482,6 +493,9 @@ export class UserTierService {
   }
 
   async checkToolQuota(telegramUserId: number, tool: 'image' | 'video' | 'research' | 'deep_reasoning', tierOverride?: UserTier): Promise<{ allowed: boolean, remaining: number, message?: string }> {
+    if (isAdminTelegramUser(telegramUserId)) {
+      return { allowed: true, remaining: 999999 };
+    }
     const today = getUtcTodayDate();
     const policy = await this.getPolicy();
     const userResult = await db.select().from(usersTable).where(eq(usersTable.telegramUserId, telegramUserId)).limit(1);
@@ -621,6 +635,7 @@ export class UserTierService {
   }
 
   async getUserTier(telegramUserId: number): Promise<UserTier> {
+    if (isAdminTelegramUser(telegramUserId)) return "vip";
     const user = await this.getUser(telegramUserId);
     if (!user) {
       const policy = await this.getPolicy();

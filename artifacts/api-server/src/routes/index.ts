@@ -16,10 +16,16 @@ import knowledgeRouter from "./knowledge";
 import userAccessRouter from "./user-access";
 import personasRouter from "./personas";
 import diagnosticsRouter from "./diagnostics";
+import authRouter from "./auth";
+import userRouter from "./user";
+import reactionThemeRouter from "./reaction-theme";
 
 const router: IRouter = Router();
 
 router.use(healthRouter);
+router.use("/auth", authRouter);
+router.use("/user", userRouter);
+router.use(reactionThemeRouter);
 router.use(keysRouter);
 router.use(providerKeysRouter);
 router.use(dashboardRouter);

@@ -62,6 +62,9 @@ model Message {
   conversationId Int      @map("conversation_id")
   role           String
   content        String   @db.Text
+  mediaType      String   @default("text") @map("media_type")
+  source         String   @default("web")
+  audioUrl       String?  @map("audio_url")
   tokenCount     Int?     @map("token_count")
   createdAt      DateTime @default(now()) @map("created_at")
 
@@ -70,6 +73,61 @@ model Message {
 
   @@index([conversationId, createdAt], map: "messages_conversation_created_idx")
   @@map("messages")
+}
+
+model WebUser {
+  id                     Int      @id @default(autoincrement())
+  email                  String   @unique
+  googleId               String?  @unique @map("google_id")
+  name                   String?
+  picture                String?
+  role                   String   @default("user")
+  telegramUserId         BigInt?  @unique @map("telegram_user_id")
+  telegramUsername       String?  @map("telegram_username")
+  notificationPreference String   @default("full") @map("notification_preference")
+  contextSyncMode        String   @default("compact") @map("context_sync_mode")
+  lastLoginAt            DateTime @default(now()) @map("last_login_at")
+  createdAt              DateTime @default(now()) @map("created_at")
+  updatedAt              DateTime @default(now()) @updatedAt @map("updated_at")
+
+  // Relationships
+  sessions               WebSession[]
+  pairingTokens          TelegramPairingToken[]
+
+  @@index([telegramUserId], map: "web_users_telegram_user_id_idx")
+  @@map("web_users")
+}
+
+model WebSession {
+  id           Int      @id @default(autoincrement())
+  sessionToken String   @unique @map("session_token")
+  webUserId    Int      @map("web_user_id")
+  expiresAt    DateTime @map("expires_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  // Relationships
+  user         WebUser  @relation(fields: [webUserId], references: [id], onDelete: Cascade)
+
+  @@index([webUserId], map: "web_sessions_user_idx")
+  @@map("web_sessions")
+}
+
+model TelegramPairingToken {
+  id               Int      @id @default(autoincrement())
+  token            String   @unique
+  webUserId        Int?     @map("web_user_id")
+  telegramUserId   BigInt?  @map("telegram_user_id")
+  telegramUsername String?  @map("telegram_username")
+  type             String   @default("web_to_tg")
+  isUsed           Boolean  @default(false) @map("is_used")
+  expiresAt        DateTime @map("expires_at")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  // Relationships
+  user             WebUser? @relation(fields: [webUserId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt, isUsed], map: "telegram_pairing_tokens_expires_idx")
+  @@map("telegram_pairing_tokens")
 }
 
 /// Long-term persistent memory for user preferences, facts, and profile knowledge

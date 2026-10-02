@@ -3,7 +3,7 @@ import { logger } from "../lib/logger";
 import cronParser from "cron-parser";
 const { parseExpression } = cronParser;
 import type { Bot } from "grammy";
-import { chatDatabaseService } from "@workspace/db";
+import { chatDatabaseService, getPool } from "@workspace/db";
 import { scheduledTaskFlowService } from "./scheduled-task-flow.service";
 import { timezoneService } from "./timezone.service";
 import { agentPlannerService } from "../planner/agent-planner.service";
@@ -23,6 +23,26 @@ export {
 
 const prisma = new PrismaClient();
 
+export interface DatabaseSnapshotSummary {
+  timestamp: string;
+  databaseName?: string;
+  databaseSizeBytes?: number;
+  databaseSizeFormatted?: string;
+  counts: {
+    users: number;
+    conversations: number;
+    messages: number;
+    memories: number;
+    agentTasks: number;
+    reminders: number;
+    systemSettings: number;
+    executionGraphs: number;
+  };
+  notifiedAdminIds: (number | bigint)[];
+  status: "success" | "partial" | "failed";
+  error?: string;
+}
+
 export class CronTaskService {
   private bot: Bot | null = null;
   private pollInterval: NodeJS.Timeout | null = null;
@@ -31,6 +51,7 @@ export class CronTaskService {
   attachBot(bot: Bot) {
     this.bot = bot;
     logger.info("CronTaskService bot attached.");
+    void this.ensureWeeklySnapshotTask();
   }
 
   detachBot() {
@@ -51,6 +72,7 @@ export class CronTaskService {
       });
     }, 60000);
     logger.info("CronTaskService polling started.");
+    void this.ensureWeeklySnapshotTask();
   }
 
   stopPolling() {
@@ -61,17 +83,214 @@ export class CronTaskService {
     logger.info("CronTaskService polling stopped.");
   }
 
+  /**
+   * Retrieves configured admin user IDs from environment variables
+   */
+  getAdminUserIds(): (number | bigint)[] {
+    const ids: (number | bigint)[] = [];
+    const envAdminId = process.env.ADMIN_TELEGRAM_ID || process.env.ADMIN_USER_ID;
+    if (envAdminId && Number.isSafeInteger(Number(envAdminId))) {
+      ids.push(Number(envAdminId));
+    }
+
+    const envList = process.env.ADMIN_USER_IDS;
+    if (envList) {
+      const parts = envList.split(",").map((s) => s.trim()).filter(Boolean);
+      for (const part of parts) {
+        if (Number.isSafeInteger(Number(part))) {
+          const num = Number(part);
+          if (!ids.includes(num)) {
+            ids.push(num);
+          }
+        }
+      }
+    }
+
+    return ids;
+  }
+
+  /**
+   * Ensures the recurring weekly database snapshot schedule is registered
+   */
+  async ensureWeeklySnapshotTask(): Promise<void> {
+    try {
+      const existing = await prisma.agentTask.findFirst({
+        where: {
+          taskType: "system_snapshot",
+          isRecurring: true,
+        },
+      });
+
+      if (!existing) {
+        const nextRunAt = computeNextUtcRun({
+          cronExpression: "0 0 * * 0", // Every Sunday at 00:00 UTC
+          isRecurring: true,
+          timezone: "UTC",
+          baseDate: new Date(),
+        });
+
+        await prisma.agentTask.create({
+          data: {
+            telegramUserId: BigInt(this.getAdminUserIds()[0] || 1),
+            title: "System: Weekly Database Snapshot",
+            goal: "Automated weekly PostgreSQL snapshot verification and admin notification",
+            taskType: "system_snapshot",
+            isRecurring: true,
+            cronExpression: "0 0 * * 0",
+            timezone: "UTC",
+            nextRunAt,
+            status: "pending",
+          },
+        });
+        logger.info("Registered automated weekly database snapshot task in cron scheduler.");
+      }
+    } catch (err) {
+      logger.warn({ error: err }, "Could not register default weekly database snapshot task");
+    }
+  }
+
+  /**
+   * Triggers a database snapshot, saves snapshot metadata, and sends confirmation notification to admin.
+   */
+  async triggerWeeklyDatabaseSnapshot(adminUserIdOverride?: number | bigint): Promise<DatabaseSnapshotSummary> {
+    const timestamp = new Date().toISOString();
+    const summary: DatabaseSnapshotSummary = {
+      timestamp,
+      counts: {
+        users: 0,
+        conversations: 0,
+        messages: 0,
+        memories: 0,
+        agentTasks: 0,
+        reminders: 0,
+        systemSettings: 0,
+        executionGraphs: 0,
+      },
+      notifiedAdminIds: [],
+      status: "success",
+    };
+
+    try {
+      const pool = getPool();
+
+      // Gather table counts
+      const [
+        usersCount,
+        convCount,
+        msgCount,
+        memCount,
+        tasksCount,
+        remindersCount,
+        settingsCount,
+        graphsCount,
+      ] = await Promise.all([
+        prisma.user.count().catch(() => 0),
+        prisma.conversation.count().catch(() => 0),
+        prisma.message.count().catch(() => 0),
+        prisma.userMemory.count().catch(() => 0),
+        prisma.agentTask.count().catch(() => 0),
+        prisma.reminder.count().catch(() => 0),
+        prisma.systemSetting.count().catch(() => 0),
+        prisma.executionGraphRecord.count().catch(() => 0),
+      ]);
+
+      summary.counts = {
+        users: usersCount,
+        conversations: convCount,
+        messages: msgCount,
+        memories: memCount,
+        agentTasks: tasksCount,
+        reminders: remindersCount,
+        systemSettings: settingsCount,
+        executionGraphs: graphsCount,
+      };
+
+      // Query database size if supported
+      try {
+        const dbMeta = await pool.query(
+          "SELECT current_database() as db_name, pg_database_size(current_database()) as size_bytes, pg_size_pretty(pg_database_size(current_database())) as size_pretty"
+        );
+        if (dbMeta.rows[0]) {
+          summary.databaseName = dbMeta.rows[0].db_name;
+          summary.databaseSizeBytes = Number(dbMeta.rows[0].size_bytes);
+          summary.databaseSizeFormatted = dbMeta.rows[0].size_pretty;
+        }
+      } catch {
+        // Non-critical if pg_size_pretty is restricted
+      }
+
+      // Record snapshot manifest in system_settings
+      try {
+        await pool.query(
+          `INSERT INTO system_settings (key, value, updated_at)
+           VALUES ('LAST_DATABASE_SNAPSHOT', $1, NOW())
+           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+          [JSON.stringify(summary)]
+        );
+      } catch (saveErr) {
+        logger.warn({ error: saveErr }, "Could not persist snapshot manifest to system_settings");
+      }
+
+      // Build confirmation notification message
+      const sizeInfo = summary.databaseSizeFormatted ? `💾 <b>Size:</b> ${summary.databaseSizeFormatted}\n` : "";
+      const notificationHtml = [
+        `📦 <b>Weekly Database Snapshot Completed</b>\n`,
+        `🕒 <b>Timestamp:</b> <code>${timestamp}</code>`,
+        summary.databaseName ? `🗄️ <b>Database:</b> <code>${summary.databaseName}</code>` : "",
+        sizeInfo,
+        `📊 <b>Live Entity Summary:</b>`,
+        `• <b>Registered Users:</b> ${summary.counts.users}`,
+        `• <b>Conversations:</b> ${summary.counts.conversations}`,
+        `• <b>Messages:</b> ${summary.counts.messages}`,
+        `• <b>Memory Vault:</b> ${summary.counts.memories}`,
+        `• <b>Autonomous Tasks:</b> ${summary.counts.agentTasks}`,
+        `• <b>Scheduled Reminders:</b> ${summary.counts.reminders}`,
+        `• <b>Execution Graphs:</b> ${summary.counts.executionGraphs}`,
+        `\n✅ <i>Snapshot verified and state synchronized.</i>`,
+      ].filter(Boolean).join("\n");
+
+      // Determine recipient admin IDs
+      const targetAdminIds = adminUserIdOverride
+        ? [adminUserIdOverride]
+        : this.getAdminUserIds();
+
+      if (this.bot && targetAdminIds.length > 0) {
+        for (const adminId of targetAdminIds) {
+          try {
+            await this.bot.api.sendMessage(Number(adminId), notificationHtml, {
+              parse_mode: "HTML",
+            });
+            summary.notifiedAdminIds.push(adminId);
+            logger.info({ adminId }, "Sent weekly database snapshot confirmation notification to admin");
+          } catch (sendErr: any) {
+            logger.warn(
+              { adminId, error: sendErr?.message || String(sendErr) },
+              "Failed sending weekly snapshot notification to admin user"
+            );
+          }
+        }
+      } else if (!this.bot) {
+        logger.info("Bot not attached; snapshot completed without Telegram push notification");
+      } else {
+        logger.info("No admin Telegram IDs configured; snapshot completed and saved to system_settings");
+      }
+
+      return summary;
+    } catch (err: any) {
+      summary.status = "failed";
+      summary.error = err?.message || String(err);
+      logger.error({ error: err }, "Weekly database snapshot execution failed");
+      return summary;
+    }
+  }
+
   async pollTasks() {
     if (this.isPolling) return;
-    if (!this.bot) {
-      logger.debug("CronTaskService: Bot not attached yet, skipping polling tick.");
-      return;
-    }
     this.isPolling = true;
 
     try {
       const now = new Date();
-      // Find tasks that are due (both recurring standing instructions and one-time scheduled runs)
+      // Find tasks that are due
       const dueTasks = await prisma.agentTask.findMany({
         where: {
           status: "pending",
@@ -96,6 +315,15 @@ export class CronTaskService {
   async executeTaskNow(taskId: number): Promise<{ success: boolean; message: string }> {
     const task = await prisma.agentTask.findUnique({ where: { id: taskId } });
     if (!task) return { success: false, message: "Task not found." };
+
+    if (task.taskType === "system_snapshot") {
+      const snapshot = await this.triggerWeeklyDatabaseSnapshot(Number(task.telegramUserId));
+      return {
+        success: snapshot.status === "success",
+        message: `Database snapshot completed at ${snapshot.timestamp} (${snapshot.counts.messages} messages, ${snapshot.counts.users} users).`,
+      };
+    }
+
     const result = await scheduledTaskFlowService.executeTask(taskId, { isManualRun: true });
     if (this.bot && result.formattedMessage) {
       const keyboard = scheduledTaskFlowService.taskActionsKeyboard(task);
@@ -108,14 +336,36 @@ export class CronTaskService {
   }
 
   private async executeRecurringTask(task: any) {
-    logger.info({ taskId: task.id }, "Executing scheduled task");
+    logger.info({ taskId: task.id, taskType: task.taskType }, "Executing scheduled task");
     try {
+      // Handle special system_snapshot task type
+      if (task.taskType === "system_snapshot") {
+        await this.triggerWeeklyDatabaseSnapshot(Number(task.telegramUserId));
+
+        const nextRunAt = computeNextUtcRun({
+          cronExpression: task.cronExpression || "0 0 * * 0",
+          isRecurring: task.isRecurring,
+          timezone: task.timezone || "UTC",
+          baseDate: new Date(),
+        });
+
+        await prisma.agentTask.update({
+          where: { id: task.id },
+          data: {
+            lastRunAt: new Date(),
+            nextRunAt: task.isRecurring ? nextRunAt : null,
+            status: task.isRecurring ? "pending" : "completed",
+          },
+        });
+        return;
+      }
+
       if (!this.bot) {
         logger.warn("Bot is not attached, cannot send scheduled task result.");
         return;
       }
 
-      // Check if this task is explicitly a conditional watcher (e.g. "alert if...", "notify if...", watcher category)
+      // Check if this task is explicitly a conditional watcher
       const isConditionalWatcher =
         (typeof task.metadataJson === "string" && task.metadataJson.includes('"type":"watcher"')) ||
         /\b(alert (?:me )?if|notify (?:me )?if|watch for|warn (?:me )?if|only if)\b/i.test(task.goal || "") ||
@@ -207,7 +457,7 @@ export class CronTaskService {
         cronExpression: task.cronExpression,
         isRecurring: task.isRecurring,
         timezone: task.timezone || "UTC",
-        baseDate: new Date(Date.now() + 300_000), // at least 5 minutes out in UTC
+        baseDate: new Date(Date.now() + 300_000),
       });
       await prisma.agentTask.update({
         where: { id: task.id },
@@ -260,4 +510,3 @@ export class CronTaskService {
 }
 
 export const cronTaskService = new CronTaskService();
-

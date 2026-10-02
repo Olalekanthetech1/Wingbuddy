@@ -8,6 +8,7 @@ import { bindingResolver } from "../src/execution/bindings/binding-resolver";
 import { concurrencyController } from "../src/execution/concurrency/concurrency-controller";
 import { executionObservability } from "../src/execution/observability/execution-logger";
 import { CURRENT_GRAPH_SCHEMA_VERSION, type ExecutionGraph } from "../src/planner/types";
+import { adaptiveAIRouterService } from "../src/services/adaptive-ai-router.service";
 
 describe("Autonomous Execution Engine", () => {
   let toolRegistry: ToolRegistry;
@@ -21,6 +22,28 @@ describe("Autonomous Execution Engine", () => {
     planPersistenceService.clearForTesting();
     concurrencyController.reset();
     executionObservability.resetMetrics();
+
+    vi.spyOn(adaptiveAIRouterService, "route").mockImplementation(async (request) => {
+      const prompt = request.messages?.[0]?.content || "";
+      let text = "Mocked LLM reasoning completion";
+      if (prompt.includes("First Step Reasoning") || prompt.includes("Synthesize preliminary context")) {
+        text = "Reasoning completed for: First Step Reasoning";
+      } else if (prompt.includes("Second Step Reasoning") || prompt.includes("Conclude based on prior steps")) {
+        text = "Reasoning completed for: Second Step Reasoning";
+      } else if (prompt.includes("Consolidate Analysis")) {
+        text = "Aggregated results for Consolidate Analysis";
+      }
+      return {
+        response: { text },
+        candidate: {
+          model: { id: "mock-model", modelId: "mock-model-id", provider: "mock-provider" } as any,
+          score: 1,
+          reasons: [],
+          healthScore: 100,
+          latencyMs: 10
+        }
+      };
+    });
   });
 
   // Helper: constructs a valid ExecutionGraph for testing

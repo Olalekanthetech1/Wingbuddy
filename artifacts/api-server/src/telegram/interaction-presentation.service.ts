@@ -1,4 +1,9 @@
 import type { Context } from "grammy";
+import {
+  reactionThemeService,
+  type ReactionThemeDefinition,
+} from "../services/reaction-theme.service";
+import { logger } from "../lib/logger";
 
 export type InteractionProgressState =
   | "received"
@@ -23,6 +28,7 @@ export type InteractionChatAction =
 
 export interface InteractionRuntimeEvent {
   state: InteractionProgressState;
+  telegramUserId?: string | number;
   toolName?: string | null;
   operationLabel?: string | null;
   progressText?: string | null;
@@ -42,43 +48,82 @@ export interface InteractionPresentationDecision {
 
 export interface InteractionPresentationHints extends Partial<InteractionRuntimeEvent> {}
 
-function configuredReaction(): string {
-  const configured = process.env.TELEGRAM_DEFAULT_REACTION?.trim();
-  return configured || "👀";
+export interface InteractionPresentationOptions {
+  thinkingText?: string;
+  defaultReaction?: string;
 }
 
-function configuredThinkingText(): string {
-  const configured = process.env.TELEGRAM_THINKING_TEXT?.trim();
-  return configured || "💭 Thinking";
-}
-
-/**
- * Presentation policy consumes trusted runtime metadata only. It never
- * interprets user vocabulary or performs intent detection.
- */
 export class InteractionPresentationService {
-  private readonly refreshMs: number;
-  private readonly defaultReaction: string;
-  private readonly thinkingText: string;
+  private readonly refreshMs: number = 4_000;
+  private readonly options?: InteractionPresentationOptions;
 
-  constructor(options?: {
-    refreshMs?: number;
-    defaultReaction?: string;
-    thinkingText?: string;
-  }) {
-    this.refreshMs = Math.max(1_000, options?.refreshMs ?? 4_000);
-    this.defaultReaction = options?.defaultReaction ?? configuredReaction();
-    this.thinkingText = options?.thinkingText ?? configuredThinkingText();
+  constructor(options?: InteractionPresentationOptions) {
+    this.options = options;
   }
 
-  decide(event: InteractionRuntimeEvent): InteractionPresentationDecision {
+  private configuredThinkingText(): string {
+    if (this.options?.thinkingText) return this.options.thinkingText;
+    const configured = process.env.TELEGRAM_THINKING_TEXT?.trim();
+    return configured || "💭 Thinking";
+  }
+
+  async resolveTheme(telegramUserId?: string | number): Promise<ReactionThemeDefinition> {
+    try {
+      return await reactionThemeService.getUserTheme(telegramUserId);
+    } catch {
+      return reactionThemeService.getAvailableThemes()[0];
+    }
+  }
+
+  decide(
+    event: InteractionRuntimeEvent,
+    theme?: ReactionThemeDefinition
+  ): InteractionPresentationDecision {
     if (event.state === "completed" || event.state === "failed") return {};
 
+    const effectiveTheme = theme ?? {
+      id: "default",
+      name: "Default",
+      description: "Default theme",
+      pills: [],
+      emojis: {
+        intake: this.options?.defaultReaction || "👀",
+        ideas_or_analysis: this.options?.defaultReaction || "👀",
+        tasks: "✍️",
+        done: "🎉",
+      },
+      enabled: true,
+    };
+
+    let selectedReaction: string | undefined;
+    if (event.reaction !== null && effectiveTheme && effectiveTheme.enabled) {
+      if (event.reaction) {
+        selectedReaction = event.reaction;
+      } else {
+        switch (event.state) {
+          case "received":
+          case "understanding":
+            selectedReaction = effectiveTheme.emojis.intake;
+            break;
+          case "searching":
+          case "reasoning":
+            selectedReaction = effectiveTheme.emojis.ideas_or_analysis || effectiveTheme.emojis.intake;
+            break;
+          case "executing_tool":
+            selectedReaction = effectiveTheme.emojis.tasks || effectiveTheme.emojis.ideas_or_analysis;
+            break;
+          case "generating":
+          case "finalizing":
+            selectedReaction = effectiveTheme.emojis.intake;
+            break;
+          default:
+            selectedReaction = undefined;
+        }
+      }
+    }
+
     const decision: InteractionPresentationDecision = {
-      reaction:
-        event.reaction === null
-          ? undefined
-          : event.reaction ?? this.defaultReaction,
+      reaction: selectedReaction,
       chatAction:
         event.chatAction === null
           ? undefined
@@ -93,21 +138,77 @@ export class InteractionPresentationService {
     return decision;
   }
 
-  acknowledge(ctx: Context, hints: InteractionPresentationHints = {}): void {
-    const decision = this.decide({ state: "received", ...hints });
-    if (decision.reaction) void ctx.react(decision.reaction).catch(() => undefined);
+  /**
+   * Immediately acknowledge the incoming message with the intake reaction
+   * and initial chat action. Never blocks.
+   */
+  async acknowledge(ctx: Context, hints: InteractionPresentationHints = {}): Promise<void> {
+    const userId = hints.telegramUserId ?? ctx.from?.id;
+    const theme = await this.resolveTheme(userId);
+    const decision = this.decide({ state: "received", ...hints }, theme);
+
+    if (decision.reaction) {
+      this.fireReaction(ctx, decision.reaction);
+    }
     this.sendChatAction(ctx, decision.chatAction);
   }
 
+  /**
+   * Update message reaction dynamically when the orchestrator/intent-router classifies the turn.
+   */
+  async updateReaction(
+    ctx: Context,
+    category: "tasks" | "ideas_or_analysis" | "gratitude_or_salute" | "done" | "intake",
+    hints: InteractionPresentationHints = {}
+  ): Promise<void> {
+    const userId = hints.telegramUserId ?? ctx.from?.id;
+    const theme = await this.resolveTheme(userId);
+    if (!theme.enabled) return;
+
+    const emoji = theme.emojis[category === "intake" ? "intake" : category];
+    if (emoji) {
+      this.fireReaction(ctx, emoji);
+    }
+  }
+
+  /**
+   * On successful completion, attach the theme's done reaction.
+   */
+  async complete(ctx: Context, hints: InteractionPresentationHints = {}): Promise<void> {
+    const userId = hints.telegramUserId ?? ctx.from?.id;
+    const theme = await this.resolveTheme(userId);
+    if (!theme.enabled || !theme.emojis.done) return;
+
+    this.fireReaction(ctx, theme.emojis.done);
+  }
+
+  /**
+   * On honest failure, clear any reactions from the message.
+   */
+  async clearReaction(ctx: Context): Promise<void> {
+    if (!ctx.chat || !ctx.message?.message_id) return;
+    try {
+      await ctx.api.setMessageReaction(ctx.chat.id, ctx.message.message_id, []);
+    } catch {
+      // Ignore group restriction or suppression
+    }
+  }
+
+  /**
+   * Start a reliable typing heartbeat that re-sends sendChatAction every ~4 seconds.
+   */
   startPresence(ctx: Context, hints: InteractionPresentationHints = {}): () => void {
     const decision = this.decide({ state: "generating", ...hints });
     let stopped = false;
+
     const send = (): void => {
       if (stopped) return;
       this.sendChatAction(ctx, decision.chatAction);
     };
+
     send();
     const timer = setInterval(send, this.refreshMs);
+
     return () => {
       stopped = true;
       clearInterval(timer);
@@ -117,7 +218,7 @@ export class InteractionPresentationService {
   async renderProgress(
     ctx: Context,
     event: InteractionRuntimeEvent,
-    progressMessageId?: number,
+    progressMessageId?: number
   ): Promise<number | undefined> {
     const decision = this.decide(event);
     if (!decision.visibleProgressText) return progressMessageId;
@@ -135,17 +236,27 @@ export class InteractionPresentationService {
     }
   }
 
+  private fireReaction(ctx: Context, emoji: string): void {
+    if (!ctx.chat || !ctx.message?.message_id) return;
+    const chatId = ctx.chat.id;
+    const messageId = ctx.message.message_id;
+
+    // Fire and forget, catch errors safely (e.g. rate limit, group restrictions)
+    ctx.api
+      .setMessageReaction(chatId, messageId, [{ type: "emoji", emoji: emoji as any }])
+      .catch((err) => {
+        logger.debug({ error: err?.message, emoji }, "Could not set Telegram message reaction");
+      });
+  }
+
   private progressText(event: InteractionRuntimeEvent): string | undefined {
     const explicit = event.progressText?.trim();
     if (explicit) return `${explicit}${this.latencySuffix(event)}`;
 
     if (event.state === "reasoning" && event.showThinking !== false) {
-      return `${this.thinkingText}${this.latencySuffix(event)}`;
+      return `${this.configuredThinkingText()}${this.latencySuffix(event)}`;
     }
 
-    // A normal assistant response already has Telegram's native typing
-    // presence. Do not emit a visible progress message such as
-    // "Generating: assistant response" for ordinary conversational turns.
     if (event.state === "generating" && event.toolName === "assistant_response") {
       return undefined;
     }

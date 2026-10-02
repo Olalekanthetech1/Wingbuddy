@@ -63,8 +63,8 @@ describe("TelegramBot Provider Smoke Test & Consistency Suite", () => {
       expect(result).toBeDefined();
       expect(result.text).toContain("Test response with **bold** text");
       expect(result.provider).toBe("groq");
-      expect(result.usage?.promptTokens).toBe(10);
-      expect(result.usage?.completionTokens).toBe(15);
+      expect(result.usage?.inputTokens ?? (result.usage as any)?.promptTokens).toBe(10);
+      expect(result.usage?.outputTokens ?? (result.usage as any)?.completionTokens).toBe(15);
       expect(result.usage?.totalTokens).toBe(25);
 
       // Test Telegram Formatter Consistency
@@ -162,7 +162,7 @@ describe("TelegramBot Provider Smoke Test & Consistency Suite", () => {
 
       await expect(
         aiProviderAdapters.tavily.chat({ model: "tavily-search-basic", messages: [] }, tavilyProvider)
-      ).rejects.toThrow(/Tavily is a web search and extraction provider/);
+      ).rejects.toThrow(/Tavily is a web research and search provider/);
     });
 
     it("verifies Telegram split message handles large multi-paragraph responses across any provider", () => {

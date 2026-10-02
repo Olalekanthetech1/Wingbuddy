@@ -105,6 +105,8 @@ export function renderDashboardUserAccess(): string {
     if (document.getElementById('uaVipPrice')) document.getElementById('uaVipPrice').value = pol.tiers?.vip?.priceLabel || '$24.99 / month';
     if (document.getElementById('uaVipCheckout')) document.getElementById('uaVipCheckout').value = pol.tiers?.vip?.checkoutUrl || '';
     if (document.getElementById('uaVipCrypto')) document.getElementById('uaVipCrypto').value = pol.tiers?.vip?.cryptoCheckoutUrl || '';
+
+    window.__wbPreviewManualTierDetails?.();
   }
 
   function getTierBadge(tier) {
@@ -185,6 +187,7 @@ export function renderDashboardUserAccess(): string {
         '</td>' +
         '<td>' +
           '<div style="display:flex;gap:4px;flex-wrap:wrap">' +
+            '<button class="btn" style="padding:4px 8px;font-size:11px;color:var(--amber)" onclick="window.__wbSelectUserForManualTier(' + u.telegramUserId + ',\'' + u.tier + '\')" title="Load in manual upgrade/downgrade tool">⚡ Plan</button>' +
             '<button class="btn" style="padding:4px 8px;font-size:11px" onclick="window.__wbResetUserQuota(' + u.telegramUserId + ')" title="Reset requests count today">↺ Reset</button>' +
             '<button class="btn ' + (u.status === 'suspended' ? 'primary' : '') + '" style="padding:4px 8px;font-size:11px" onclick="window.__wbToggleUserStatus(' + u.telegramUserId + ')">' +
               (u.status === 'suspended' ? 'Activate' : 'Suspend') +
@@ -195,6 +198,114 @@ export function renderDashboardUserAccess(): string {
       '</tr>';
     }).join('');
   }
+
+  window.__wbPreviewManualTierDetails = function() {
+    const tierSelect = document.getElementById('uaManualTargetTier');
+    const previewBox = document.getElementById('uaManualPlanPreview');
+    if (!previewBox) return;
+    const selectedTier = tierSelect?.value || 'pro';
+    const pol = accessData.policy;
+    if (!pol) {
+      previewBox.innerHTML = '<div style="font-size:12px;color:var(--muted);margin-top:8px">Policy metrics loading…</div>';
+      return;
+    }
+    const tierData = pol.tiers?.[selectedTier] || {};
+    const icon = selectedTier === 'vip' ? '👑' : selectedTier === 'pro' ? '⚡' : '🌱';
+    const label = selectedTier.toUpperCase();
+    const daily = tierData.dailyQuota ?? (selectedTier === 'vip' ? 500 : selectedTier === 'pro' ? 150 : 30);
+    const img = tierData.dailyImageQuota ?? (selectedTier === 'vip' ? 60 : selectedTier === 'pro' ? 20 : 3);
+    const vid = tierData.dailyVideoQuota ?? (selectedTier === 'vip' ? 10 : selectedTier === 'pro' ? 3 : 0);
+    const ctx = tierData.contextHistoryLimit ?? (selectedTier === 'vip' ? 60 : selectedTier === 'pro' ? 30 : 10);
+    const price = tierData.priceLabel || (selectedTier === 'free' ? 'Free' : selectedTier === 'pro' ? '$9.99 / mo' : '$24.99 / mo');
+
+    previewBox.innerHTML =
+      '<div style="background:var(--panel-3);border:1px solid var(--line);border-radius:8px;padding:12px;margin-top:10px">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+          '<div style="font-weight:700;font-size:13px;color:var(--fg)">' + icon + ' ' + label + ' Subscription Policy Metrics</div>' +
+          '<span class="pill good">' + price + '</span>' +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:12px">' +
+          '<div><span style="color:var(--muted);display:block;font-size:11px">DAILY REQUESTS</span><strong>' + daily + ' / day</strong></div>' +
+          '<div><span style="color:var(--muted);display:block;font-size:11px">IMAGE GENERATIONS</span><strong>' + img + ' / day</strong></div>' +
+          '<div><span style="color:var(--muted);display:block;font-size:11px">VIDEO GENERATIONS</span><strong>' + vid + ' / day</strong></div>' +
+          '<div><span style="color:var(--muted);display:block;font-size:11px">CONTEXT HISTORY</span><strong>' + ctx + ' msgs</strong></div>' +
+        '</div>' +
+      '</div>';
+  };
+
+  window.__wbTriggerManualTierChange = async function() {
+    const userIdInput = document.getElementById('uaManualUserId');
+    const tierSelect = document.getElementById('uaManualTargetTier');
+    const notesInput = document.getElementById('uaManualReason');
+    const resultBox = document.getElementById('uaManualResult');
+
+    const telegramUserId = Number(userIdInput?.value);
+    if (!telegramUserId || isNaN(telegramUserId) || telegramUserId <= 0) {
+      window.toast?.('Please enter a valid Telegram User ID (numbers only)', true);
+      userIdInput?.focus();
+      return;
+    }
+
+    const targetTier = tierSelect?.value || 'pro';
+    const notes = notesInput?.value?.trim() || '';
+
+    if (resultBox) {
+      resultBox.innerHTML = '<div style="font-size:12px;color:var(--muted);padding:8px 0">Applying manual plan change for User ID ' + telegramUserId + '…</div>';
+    }
+
+    try {
+      const res = await fetch('/api/access/manual-tier', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ telegramUserId, targetTier, notes })
+      });
+      const data = await res.json();
+      if (data.success && data.user) {
+        const u = data.user;
+        window.toast?.('✓ Updated User ' + telegramUserId + ' to ' + targetTier.toUpperCase() + ' Plan');
+        if (resultBox) {
+          resultBox.innerHTML =
+            '<div style="background:rgba(46,204,113,0.1);border:1px solid rgba(46,204,113,0.3);border-radius:8px;padding:12px;margin-top:10px">' +
+              '<div style="display:flex;justify-content:space-between;align-items:center">' +
+                '<div>' +
+                  '<div style="font-weight:700;color:var(--green)">✓ Subscription Plan Change Applied</div>' +
+                  '<div style="font-size:12px;color:var(--fg);margin-top:2px">User: <strong>' + (u.displayName.replace(/</g, '&lt;')) + '</strong> (Telegram ID: ' + telegramUserId + ')</div>' +
+                '</div>' +
+                '<div>' + getTierBadge(u.tier) + '</div>' +
+              '</div>' +
+              '<div style="font-size:12px;color:var(--muted);margin-top:6px;display:flex;gap:16px;flex-wrap:wrap">' +
+                '<span>New Daily Quota: <strong>' + u.dailyQuota + ' reqs/day</strong></span>' +
+                '<span>Quota Reset: <strong>Granted Relief</strong></span>' +
+                (notes ? '<span>Note: <em>' + notes.replace(/</g, '&lt;') + '</em></span>' : '') +
+              '</div>' +
+            '</div>';
+        }
+        loadUserAccess();
+      } else {
+        const err = data.error || 'Failed updating user tier';
+        window.toast?.(err, true);
+        if (resultBox) {
+          resultBox.innerHTML = '<div style="color:var(--red);margin-top:8px;font-size:12px">⚠️ ' + err + '</div>';
+        }
+      }
+    } catch (e) {
+      window.toast?.(e.message, true);
+      if (resultBox) {
+        resultBox.innerHTML = '<div style="color:var(--red);margin-top:8px;font-size:12px">⚠️ Error: ' + e.message + '</div>';
+      }
+    }
+  };
+
+  window.__wbSelectUserForManualTier = function(telegramUserId, currentTier) {
+    const userIdInput = document.getElementById('uaManualUserId');
+    const tierSelect = document.getElementById('uaManualTargetTier');
+    if (userIdInput) userIdInput.value = telegramUserId;
+    if (tierSelect && currentTier) tierSelect.value = currentTier;
+    window.__wbPreviewManualTierDetails?.();
+    const card = document.getElementById('uaManualTierCard');
+    card?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    userIdInput?.focus();
+  };
 
   window.__wbChangeUserTier = async function(telegramUserId, newTier) {
     try {
@@ -576,6 +687,41 @@ export function renderDashboardUserAccess(): string {
               '<div style="font-size:12px;color:var(--muted);padding:8px 0">Click "Simulate Route" to see live router decision and candidates.</div>' +
             '</div>' +
           '</div>' +
+        '</div>' +
+        '<!-- Manual Tier Upgrade / Downgrade Card -->' +
+        '<div class="card section" id="uaManualTierCard" style="margin-bottom:16px">' +
+          '<div class="section-head">' +
+            '<div>' +
+              '<div class="section-title">⚡ Manual User Tier Upgrade & Downgrade Tool</div>' +
+              '<div class="section-note">Trigger an immediate subscription plan upgrade or downgrade for any Telegram User ID based on active policy rules.</div>' +
+            '</div>' +
+          '</div>' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr 1.5fr;gap:12px;align-items:end">' +
+            '<div>' +
+              '<div class="label">Telegram User ID <span style="color:var(--red)">*</span></div>' +
+              '<input id="uaManualUserId" class="input" type="number" placeholder="e.g. 123456789" style="margin-top:4px" oninput="window.__wbPreviewManualTierDetails()" />' +
+            '</div>' +
+            '<div>' +
+              '<div class="label">Target Subscription Plan</div>' +
+              '<select id="uaManualTargetTier" class="select" style="margin-top:4px" onchange="window.__wbPreviewManualTierDetails()">' +
+                '<option value="free">🌱 Free Plan (Standard Limits)</option>' +
+                '<option value="pro" selected>⚡ Pro Plan (Elevated Limits)</option>' +
+                '<option value="vip">👑 VIP Plan (Unlimited / Frontier)</option>' +
+              '</select>' +
+            '</div>' +
+            '<div>' +
+              '<div class="label">Admin Notes / Override Reason (Optional)</div>' +
+              '<input id="uaManualReason" class="input" placeholder="e.g. Manual promotion, Support override, Refund" style="margin-top:4px" />' +
+            '</div>' +
+          '</div>' +
+          '<div id="uaManualPlanPreview"></div>' +
+          '<div style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">' +
+            '<div style="font-size:12px;color:var(--muted)">' +
+              '💡 Upgrading to Pro or VIP grants immediate daily quota relief and updates live model routing rules.' +
+            '</div>' +
+            '<button class="btn primary" onclick="window.__wbTriggerManualTierChange()" style="padding:8px 18px;font-weight:700">Apply Subscription Plan Change</button>' +
+          '</div>' +
+          '<div id="uaManualResult"></div>' +
         '</div>' +
         '<!-- User Directory & Management Table -->' +
         '<div class="card section">' +

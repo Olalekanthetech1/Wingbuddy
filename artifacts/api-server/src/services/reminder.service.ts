@@ -437,8 +437,10 @@ export class ReminderService {
       if (meridiem === "am" && hour === 12) hour = 0;
 
       const timeHHMM = `${String(hour).padStart(2, "0")}:${String(rawMin).padStart(2, "0")}`;
-      const tomorrowRef = new Date(now.getTime() + 86400000);
-      const dueAt = timezoneService.calculateNextOccurrenceUtc(timeHHMM, timezone, tomorrowRef);
+      const tomorrowStart = new Date(now);
+      tomorrowStart.setUTCHours(0, 0, 0, 0);
+      tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+      const dueAt = timezoneService.calculateNextOccurrenceUtc(timeHHMM, timezone, tomorrowStart);
 
       const classification = ReminderService.classifyReminderType(prompt, hour);
 

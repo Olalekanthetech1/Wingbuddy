@@ -367,6 +367,17 @@ export class PersonaService {
     return target;
   }
 
+  /**
+   * Universal getPersona helper supporting telegramUserId (number) or persona id (string).
+   */
+  async getPersona(target: number | string): Promise<{ persona: AIPersona; isGatedFallback?: boolean } | null> {
+    if (typeof target === "number") {
+      return this.getUserActivePersona(target);
+    }
+    const persona = await this.getPersonaById(target);
+    return persona ? { persona } : null;
+  }
+
   async getUserActivePersona(telegramUserId: number): Promise<{ persona: AIPersona; isGatedFallback?: boolean }> {
     try {
       const user = await userTierService.getUser(telegramUserId);

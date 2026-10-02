@@ -32,6 +32,9 @@ export const usersTable = pgTable(
     customModelOverride: text("custom_model_override"),
     status: text("status").default("active").notNull(),
     activePersonaId: text("active_persona_id").default("default_assistant").notNull(),
+    preferredName: text("preferred_name"),
+    nameSource: text("name_source"),
+    fullName: text("full_name"),
     lastActiveAt: timestamp("last_active_at", { withTimezone: true }).defaultNow().notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -65,6 +68,9 @@ export const messagesTable = pgTable(
     conversationId: integer("conversation_id").notNull(),
     role: text("role").notNull(),
     content: text("content").notNull(),
+    mediaType: text("media_type").default("text").notNull(),
+    source: text("source").default("web").notNull(),
+    audioUrl: text("audio_url"),
     tokenCount: integer("token_count"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -73,6 +79,68 @@ export const messagesTable = pgTable(
       table.conversationId,
       table.createdAt,
     ),
+  ],
+);
+
+export const webUsersTable = pgTable(
+  "web_users",
+  {
+    id: serial("id").primaryKey(),
+    email: text("email").notNull(),
+    googleId: text("google_id"),
+    name: text("name"),
+    picture: text("picture"),
+    role: text("role").default("user").notNull(), // 'admin' | 'user'
+    telegramUserId: bigint("telegram_user_id", { mode: "number" }),
+    telegramUsername: text("telegram_username"),
+    preferredName: text("preferred_name"),
+    nameSource: text("name_source"),
+    fullName: text("full_name"),
+    givenName: text("given_name"),
+    familyName: text("family_name"),
+    notificationPreference: text("notification_preference").default("full").notNull(), // 'full' | 'digest_only' | 'silent'
+    contextSyncMode: text("context_sync_mode").default("compact").notNull(), // 'compact' | 'full'
+    lastLoginAt: timestamp("last_login_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("web_users_email_idx").on(table.email),
+    index("web_users_telegram_user_id_idx").on(table.telegramUserId),
+  ],
+);
+
+export const webSessionsTable = pgTable(
+  "web_sessions",
+  {
+    id: serial("id").primaryKey(),
+    sessionToken: text("session_token").notNull(),
+    webUserId: integer("web_user_id").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("web_sessions_token_idx").on(table.sessionToken),
+    index("web_sessions_user_idx").on(table.webUserId),
+  ],
+);
+
+export const telegramPairingTokensTable = pgTable(
+  "telegram_pairing_tokens",
+  {
+    id: serial("id").primaryKey(),
+    token: text("token").notNull(),
+    webUserId: integer("web_user_id"),
+    telegramUserId: bigint("telegram_user_id", { mode: "number" }),
+    telegramUsername: text("telegram_username"),
+    type: text("type").default("web_to_tg").notNull(), // 'web_to_tg' | 'tg_to_web'
+    isUsed: boolean("is_used").default(false).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("telegram_pairing_tokens_token_idx").on(table.token),
+    index("telegram_pairing_tokens_expires_idx").on(table.expiresAt, table.isUsed),
   ],
 );
 

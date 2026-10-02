@@ -122,6 +122,44 @@ export class MemoryService {
   }
 
   /**
+   * Alias for getMemories to support user routes and controllers.
+   */
+  async getUserMemories(
+    telegramUserId: number | bigint,
+    options?: { type?: MemoryType; category?: string; minConfidence?: "medium" | "high" },
+  ): Promise<UserMemoryRecord[]> {
+    return this.getMemories(telegramUserId, options);
+  }
+
+  /**
+   * Direct helper to save a user memory with default category/importance.
+   */
+  async saveUserMemory(
+    telegramUserId: number | bigint,
+    key: string,
+    content: string,
+    category = "general",
+    importance: "low" | "medium" | "high" = "medium",
+  ): Promise<UserMemoryRecord | null> {
+    return this.saveMemory({
+      telegramUserId,
+      key,
+      content,
+      category,
+      type: (category as MemoryType) || "user_fact",
+      importance,
+      confidence: "high",
+    });
+  }
+
+  /**
+   * Direct helper to delete a memory by key or ID.
+   */
+  async deleteUserMemory(telegramUserId: number | bigint, keyOrId: string | number): Promise<boolean> {
+    return this.forgetMemory(telegramUserId, keyOrId);
+  }
+
+  /**
    * Searches memories using keyword and semantic similarity.
    */
   async searchMemories(telegramUserId: number | bigint, query: string): Promise<UserMemoryRecord[]> {
@@ -163,39 +201,53 @@ export class MemoryService {
 
   /**
    * Formats active memories into a structured, token-optimized section for system prompt injection.
+   * Can accept either a user ID or an array of UserMemoryRecord objects.
    */
-  async formatMemoriesForPrompt(telegramUserId: number | bigint): Promise<string> {
-    const uid = Number(telegramUserId);
-    const memories = await this.getMemories(uid);
+  formatMemoriesForPrompt(input: number | bigint | UserMemoryRecord[]): string | Promise<string> {
+    if (Array.isArray(input)) {
+      if (input.length === 0) return "";
 
-    if (memories.length === 0) return "";
-
-    const categories: Record<string, string[]> = {};
-    for (const mem of memories) {
-      const catKey = mem.type || mem.category || "user_fact";
-      if (!categories[catKey]) {
-        categories[catKey] = [];
+      const categories: Record<string, string[]> = {};
+      for (const mem of input) {
+        const catKey = mem.type || mem.category || "user_fact";
+        if (!categories[catKey]) {
+          categories[catKey] = [];
+        }
+        categories[catKey].push(`• [${mem.key}]: ${mem.content}`);
       }
-      categories[catKey].push(`• [${mem.key}]: ${mem.content}`);
+
+      const sections: string[] = [];
+      const typeLabels: Record<string, string> = {
+        user_preference: "USER PREFERENCES",
+        user_fact: "USER FACTS",
+        workflow_preference: "WORKFLOW PREFERENCES",
+        project_context: "PROJECT CONTEXT",
+        learning_context: "LEARNING GOALS",
+        interaction_preference: "INTERACTION PREFERENCES",
+        important_context: "IMPORTANT CONTEXT",
+      };
+
+      for (const [catKey, items] of Object.entries(categories)) {
+        const label = typeLabels[catKey] || catKey.toUpperCase();
+        sections.push(`[${label}]\n${items.join("\n")}`);
+      }
+
+      return `\n\n[PERSISTENT LONG-TERM MEMORY]\n${sections.join("\n\n")}\n\nInstructions regarding persistent memories:\n- Use these stored facts and preferences naturally.\n- Never reveal internal memory key identifiers to the user unless explicitly asked via /memory.`;
     }
 
-    const sections: string[] = [];
-    const typeLabels: Record<string, string> = {
-      user_preference: "USER PREFERENCES",
-      user_fact: "USER FACTS",
-      workflow_preference: "WORKFLOW PREFERENCES",
-      project_context: "PROJECT CONTEXT",
-      learning_context: "LEARNING GOALS",
-      interaction_preference: "INTERACTION PREFERENCES",
-      important_context: "IMPORTANT CONTEXT",
-    };
+    return this.getMemories(input).then((memories) => this.formatMemoriesForPrompt(memories) as string);
+  }
 
-    for (const [catKey, items] of Object.entries(categories)) {
-      const label = typeLabels[catKey] || catKey.toUpperCase();
-      sections.push(`[${label}]\n${items.join("\n")}`);
-    }
-
-    return `\n\n[PERSISTENT LONG-TERM MEMORY]\n${sections.join("\n\n")}\n\nInstructions regarding persistent memories:\n- Use these stored facts and preferences naturally.\n- Never reveal internal memory key identifiers to the user unless explicitly asked via /memory.`;
+  /**
+   * Helper for background memory extraction from user conversation dialogue.
+   */
+  async extractAndSaveMemories(
+    telegramUserId: number | bigint,
+    userPrompt: string,
+    assistantReply?: string,
+  ): Promise<void> {
+    const combined = `${userPrompt}\n${assistantReply || ""}`;
+    await this.processBackgroundExtraction(telegramUserId, combined);
   }
 
   /**

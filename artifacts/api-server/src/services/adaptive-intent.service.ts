@@ -39,7 +39,7 @@ export class AdaptiveIntentService {
     if (!trimmed) return { isModeSwitch: false };
 
     // Explicit Telegram command is a deterministic protocol contract.
-    const commandMatch = trimmed.match(/^\/mode(?:\s+([a-z_]+))?$/i);
+    const commandMatch = /^\/mode(?:\s+([a-z_]+))?$/i.exec(trimmed);
     if (commandMatch) {
       if (!commandMatch[1]) return { isModeSwitch: true, isAmbiguous: true };
       const requestedMode = modeService?.resolveCanonicalMode(commandMatch[1]) || null;
@@ -76,7 +76,7 @@ export class AdaptiveIntentService {
     }
 
     // Pattern: "Switch to <mode> mode and <prompt>"
-    const switchMatch = lower.match(/^(?:switch|change|set)\s+(?:to\s+)?([a-z_]+)\s+mode(?:\s+(?:and|to|for)\s+(.+))?$/i);
+    const switchMatch = /^(?:switch|change|set)\s+(?:to\s+)?([a-z_]+)\s+mode(?:\s+(?:and|to|for)\s+(.+))?$/i.exec(lower);
     if (switchMatch) {
       const modeCandidate = switchMatch[1].trim();
       const cleaned = switchMatch[2]?.trim();

@@ -41,6 +41,24 @@ export class ConversationService {
   async getOrCreateConversation(telegramUserId: number, chatId: number): Promise<number> {
     const existing = await db.select({ id: conversationsTable.id }).from(conversationsTable).where(and(eq(conversationsTable.telegramUserId, telegramUserId), eq(conversationsTable.chatId, chatId))).limit(1);
     if (existing[0]) return existing[0].id;
+
+    // Ensure parent user record exists in users table before inserting conversation to satisfy foreign key
+    const userExists = await this.userExists(telegramUserId);
+    if (!userExists) {
+      await db
+        .insert(usersTable)
+        .values({
+          telegramUserId,
+          username: telegramUserId >= 9000000000 ? `web_user_${telegramUserId - 9000000000}` : `user_${telegramUserId}`,
+          firstName: telegramUserId >= 9000000000 ? "Web User" : "Telegram User",
+          tier: "free",
+          dailyQuota: 50,
+          status: "active",
+          updatedAt: new Date(),
+        })
+        .onConflictDoNothing();
+    }
+
     const created = await db.insert(conversationsTable).values({ telegramUserId, chatId }).onConflictDoUpdate({ target: [conversationsTable.telegramUserId, conversationsTable.chatId], set: { updatedAt: new Date() } }).returning({ id: conversationsTable.id });
     return created[0]?.id ?? this.getConversationId(telegramUserId, chatId);
   }

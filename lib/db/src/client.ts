@@ -6,6 +6,19 @@ import * as schema from "./schema";
 
 const { Pool } = pg;
 
+// Normalize PostgreSQL SSL configuration to prevent pg-connection-string legacy alias warning
+try {
+  const rawDbUrl = process.env.DATABASE_URL;
+  if (rawDbUrl) {
+    const u = new URL(rawDbUrl);
+    const mode = u.searchParams.get("sslmode");
+    if ((mode === "require" || mode === "prefer" || mode === "verify-ca") && !u.searchParams.has("uselibpqcompat")) {
+      u.searchParams.set("uselibpqcompat", "true");
+      process.env.DATABASE_URL = u.toString();
+    }
+  }
+} catch {}
+
 let poolInstance: pg.Pool | null = null;
 let dbInstance: NodePgDatabase<typeof schema> | null = null;
 let prismaInstance: PrismaClient | null = null;
@@ -66,7 +79,7 @@ export async function ensureDatabaseSchema(pgPool?: pg.Pool): Promise<void> {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS users_telegram_user_id_idx ON users(telegram_user_id);
 
-    -- Ensure upgraded tier and quota columns exist on users
+    -- Ensure upgraded tier, quota, and preferred name columns exist on users
     ALTER TABLE users ADD COLUMN IF NOT EXISTS tier TEXT NOT NULL DEFAULT 'free';
     ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_quota INTEGER NOT NULL DEFAULT 30;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS requests_today INTEGER NOT NULL DEFAULT 0;
@@ -76,6 +89,9 @@ export async function ensureDatabaseSchema(pgPool?: pg.Pool): Promise<void> {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
     ALTER TABLE users ADD COLUMN IF NOT EXISTS active_persona_id TEXT NOT NULL DEFAULT 'default_assistant';
     ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS preferred_name TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS name_source TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name TEXT;
 
     CREATE TABLE IF NOT EXISTS conversations (
       id SERIAL PRIMARY KEY,
@@ -100,6 +116,63 @@ export async function ensureDatabaseSchema(pgPool?: pg.Pool): Promise<void> {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS messages_conversation_created_idx ON messages(conversation_id, created_at);
+
+    -- Ensure media and source columns exist on messages
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_type TEXT NOT NULL DEFAULT 'text';
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'web';
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS audio_url TEXT;
+
+    -- Web Users Table for Google Sign-In & Dashboard Accounts
+    CREATE TABLE IF NOT EXISTS web_users (
+      id SERIAL PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE,
+      google_id TEXT UNIQUE,
+      name TEXT,
+      picture TEXT,
+      role TEXT NOT NULL DEFAULT 'user',
+      telegram_user_id BIGINT UNIQUE,
+      telegram_username TEXT,
+      notification_preference TEXT NOT NULL DEFAULT 'full',
+      context_sync_mode TEXT NOT NULL DEFAULT 'compact',
+      last_login_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS web_users_email_idx ON web_users(email);
+    CREATE INDEX IF NOT EXISTS web_users_telegram_user_id_idx ON web_users(telegram_user_id);
+
+    -- Ensure preferred_name and provider name columns exist on web_users
+    ALTER TABLE web_users ADD COLUMN IF NOT EXISTS preferred_name TEXT;
+    ALTER TABLE web_users ADD COLUMN IF NOT EXISTS name_source TEXT;
+    ALTER TABLE web_users ADD COLUMN IF NOT EXISTS full_name TEXT;
+    ALTER TABLE web_users ADD COLUMN IF NOT EXISTS given_name TEXT;
+    ALTER TABLE web_users ADD COLUMN IF NOT EXISTS family_name TEXT;
+
+    -- Web Sessions Table
+    CREATE TABLE IF NOT EXISTS web_sessions (
+      id SERIAL PRIMARY KEY,
+      session_token TEXT NOT NULL UNIQUE,
+      web_user_id INTEGER NOT NULL REFERENCES web_users(id) ON DELETE CASCADE,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS web_sessions_token_idx ON web_sessions(session_token);
+    CREATE INDEX IF NOT EXISTS web_sessions_user_idx ON web_sessions(web_user_id);
+
+    -- Telegram Pairing and Magic Login Tokens
+    CREATE TABLE IF NOT EXISTS telegram_pairing_tokens (
+      id SERIAL PRIMARY KEY,
+      token TEXT NOT NULL UNIQUE,
+      web_user_id INTEGER REFERENCES web_users(id) ON DELETE CASCADE,
+      telegram_user_id BIGINT,
+      telegram_username TEXT,
+      type TEXT NOT NULL DEFAULT 'web_to_tg',
+      is_used BOOLEAN NOT NULL DEFAULT FALSE,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS telegram_pairing_tokens_token_idx ON telegram_pairing_tokens(token);
+    CREATE INDEX IF NOT EXISTS telegram_pairing_tokens_expires_idx ON telegram_pairing_tokens(expires_at, is_used);
 
     CREATE TABLE IF NOT EXISTS user_memories (
       id SERIAL PRIMARY KEY,

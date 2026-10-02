@@ -13,6 +13,7 @@ describe("AdaptiveStartExperienceService", () => {
       activeReminderCount: 2,
       recentSessionAvailable: false,
       timezone: "UTC",
+      now: new Date("2026-10-01T10:00:00Z"),
     });
     expect(text).toContain("Alex");
     expect(text).toContain("Coder");
@@ -30,6 +31,7 @@ describe("AdaptiveStartExperienceService", () => {
       activeReminderCount: 0,
       recentSessionAvailable: false,
       timezone: "UTC",
+      now: new Date("2026-10-01T10:00:00Z"),
     });
     expect(text).toContain("New user");
     expect(text).toContain("General Assistant");

@@ -1,4 +1,4 @@
-export const DEFAULT_MODEL = process.env.GEMINI_DEFAULT_MODEL?.trim() || "gemini-3.8-flash";
+export const DEFAULT_MODEL = process.env.GEMINI_DEFAULT_MODEL?.trim() || "gemini-3.1-flash-lite";
 export const DEFAULT_MAX_HISTORY_MESSAGES = 20;
 export const DEFAULT_RATE_LIMIT_MAX_REQUESTS = 6;
 export const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;

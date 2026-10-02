@@ -134,7 +134,7 @@ describe("ModeService & Semantic Adaptive Mode Switching Engine", () => {
     expect(AdaptiveIntentService.analyze(greeting, "deep_research").enableSearch).toBe(false);
 
     const research = "What are the latest developments in fusion energy technology?";
-    seedSemanticDecision(research, { intent: "search_grounding", effectiveMode: "deep_research", enableSearch: true });
+    seedSemanticDecision(research, { intent: "search_grounding", effectiveMode: "deep_research", enableSearch: true }, "deep_research");
     expect(AdaptiveIntentService.analyze(research, "deep_research").enableSearch).toBe(true);
   });
 

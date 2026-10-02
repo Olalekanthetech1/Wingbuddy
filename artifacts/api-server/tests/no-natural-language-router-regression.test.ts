@@ -25,8 +25,8 @@ describe("natural-language routing architecture", () => {
     expect(modeService).toContain("resolveTurnMode");
 
     // No executable lexical classifier is permitted here.
-    expect(adaptiveIntent).not.toMatch(/new\\s+RegExp\\s*\\(/);
-    expect(executionPlanner).not.toMatch(/new\\s+RegExp\\s*\\(/);
+    expect(adaptiveIntent).not.toMatch(/new\s+RegExp\s*\(/);
+    expect(executionPlanner).not.toMatch(/new\s+RegExp\s*\(/);
     expect(adaptiveIntent).not.toContain(".test(");
     expect(executionPlanner).not.toContain(".test(");
     expect(adaptiveIntent).not.toContain(".match(");

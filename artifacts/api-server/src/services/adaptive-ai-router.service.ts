@@ -26,7 +26,7 @@ export interface AIRoutingCandidate { model: UnifiedModelRecord; score: number; 
 
 const POLICY_KEY = "AI_ROUTING_POLICY";
 const DEFAULT_POLICY: AIRoutingPolicy = { strategy: "adaptive", capabilityWeight: 50, healthWeight: 25, latencyWeight: 15, priorityWeight: 10, maxAttempts: 3, updatedAt: new Date().toISOString() };
-const PRIMARY_ROLE_BONUS = 15;
+const PRIMARY_ROLE_BONUS = 1000;
 
 interface ModelHealth { successes: number; failures: number; consecutiveFailures: number; ewmaLatencyMs: number; lastSuccessAt?: string; lastFailureAt?: string; lastError?: string; cooldownUntil?: number; }
 function finite(value: unknown, fallback: number): number { return typeof value === "number" && Number.isFinite(value) ? value : fallback; }

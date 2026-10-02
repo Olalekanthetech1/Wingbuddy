@@ -10,6 +10,7 @@ import { adaptiveStartExperienceService } from "./adaptive-start-experience.serv
 import type { ConversationService } from "../services/conversation.service";
 import type { ModeService } from "../services/mode.service";
 import { mainMenuKeyboard, settingsKeyboard } from "./keyboards";
+import { validateCandidateName, escapeHtml, userIdentityResolverService } from "../services/user-identity-resolver.service";
 
 export interface OnboardingDependencies {
   authorized: (userId: number) => boolean;
@@ -47,6 +48,15 @@ function aboutChoiceKeyboard(): InlineKeyboard {
   return new InlineKeyboard().text("✍️ Tell Wingbuddy", "onboard:about:write").row().text("⏭️ Skip", "onboard:about:skip");
 }
 
+function nameKeyboard(ctx: Context): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+  const candidate = validateCandidateName(ctx.from?.first_name);
+  if (candidate) {
+    keyboard.text(`Call me "${candidate}"`, "onboard:name:use_telegram").row();
+  }
+  return keyboard.text("✏️ Type a different name", "onboard:name:type_custom").row().text("⏭️ Ask me later", "onboard:skip:name");
+}
+
 function timezoneKeyboard(): InlineKeyboard {
   return new InlineKeyboard().text("🇳🇬 Africa/Lagos", "onboard:timezone:Africa/Lagos").text("🇬🇧 Europe/London", "onboard:timezone:Europe/London").row().text("🇺🇸 America/New_York", "onboard:timezone:America/New_York").text("🇺🇸 America/Los_Angeles", "onboard:timezone:America/Los_Angeles").row().text("⏭️ Keep default", "onboard:skip:timezone");
 }
@@ -61,6 +71,13 @@ function setupMigrationText(ctx: Context, personality: string, mode: string): st
 function stepContent(ctx: Context, step: OnboardingState["step"]): { text: string; replyMarkup?: InlineKeyboard } | null {
   switch (step) {
     case "welcome": return { text: `👋 <b>Hey ${displayName(ctx)}!</b>\n\nI’m Wingbuddy. I can help you study, plan tasks, research, code, remember useful things, and handle everyday work.\n\nLet’s personalize your assistant first — it only takes a moment.`, replyMarkup: welcomeKeyboard() };
+    case "name": {
+      const candidate = validateCandidateName(ctx.from?.first_name);
+      const text = candidate
+        ? `👋 <b>What should I call you?</b>\n\nI can address you as <b>${escapeHtml(candidate)}</b> (from Telegram), or you can specify a different preferred name.`
+        : `👋 <b>What should I call you?</b>\n\nTell me what name you'd like me to use when addressing you.`;
+      return { text, replyMarkup: nameKeyboard(ctx) };
+    }
     case "personality": return { text: "🎭 <b>How should I interact with you?</b>\n\nChoose the personality that feels right. You can change it later from Settings.", replyMarkup: personalityOnboardingKeyboard() };
     case "mode": return { text: "🧠 <b>What will you use Wingbuddy for most?</b>\n\nThis becomes your default mode. Wingbuddy can still adapt when your request needs something different.", replyMarkup: modeOnboardingKeyboard() };
     case "proactivity": return { text: "⚡ <b>How proactive should I be?</b>\n\nShould I only respond when you ask, or occasionally check in when I can be useful?", replyMarkup: proactivityKeyboard() };
@@ -141,8 +158,11 @@ async function sendReadySummary(ctx: Context, deps: OnboardingDependencies, stat
   const modeKey = typeof profile?.mode === "string" && isModeKey(profile.mode) ? profile.mode : null;
   const personality = personalityKey ? PERSONALITIES[personalityKey].label : "Default";
   const mode = modeKey ? MODES[modeKey].label : "Default";
-  const text = `✅ <b>Your Wingbuddy setup is ready!</b>\n\n🎭 Personality: ${personality}\n🧠 Default mode: ${mode}\n⚡ Proactivity: ${safeProactivityLabel(state.proactivityPreference)}\n🧠 Memory: ${state.memoryEnabled ? "Enabled" : "Off"}\n🌍 Timezone: ${state.timezone}\n\nYou can change your preferences later with <code>/setup</code>.`;
-  const keyboard = new InlineKeyboard().text("🚀 Continue to Wingbuddy", "onboard:finish");
+  const text = `✅ <b>Your Wingbuddy setup is ready!</b>\n\n🎭 Personality: ${personality}\n🧠 Default mode: ${mode}\n⚡ Proactivity: ${safeProactivityLabel(state.proactivityPreference)}\n🧠 Memory: ${state.memoryEnabled ? "Enabled" : "Off"}\n🌍 Timezone: ${state.timezone}\n\n<i>You can also use your full desktop dashboard with live execution visualizer anytime.</i>`;
+  const keyboard = new InlineKeyboard()
+    .text("🚀 Start Chatting", "onboard:finish")
+    .row()
+    .text("🌐 Open Web Workspace", "cmd:open_workspace");
   if (state.activeMessageId && await editCurrentMessage(ctx, text, keyboard)) return;
   await deleteActiveMessage(ctx, state);
   await sendAndTrack(ctx, ctx.chat!.id, text, keyboard);
@@ -195,7 +215,27 @@ export function registerOnboardingHandlers(bot: Bot, deps: OnboardingDependencie
     await startOnboarding(ctx, deps);
   });
 
-  bot.callbackQuery("onboard:start", async (ctx) => { if (!ensure(ctx) || !ctx.from || !ctx.chat) return; await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "personality", status: "in_progress", version: CURRENT_ONBOARDING_VERSION }); await ctx.answerCallbackQuery(); await showStep(ctx, "personality", true); });
+  bot.callbackQuery("onboard:start", async (ctx) => { if (!ensure(ctx) || !ctx.from || !ctx.chat) return; await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "name", status: "in_progress", version: CURRENT_ONBOARDING_VERSION }); await ctx.answerCallbackQuery(); await showStep(ctx, "name", true); });
+
+  bot.callbackQuery("onboard:name:use_telegram", async (ctx) => {
+    if (!ensure(ctx) || !ctx.from || !ctx.chat) return;
+    const candidate = validateCandidateName(ctx.from.first_name);
+    if (candidate) {
+      await userIdentityResolverService.updatePreferredName(ctx.from.id, candidate, "telegram", false);
+      await ctx.answerCallbackQuery({ text: `Name set to ${candidate}` });
+    } else {
+      await ctx.answerCallbackQuery({ text: "No valid name found in Telegram profile", show_alert: true });
+    }
+    await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "personality", version: CURRENT_ONBOARDING_VERSION });
+    await showStep(ctx, "personality", true);
+  });
+
+  bot.callbackQuery("onboard:name:type_custom", async (ctx) => {
+    if (!ensure(ctx) || !ctx.from || !ctx.chat) return;
+    await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "name", version: CURRENT_ONBOARDING_VERSION });
+    await ctx.answerCallbackQuery();
+    await editCurrentMessage(ctx, "✍️ <b>What should I call you?</b>\n\nSend a message in chat with your preferred name (e.g., Femi or Lekan).");
+  });
 
   bot.callbackQuery("onboard:migrate:start", async (ctx) => { if (!ensure(ctx) || !ctx.from || !ctx.chat) return; await onboardingService.startLegacyMigration(ctx.from.id, ctx.chat.id); await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "proactivity", version: CURRENT_ONBOARDING_VERSION }); await ctx.answerCallbackQuery({ text: "Personalization started" }); await showStep(ctx, "proactivity", true); });
 
@@ -232,10 +272,10 @@ export function registerOnboardingHandlers(bot: Bot, deps: OnboardingDependencie
     await sendReadySummary(ctx, deps, state);
   });
 
-  bot.callbackQuery(/^onboard:skip:(personality|mode|proactivity|memory|timezone)$/, async (ctx) => {
+  bot.callbackQuery(/^onboard:skip:(name|personality|mode|proactivity|memory|timezone)$/, async (ctx) => {
     if (!ensure(ctx) || !ctx.from || !ctx.chat) return;
     const skipped = ctx.match[1];
-    const next: Record<string, OnboardingState["step"]> = { personality: "mode", mode: "proactivity", proactivity: "memory", memory: "about_you", timezone: "ready" };
+    const next: Record<string, OnboardingState["step"]> = { name: "personality", personality: "mode", mode: "proactivity", proactivity: "memory", memory: "about_you", timezone: "ready" };
     const nextStep = next[skipped];
     if (skipped === "timezone") {
       const userTz = await timezoneService.getUserTimezone(ctx.from.id);

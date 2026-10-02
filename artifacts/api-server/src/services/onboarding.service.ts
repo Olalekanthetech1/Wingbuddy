@@ -1,7 +1,7 @@
 import { getPool } from "@workspace/db";
 import { timezoneService } from "./timezone.service";
 
-export type OnboardingStep = "welcome" | "migration" | "personality" | "mode" | "proactivity" | "memory" | "about_you" | "timezone" | "ready";
+export type OnboardingStep = "welcome" | "migration" | "name" | "personality" | "mode" | "proactivity" | "memory" | "about_you" | "timezone" | "ready";
 export type ProactivityPreference = "never" | "occasional" | "proactive";
 export const CURRENT_ONBOARDING_VERSION = 2;
 
@@ -22,7 +22,7 @@ export interface OnboardingState {
 const TABLE = "onboarding_profiles";
 
 function normalizeStep(value: unknown): OnboardingStep {
-  const steps: OnboardingStep[] = ["welcome", "migration", "personality", "mode", "proactivity", "memory", "about_you", "timezone", "ready"];
+  const steps: OnboardingStep[] = ["welcome", "migration", "name", "personality", "mode", "proactivity", "memory", "about_you", "timezone", "ready"];
   return typeof value === "string" && steps.includes(value as OnboardingStep) ? value as OnboardingStep : "welcome";
 }
 

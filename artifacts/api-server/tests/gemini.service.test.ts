@@ -110,7 +110,7 @@ describe("GeminiService", () => {
 
     expect(reply).toContain("Google I/O 2026 introduced new Gemini 3 models.");
     expect(reply).toContain("🔍 Sources:");
-    expect(reply).toContain("Google I/O Keynote: https://blog.google/io");
+    expect(reply).toContain("• [Google I/O Keynote](https://blog.google/io)");
     expect(generateContent).toHaveBeenCalledWith(
       expect.objectContaining({
         config: expect.objectContaining({

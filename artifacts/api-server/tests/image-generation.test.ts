@@ -37,6 +37,6 @@ describe("ImageGenerationService - Prompt Extraction & Handling", () => {
   it("handles prompt enhancement fallback gracefully when gemini service is absent", async () => {
     const prompt = "sunset over ocean";
     const result = await ImageGenerationService.enhancePrompt(prompt, undefined);
-    expect(result).toBe("sunset over ocean");
+    expect(result.prompt).toBe("sunset over ocean");
   });
 });

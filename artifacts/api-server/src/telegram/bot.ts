@@ -35,6 +35,8 @@ import { userTierService } from "../services/user-tier.service";
 import { personaService } from "../services/persona.service";
 import { contextManagerService } from "../services/context-manager.service";
 import { stripMediaArtifactMetadata } from "../services/media-artifact-context.service";
+import { authService } from "../services/auth.service";
+import { eventBusService } from "../services/event-bus.service";
 import {
   feedbackKeyboard,
   feedbackReasonKeyboard,
@@ -56,6 +58,8 @@ import { executionPersistence } from "../execution/persistence/execution-persist
 import { agentPlannerService } from "../planner/agent-planner.service";
 import { SemanticInteractionResolverService } from "../services/semantic-interaction-resolver.service";
 import { requestRegistryService } from "../services/request-registry.service";
+import { validateCandidateName, escapeHtml, userIdentityResolverService } from "../services/user-identity-resolver.service";
+import { CURRENT_ONBOARDING_VERSION } from "../services/onboarding.service";
 import {
   CHAT_TEXT,
   HELP_TEXT,
@@ -243,7 +247,73 @@ export function createTelegramBot(): TelegramBotRuntime {
 
   bot.command("start", async (ctx) => {
     if (!(await requireAuthorized(ctx))) return;
+    const startParam = ctx.match?.trim();
+
+    // Check for 1-click web pairing token: /start link_XXXXXX
+    if (startParam && startParam.startsWith("link_") && ctx.from) {
+      await upsertUser(ctx);
+      const pairingResult = await authService.completeTelegramPairing(startParam, ctx.from.id, ctx.from.username);
+      if (pairingResult.success) {
+        const appUrl = process.env.APP_URL || process.env.PUBLIC_URL || "/app";
+        const keyboard = new InlineKeyboard()
+          .url("🚀 Open Web Workspace", appUrl.startsWith("http") ? appUrl : `https://${ctx.me.username || "web"}`)
+          .row()
+          .text("⚙️ Sync Settings", "menu:sync_settings");
+
+        await ctx.reply(
+          `🔗 <b>Telegram & Web Workspace Connected!</b>\n\n` +
+          `Your Telegram account is now synchronized with your Web Dashboard. All chats, autonomous tasks, and long-term memory items will sync seamlessly in real time.\n\n` +
+          `• <b>Telegram User ID:</b> <code>${ctx.from.id}</code>\n` +
+          `• <b>Real-time Pub/Sub:</b> 🟢 Active\n\n` +
+          `<i>You can open your Web Dashboard anytime to view rich execution graphs, task outputs, and memory items.</i>`,
+          { parse_mode: "HTML", reply_markup: keyboard }
+        );
+        return;
+      } else {
+        await ctx.reply(`⚠️ ${pairingResult.message}\n\nPlease generate a fresh connection link from your Web Dashboard.`);
+        return;
+      }
+    }
+
     await startOnboarding(ctx, { authorized, upsertUser, conversations, modeService });
+  });
+
+  bot.command(["web", "login", "workspace", "dashboard"], async (ctx) => {
+    if (!(await requireAuthorized(ctx))) return;
+    if (!ctx.from) return;
+    await upsertUser(ctx);
+
+    const magic = await authService.generateMagicLoginToken(ctx.from.id, ctx.from.username);
+    const keyboard = new InlineKeyboard()
+      .url("🔐 Instant Web Workspace Login", magic.magicUrl)
+      .row()
+      .text("🔄 Generate New Token", "cmd:refresh_magic_token");
+
+    await ctx.reply(
+      `🌐 <b>Your Web Workspace Single-Sign-On Link</b>\n\n` +
+      `Click the button below to securely access your Web AI Workspace without entering a password. This secure link is valid for <b>5 minutes</b> and single-use.\n\n` +
+      `<i>Desktop workspace includes live token streaming, full-page execution graphs, scheduled task managers, and memory explorer.</i>`,
+      { parse_mode: "HTML", reply_markup: keyboard }
+    );
+  });
+
+  bot.callbackQuery(["cmd:open_workspace", "cmd:refresh_magic_token"], async (ctx) => {
+    if (!ctx.from) return;
+    await ctx.answerCallbackQuery();
+    const magic = await authService.generateMagicLoginToken(ctx.from.id, ctx.from.username);
+    const keyboard = new InlineKeyboard()
+      .url("🚀 Launch Web Workspace", magic.magicUrl)
+      .row()
+      .text("◀️ Main Menu", "menu:main");
+
+    await ctx.reply(
+      `🌐 <b>Web AI Workspace Single Sign-On</b>\n\n` +
+      `Tap below to open your desktop workspace. It is valid for <b>5 minutes</b> and connects to all your active tasks, memories, and chat threads.\n\n` +
+      `• <b>Live Multi-Step Visualizer:</b> 🟢 Active\n` +
+      `• <b>Memory Vault Explorer:</b> 🟢 Active\n` +
+      `• <b>Scheduled Research Automations:</b> 🟢 Active`,
+      { parse_mode: "HTML", reply_markup: keyboard }
+    );
   });
 
   bot.command("help", async (ctx) => {
@@ -1472,6 +1542,29 @@ export function createTelegramBot(): TelegramBotRuntime {
         } catch (err) { logger.warn({ error: safeErrorMetadata(err) }, "Failed executing natural language mode switch"); }
       }
 
+      // 1. Onboarding 'name' step check
+      const onboardingState = await onboardingService.get(ctx.from.id);
+      if (onboardingState && onboardingState.status === "in_progress" && onboardingState.step === "name") {
+        const candidate = validateCandidateName(currentPrompt);
+        if (candidate) {
+          await userIdentityResolverService.updatePreferredName(ctx.from.id, candidate, "user", false);
+          stopTyping();
+          await ctx.reply(`Nice to meet you, <b>${escapeHtml(candidate)}</b>! 👍`, { parse_mode: "HTML" });
+          await onboardingService.save(ctx.from.id, ctx.chat.id, { step: "personality", version: CURRENT_ONBOARDING_VERSION });
+          return;
+        }
+      }
+
+      // 2. In-chat name update check ("call me Femi", "my name is Lekan")
+      const nameCheck = await userIdentityResolverService.checkAndHandleInChatNameUpdate(ctx.from.id, currentPrompt, false);
+      if (nameCheck.handled && nameCheck.replyText) {
+        stopTyping();
+        await ctx.reply(nameCheck.replyText, { parse_mode: "HTML" });
+        await conversations.addMessage(globalContextData.conversationId, "user", currentPrompt);
+        await conversations.addMessage(globalContextData.conversationId, "model", nameCheck.replyText);
+        return;
+      }
+
       const semanticDecision = await SemanticInteractionResolverService.resolve({
         text: currentPrompt,
         persistentMode: globalContextData.userProfile.mode,
@@ -1703,6 +1796,15 @@ export function createTelegramBot(): TelegramBotRuntime {
         semanticConfidence: semanticDecision.confidence,
       }, "TELEGRAM_REQUEST_RESOLVED");
 
+      // Phase 2 of Lifecycle: Update reaction based on intent classification
+      if (adaptivePlan.detectedIntent === "task_creation" || Boolean(activeTaskContext)) {
+        stopTyping.updateReaction("tasks");
+      } else if (adaptivePlan.detectedIntent === "web_search" || adaptivePlan.enableSearch || adaptivePlan.thinkingLevel === "deep") {
+        stopTyping.updateReaction("ideas_or_analysis");
+      } else if (adaptivePlan.detectedIntent === "gratitude") {
+        stopTyping.updateReaction("gratitude_or_salute");
+      }
+
       if (!media && adaptivePlan.detectedIntent === "video_generation" && adaptivePlan.videoPrompt) {
         const quotaCheck = await userTierService.checkToolQuota(ctx.from.id, "video");
         if (!quotaCheck.allowed) {
@@ -1815,6 +1917,7 @@ export function createTelegramBot(): TelegramBotRuntime {
       }
 
       if (!media && adaptivePlan.detectedIntent === "image_generation" && adaptivePlan.imagePrompt) {
+        const userTier = await userTierService.getUserTier(ctx.from.id);
         const quotaCheck = await userTierService.checkToolQuota(ctx.from.id, "image");
         if (!quotaCheck.allowed) {
           await ctx.reply(quotaCheck.message || "Image quota exceeded.");
@@ -1822,41 +1925,60 @@ export function createTelegramBot(): TelegramBotRuntime {
         }
         const stopImagePresence = startTypingIndicator(ctx, { state: "generating", toolName: "image_generation", operationLabel: "image generation", chatAction: "upload_photo", userFacingProgress: false });
         try {
-          const imageResult = await ImageGenerationService.generate(adaptivePlan.imagePrompt, gemini);
-          const imgProviderLabel = imageResult.provider === "huggingface" ? "🤗 Hugging Face" : imageResult.provider === "gemini" ? "✨ Google Imagen" : (imageResult.provider || "Adaptive Media Router");
-          const imgModelLabel = imageResult.model ? ` (${imageResult.model})` : "";
-          const imageBadge = `<i>Engine: ${escapeHtml(imgProviderLabel)}${escapeHtml(imgModelLabel)}</i>`;
-          const imgEnhancerTag = imageResult.enhancerName ? `<i>✨ Enhanced (${escapeHtml(imageResult.enhancerName)}):</i>` : `<i>✨ AI Enhanced:</i>`;
-          
+          const mediaResult = await UnifiedMediaEngine.execute({
+            modality: "image",
+            prompt: adaptivePlan.imagePrompt,
+            executionMode: "live",
+            userId: ctx.from.id,
+            userTier,
+            sourceInterface: "telegram",
+          });
+
+          if (!mediaResult.success || !mediaResult.artifact?.buffer) {
+            throw new Error(mediaResult.job.errorMessage || "Image generation did not produce a valid image buffer");
+          }
+
           const safeRaw = (adaptivePlan.imagePrompt || "").length > 180 ? adaptivePlan.imagePrompt.slice(0, 175) + "..." : adaptivePlan.imagePrompt;
-          const safeEnhanced = (imageResult.enhancedPrompt || "").length > 200 ? imageResult.enhancedPrompt.slice(0, 195) + "..." : (imageResult.enhancedPrompt || "");
+          const safeEnhanced = (mediaResult.job.enhancedPrompt || "").length > 200 ? mediaResult.job.enhancedPrompt.slice(0, 195) + "..." : (mediaResult.job.enhancedPrompt || "");
           const isEnhancedDiff = safeEnhanced.toLowerCase() !== safeRaw.toLowerCase() && safeEnhanced.length > 5;
 
+          const imageBadge = `<i>Engine: ${escapeHtml(mediaResult.job.actualProvider)} (${escapeHtml(mediaResult.job.actualModel)})</i>`;
+          const enhancerTag = `<i>✨ AI Enhanced:</i>`;
+          
           const htmlCaption = [
             `<b>🎨 Prompt:</b> ${escapeHtml(safeRaw)}`,
-            isEnhancedDiff ? `${imgEnhancerTag} ${escapeHtml(safeEnhanced)}` : null,
-            imageBadge
+            isEnhancedDiff ? `${enhancerTag} ${escapeHtml(safeEnhanced)}` : null,
+            imageBadge,
           ].filter(Boolean).join("\n\n");
           const plainCaption = [
             `🎨 Prompt: ${safeRaw}`,
             isEnhancedDiff ? `✨ AI Enhanced: ${safeEnhanced}` : null,
-            `Engine: ${imgProviderLabel}${imgModelLabel}`
+            `Engine: ${mediaResult.job.actualProvider} (${mediaResult.job.actualModel})`,
           ].filter(Boolean).join("\n\n");
 
           let photoDelivered = false;
-          if (Buffer.isBuffer(imageResult.buffer) && imageResult.buffer.length >= 500) {
+          if (Buffer.isBuffer(mediaResult.artifact.buffer) && mediaResult.artifact.buffer.length >= 500) {
             try {
-              await ctx.replyWithPhoto(new InputFile(imageResult.buffer, "image.jpg"), { caption: htmlCaption, parse_mode: "HTML", reply_markup: feedbackKeyboard() });
+              await ctx.replyWithPhoto(new InputFile(mediaResult.artifact.buffer, "image.png"), {
+                caption: htmlCaption,
+                parse_mode: "HTML",
+                reply_markup: feedbackKeyboard(),
+              });
               photoDelivered = true;
             } catch (htmlErr) {
               logger.warn({ stage: "image_caption_parse_error", error: safeErrorMetadata(htmlErr) }, "HTML photo caption failed; retrying with plain text");
               try {
-                await ctx.replyWithPhoto(new InputFile(imageResult.buffer, "image.jpg"), { caption: plainCaption, reply_markup: feedbackKeyboard() });
+                await ctx.replyWithPhoto(new InputFile(mediaResult.artifact.buffer, "image.png"), {
+                  caption: plainCaption,
+                  reply_markup: feedbackKeyboard(),
+                });
                 photoDelivered = true;
               } catch (plainErr) {
                 logger.warn({ stage: "image_plain_caption_failed", error: safeErrorMetadata(plainErr) }, "Plain text photo caption failed; retrying without caption");
                 try {
-                  await ctx.replyWithPhoto(new InputFile(imageResult.buffer, "image.jpg"), { reply_markup: feedbackKeyboard() });
+                  await ctx.replyWithPhoto(new InputFile(mediaResult.artifact.buffer, "image.png"), {
+                    reply_markup: feedbackKeyboard(),
+                  });
                   photoDelivered = true;
                 } catch (noCapErr) {
                   logger.warn({ stage: "image_buffer_upload_failed", error: safeErrorMetadata(noCapErr) }, "Direct image buffer upload failed");
@@ -1865,15 +1987,16 @@ export function createTelegramBot(): TelegramBotRuntime {
             }
           }
 
-          // Cloudinary / Public URL fallback
-          if (!photoDelivered && imageResult.url && (imageResult.url.startsWith("http://") || imageResult.url.startsWith("https://"))) {
+          // Cloudinary / Public URL delivery fallback
+          if (!photoDelivered && mediaResult.artifact?.publicUrl && (mediaResult.artifact.publicUrl.startsWith("http://") || mediaResult.artifact.publicUrl.startsWith("https://"))) {
+            const directUrl = mediaResult.artifact.publicUrl;
             try {
-              await ctx.replyWithPhoto(imageResult.url, { caption: plainCaption, reply_markup: feedbackKeyboard() });
+              await ctx.replyWithPhoto(directUrl, { caption: plainCaption, reply_markup: feedbackKeyboard() });
               photoDelivered = true;
             } catch (urlErr) {
               logger.warn({ stage: "image_url_photo_failed", error: safeErrorMetadata(urlErr) }, "Photo delivery via Cloudinary URL failed; sending direct link");
               try {
-                await ctx.reply(`🎨 <b>Here is your generated image:</b>\n<a href="${escapeHtml(imageResult.url)}">${escapeHtml(safeRaw)}</a>`, {
+                await ctx.reply(`🎨 <b>Here is your generated image:</b>\n<a href="${escapeHtml(directUrl)}">${escapeHtml(safeRaw)}</a>`, {
                   parse_mode: "HTML",
                   reply_markup: feedbackKeyboard(),
                 });
@@ -1886,9 +2009,9 @@ export function createTelegramBot(): TelegramBotRuntime {
 
           if (photoDelivered) {
             await runStage("user_message_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => conversations.addMessage(globalContextData.conversationId, "user", prompt));
-            await runStage("model_response_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => conversations.addMessage(globalContextData.conversationId, "model", `[Generated Image for: "${safeRaw}"]`));
+            await runStage("model_response_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => conversations.addMessage(globalContextData.conversationId, "model", `[Generated Image (${mediaResult.job.actualProvider}) for: "${safeRaw}"]`));
             await userTierService.consumeToolQuota(ctx.from.id, "image");
-            if (registeredRequest) requestRegistryService.markCompleted(registeredRequest.requestId, { provider: imageResult.provider, mediaType: "image" });
+            if (registeredRequest) requestRegistryService.markCompleted(registeredRequest.requestId, { provider: mediaResult.job.actualProvider, mediaType: "image" });
             return;
           } else {
             throw new Error("Failed to deliver generated image through any transport tier");
@@ -2059,10 +2182,27 @@ export function createTelegramBot(): TelegramBotRuntime {
       const cleanReply = stripMediaArtifactMetadata(reply);
       await runStage("user_message_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => conversations.addMessage(globalContextData.conversationId, "user", persistentUserMessage));
       await runStage("model_response_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => conversations.addMessage(globalContextData.conversationId, "model", cleanReply));
+      
+      // Emit real-time synchronization event to Web workspace
+      eventBusService.emitUserEvent({
+        type: "chat_message",
+        telegramUserId: ctx.from.id,
+        data: {
+          id: `tg-${ctx.from.id}-${Date.now()}`,
+          role: "model",
+          content: cleanReply,
+          mediaType: "text",
+          source: "telegram",
+          createdAt: new Date().toISOString(),
+        },
+      });
+
       if (activeTaskContext) await taskService.syncTaskProgressFromResponse(activeTaskContext.task.id, reply);
       if (await onboardingService.memoryEnabled(ctx.from.id)) void memoryService.processBackgroundExtraction(ctx.from.id, currentPrompt, globalContextData.conversationId);
       if (registeredRequest) requestRegistryService.markCompleted(registeredRequest.requestId);
+      stopTyping.complete();
     } catch (error) {
+      stopTyping.fail();
       if (ctx.message?.message_id && ctx.from?.id && ctx.chat?.id) {
         const request = requestRegistryService.getByTelegramMessage(ctx.from.id, ctx.chat.id, ctx.message.message_id);
         if (request) requestRegistryService.markFailed(request.requestId, { error: safeErrorMetadata(error) });
@@ -2087,6 +2227,22 @@ export function createTelegramBot(): TelegramBotRuntime {
       await rateLimiter.initializeDb();
       if (!bot.isInited()) { try { await bot.init(); } catch (err) { logger.warn({ error: safeErrorMetadata(err) }, "Failed to initialize bot during start()"); } }
       reminderScheduler.start(bot);
+      
+      // Register official Telegram command list dynamically derived from handlers
+      try {
+        await bot.api.setMyCommands([
+          { command: "workspace", description: "🌐 Open Desktop Web Workspace" },
+          { command: "tasks", description: "⚡ View Scheduled Autonomous Tasks" },
+          { command: "memories", description: "🧠 View & Manage Memory Vault" },
+          { command: "reminders", description: "⏰ View Active Reminders" },
+          { command: "setup", description: "⚙️ Personalize Personality & Mode" },
+          { command: "help", description: "❓ View Capabilities & Guides" },
+          { command: "clear", description: "🧹 Clear Current Chat Context" },
+        ]);
+      } catch (cmdErr) {
+        logger.warn({ error: safeErrorMetadata(cmdErr) }, "Failed setting Telegram bot commands dynamically");
+      }
+
       if (config.usePolling) {
         await bot.api.deleteWebhook({ drop_pending_updates: false }).catch(() => {});
         const startPollingWithRetry = async (retries = 2) => {

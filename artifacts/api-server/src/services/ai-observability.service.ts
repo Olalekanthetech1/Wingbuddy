@@ -174,10 +174,19 @@ export class AIObservabilityService {
   }
 
   reset(provider?: AIProviderId, modelId?: string): void {
-    if (provider && modelId) this.metrics.delete(this.key(provider, modelId));
-    else if (provider) for (const key of this.metrics.keys()) if (key.startsWith(`${provider}:`)) this.metrics.delete(key);
-    else if (modelId) for (const key of this.metrics.keys()) if (key.endsWith(`:${modelId}`)) this.metrics.delete(key);
-    else this.metrics.clear();
+    if (provider && modelId) {
+      this.metrics.delete(this.key(provider, modelId));
+    } else if (provider) {
+      for (const key of Array.from(this.metrics.keys())) {
+        if (key.startsWith(`${provider}:`)) this.metrics.delete(key);
+      }
+    } else if (modelId) {
+      for (const key of Array.from(this.metrics.keys())) {
+        if (key.endsWith(`:${modelId}`)) this.metrics.delete(key);
+      }
+    } else {
+      this.metrics.clear();
+    }
     this.revision += 1;
     this.markDirty();
   }

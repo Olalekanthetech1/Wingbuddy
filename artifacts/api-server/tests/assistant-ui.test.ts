@@ -15,10 +15,12 @@ describe("assistant UI foundation", () => {
 
     expect(labels).toEqual([
       "💬 Chat",
+      "🎭 Personas",
       "🧠 Memory",
       "🎯 Modes",
       "🎙️ Voice",
       "⏰ Reminders",
+      "🌐 Web Workspace",
       "⚙️ Settings",
       "❓ Help",
     ]);

@@ -279,9 +279,25 @@ export class SemanticInteractionResolverService {
       durabilityEvidence: [],
     };
 
-    // FAST PATTERN RECOGNITION (0ms latency, eliminates background LLM classification round)
     const trimmed = params.text.trim();
     const lower = trimmed.toLowerCase();
+
+    if (params.gemini) {
+      try {
+        const rawResponse = await params.gemini.generateReply([
+          { role: "system", content: jsonOnlyPrompt(params.text, params.persistentMode, history) },
+          { role: "user", content: params.text },
+        ]);
+        const jsonStr = rawResponse.replace(/```json\n?|\n?```/g, "").trim();
+        const parsed = JSON.parse(jsonStr);
+        const decision = sanitizeDecision(parsed, params.persistentMode);
+        semanticInteractionCache.set(params.text, params.persistentMode, history, decision);
+        logger.info({ intent: decision.intent, text: trimmed, enableSearch: decision.enableSearch }, "PROMPT_INTENT_RESOLVED_LLM");
+        return decision;
+      } catch (err) {
+        logger.debug({ error: safeErrorMetadata(err) }, "Gemini semantic resolution failed, using fast decision fallback");
+      }
+    }
 
     // 1. Greetings & Pleasantries
     const isGreeting = /^(hi|hello|hey|good\s*(morning|afternoon|evening|day)|yo|howdy|sup|greetings)(\s+there|\s+bot|\s+olalekan|\s+ai)?[\s!.]*$/i.test(lower);
@@ -389,15 +405,41 @@ export class SemanticInteractionResolverService {
       /\b(who\s*won|latest|today|this\s*week|current\s*events)\b/i.test(lower);
 
     // 5. Direct Media Intent
-    const isVideo = /\b(generate|create|make)\s+(?:a\s+)?video\b/i.test(lower) || /\bvideo\s+of\b/i.test(lower);
-    const isImage = /\b(generate|create|make|draw|paint)\s+(?:a\s+|an\s+)?(?:image|photo|picture|drawing|illustration)\b/i.test(lower) || /\bpicture\s+of\b/i.test(lower);
+    const mediaPrefix = "(?:(?:can|could|would)\\s+you\\s+(?:please\\s+)?)?(?:please\\s+)?";
+    const isVideo =
+      new RegExp(`\\b${mediaPrefix}(?:generate|create|make|render|produce)\\s+(?:a\\s+)?video\\b`, "i").test(lower) ||
+      /\bvideo\s+of\b/i.test(lower) ||
+      /^animate\b/i.test(lower);
+
+    const isImage =
+      new RegExp(`^${mediaPrefix}(?:generate|create|make|draw|paint|render|imagine|produce)\\s+(?:🎨\\s*)?(?:(?:me|this|a|an)\\s+(?:type\\s+of\\s+)?)?(?:image|photo|picture|drawing|illustration|render|portrait|wallpaper|artwork|art|graphic|visual|sketch|anime|cgi|infographic)\\b`, "i").test(lower) ||
+      new RegExp(`\\b${mediaPrefix}(?:generate|create|make|draw|paint|render)\\s+(?:a\\s+|an\\s+)?(?:infographic|artwork|digital\\s+art|illustration|portrait|wallpaper)\\b`, "i").test(lower) ||
+      /^(?:generate|render|draw|paint|imagine)\s+🎨/i.test(lower) ||
+      /\b(?:picture|photo|image|portrait|illustration|painting|drawing|wallpaper|infographic)\s+of\b/i.test(lower) ||
+      /^(?:draw|paint|render|imagine)\s+(?:me\s+)?/i.test(lower) ||
+      /(?:--ar\s+\d+:\d+|--style\s+raw|--v\s+\d+)/i.test(lower) ||
+      (/^(?:generate|create|draw|paint)\s+/i.test(lower) && /\b(?:photorealistic|cinematic\s+lighting|depth\s+of\s+field|8k|4k\s+render|bokeh|hyperrealistic|unreal\s+engine|wide\s+shot|close-up|volumetric\s+lighting|masterpiece|digital\s+art|infographic)\b/i.test(lower));
 
     const intent = isVideo ? "video_generation" : isImage ? "image_generation" : "general";
-    const executionProfile: RequestExecutionProfile = "conversational";
+    const executionProfile: RequestExecutionProfile = isVideo || isImage ? "one_shot" : "conversational";
+
+    let cleanedPrompt: string | undefined = undefined;
+    if (isImage) {
+      cleanedPrompt = trimmed
+        .replace(/^(?:(?:can|could|would)\s+you\s+(?:please\s+)?)?(?:please\s+)?(?:generate|create|make|draw|paint|render|imagine|produce)\s+(?:🎨\s*)?(?:(?:me\s+|this\s+)?(?:type\s+of\s+)?(?:a\s+|an\s+)?(?:image|photo|picture|drawing|illustration|render|portrait|wallpaper|artwork|art|graphic|visual|sketch|anime|cgi|infographic)\s+(?:of\s+)?)?/i, "")
+        .trim();
+      if (!cleanedPrompt) cleanedPrompt = trimmed;
+    } else if (isVideo) {
+      cleanedPrompt = trimmed
+        .replace(/^(?:(?:can|could|would)\s+you\s+(?:please\s+)?)?(?:please\s+)?(?:generate|create|make|render|animate|produce)\s+(?:(?:me\s+)?(?:a\s+|an\s+)?video\s+(?:of\s+)?)?/i, "")
+        .trim();
+      if (!cleanedPrompt) cleanedPrompt = trimmed;
+    }
 
     const fastDecision: SemanticInteractionDecision = {
       ...fallback,
       intent,
+      cleanedPrompt,
       executionProfile,
       enableSearch: needsSearch,
       confidence: 0.95,

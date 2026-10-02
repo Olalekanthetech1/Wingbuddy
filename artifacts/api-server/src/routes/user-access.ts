@@ -81,6 +81,42 @@ router.patch("/access/users/:telegramUserId", async (req: Request, res: Response
   }
 });
 
+// 4b. Explicit manual tier upgrade/downgrade endpoint
+router.post("/access/manual-tier", async (req: Request, res: Response) => {
+  try {
+    const { telegramUserId: rawId, targetTier, notes } = req.body || {};
+    const telegramUserId = Number(rawId);
+    if (!telegramUserId || isNaN(telegramUserId)) {
+      res.status(400).json({ error: "Invalid Telegram user ID" });
+      return;
+    }
+
+    if (!targetTier || !["free", "pro", "vip"].includes(targetTier)) {
+      res.status(400).json({ error: "Invalid target subscription plan" });
+      return;
+    }
+
+    const updatedUser = await userTierService.updateUserAccess(telegramUserId, {
+      tier: targetTier as UserTier,
+    });
+
+    if (!updatedUser) {
+      res.status(404).json({ error: "User not found or failed to create tier profile" });
+      return;
+    }
+
+    res.json({
+      success: true,
+      message: `Successfully updated user ${telegramUserId} to ${targetTier.toUpperCase()} tier`,
+      user: updatedUser,
+      notes: notes || undefined,
+    });
+  } catch (err: any) {
+    logger.error({ error: err.message }, "Failed to execute manual tier change");
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 5. Reset user daily quota
 router.post("/access/users/:telegramUserId/reset-quota", async (req: Request, res: Response) => {
   try {

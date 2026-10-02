@@ -48,26 +48,65 @@ export class StreamingResponder {
   async init(): Promise<number | undefined> {
     try {
       this.streamStartTime = Date.now();
-      const sent = await this.ctx.reply(this.placeholderText, {
-        parse_mode: "HTML",
-      });
-      this.messageId = sent.message_id;
+      if (this.placeholderText) {
+        try {
+          const sent = await this.ctx.reply(this.placeholderText, { parse_mode: "HTML" });
+          if (sent && typeof sent === "object" && "message_id" in sent) {
+            this.messageId = sent.message_id;
+            this.lastEditTime = Date.now();
+            return this.messageId;
+          }
+        } catch {
+          // Fallback to typing action
+        }
+      }
+      if (typeof this.ctx.replyWithChatAction === "function") {
+        await this.ctx.replyWithChatAction("typing").catch(() => {});
+      } else if (this.ctx.api?.sendChatAction && this.ctx.chat?.id) {
+        await this.ctx.api.sendChatAction(this.ctx.chat.id, "typing").catch(() => {});
+      }
       this.lastEditTime = Date.now();
       return this.messageId;
     } catch (err) {
       logger.warn(
         { error: safeErrorMetadata(err) },
-        "Could not send initial streaming message; will send single message on finish",
+        "Could not set initial typing action for streaming responder",
       );
       return undefined;
     }
   }
 
   async onChunk(accumulatedText: string): Promise<void> {
-    if (this.isFinalized || !this.messageId) return;
+    if (this.isFinalized) return;
 
     this.latestText = accumulatedText;
     const now = Date.now();
+
+    // If initial message bubble hasn't been sent yet and we have accumulated enough text
+    if (!this.messageId && accumulatedText.trim().length >= 15) {
+      const formatted = formatTelegramMessage(`${accumulatedText.slice(0, 3800)} ▍`, {
+        telegramUserId: this.ctx.from?.id,
+        source: "StreamingResponder.onChunk",
+        isStreaming: true,
+      });
+      try {
+        const sent = await this.ctx.reply(formatted, { parse_mode: "HTML" });
+        this.messageId = sent.message_id;
+        this.lastEditTime = now;
+      } catch {
+        try {
+          const sent = await this.ctx.reply(stripTelegramHtml(formatted));
+          this.messageId = sent.message_id;
+          this.lastEditTime = now;
+        } catch (e) {
+          logger.debug({ error: safeErrorMetadata(e) }, "Failed sending initial streaming chunk message");
+        }
+      }
+      return;
+    }
+
+    if (!this.messageId) return;
+
     const elapsedSinceStart = Math.max(1, (now - (this.streamStartTime || now)) / 1000);
     const velocityCharsPerSec = Math.round(accumulatedText.length / elapsedSinceStart);
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { ExecutionEngine } from "../src/execution/execution-engine";
 import { executionPersistence } from "../src/execution/persistence/execution-persistence.service";
 import { planPersistenceService } from "../src/planner/plan-persistence.service";
@@ -8,6 +8,7 @@ import { executionObservability } from "../src/execution/observability/execution
 import { AgentPlannerService } from "../src/planner/agent-planner.service";
 import { ASSISTANT_ARCHITECTURE_FACTS, AI_SYSTEM_INSTRUCTION } from "../src/config/env";
 import { contextManagerService } from "../src/services/context-manager.service";
+import { adaptiveAIRouterService } from "../src/services/adaptive-ai-router.service";
 
 describe("Autonomous Execution Smoke-Test Regression", () => {
   let toolRegistry: ToolRegistry;
@@ -23,6 +24,76 @@ describe("Autonomous Execution Smoke-Test Regression", () => {
     planPersistenceService.clearForTesting();
     concurrencyController.reset();
     executionObservability.resetMetrics();
+
+    vi.spyOn(adaptiveAIRouterService, "route").mockImplementation(async (request) => {
+      const prompt = request.messages?.[0]?.content || "";
+      let text = "{}";
+      
+      if (request.systemInstruction?.includes("decision evaluator")) {
+        // Autonomy decision evaluation mock
+        text = JSON.stringify({
+          route: "autonomous",
+          confidence: 0.98,
+          executionReasons: ["Multi-step logical execution needed."],
+          rationale: "Requires sequential reasoning steps and final consolidation."
+        });
+      } else if (prompt.includes("CandidatePlan shape")) {
+        // Dynamic planning compilation mock
+        text = JSON.stringify({
+          goal: "Step 1: Inspect the Wingbuddy AI assistant system architecture. Step 2: Compare against conventional single-turn bot platforms. Step 3: Analyze distributed leasing and DAG compilation benefits. Step 4: Aggregate all findings into a complete architectural assessment.",
+          strategy: "Sequential execution and aggregation",
+          nodes: [
+            {
+              id: "step_1",
+              title: "First Step Reasoning",
+              type: "llm_reasoning",
+              reasoningSpec: { prompt: "Synthesize preliminary context" }
+            },
+            {
+              id: "step_2",
+              title: "Second Step Reasoning",
+              type: "llm_reasoning",
+              reasoningSpec: { prompt: "Conclude based on prior steps" },
+              inputBindings: {
+                priorConclusion: {
+                  source: { type: "node_output", nodeId: "step_1", path: "conclusion" }
+                }
+              }
+            },
+            {
+              id: "aggregator",
+              title: "Consolidate Analysis",
+              type: "subgoal_aggregate",
+              verification: { required: false, strategy: "none" }
+            }
+          ],
+          edges: [
+            { fromNodeId: "step_1", toNodeId: "step_2", dependencyType: "hard" },
+            { fromNodeId: "step_2", toNodeId: "aggregator", dependencyType: "hard" }
+          ]
+        });
+      } else {
+        // Standard execution reasoning mock
+        if (prompt.includes("First Step Reasoning") || prompt.includes("Synthesize preliminary context")) {
+          text = "Reasoning completed for: First Step Reasoning";
+        } else if (prompt.includes("Second Step Reasoning") || prompt.includes("Conclude based on prior steps")) {
+          text = "Reasoning completed for: Second Step Reasoning";
+        } else if (prompt.includes("Consolidate Analysis")) {
+          text = "Aggregated results for Consolidate Analysis";
+        }
+      }
+
+      return {
+        response: { text },
+        candidate: {
+          model: { id: "mock-model", modelId: "mock-model-id", provider: "mock-provider" } as any,
+          score: 1,
+          reasons: [],
+          healthScore: 100,
+          latencyMs: 10
+        }
+      };
+    });
   });
 
   it("should preserve accurate Wingbuddy / Lekzy Fx Pro architecture identity in context and reject travel-platform hallucinations", async () => {

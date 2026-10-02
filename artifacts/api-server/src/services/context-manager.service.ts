@@ -181,6 +181,8 @@ export class ContextManagerService {
       }
     }
     fullSystemPrompt +=
+      "\n\n[STRICT ZERO-FALLBACK POLICY]\nNever use mock data, hardcoded placeholder values, static fallbacks, or simulated responses. All outputs and features must rely exclusively on live, dynamic, adaptive data, verified system capabilities, real search results, and accurate reasoning. Never fabricate or assume results.";
+    fullSystemPrompt +=
       "\n\n[MEMORY SILENCE POLICY]\nTreat long-term memory as silent background context. Never say that you remember something, never list stored memories, never reveal memory keys or retrieval details, and never attribute an answer to a stored memory unless the user explicitly asks about memory itself.";
 
     if (calculateLength(rawHistory, fullSystemPrompt.length) > maxBudget && rawHistory.length > 2) {

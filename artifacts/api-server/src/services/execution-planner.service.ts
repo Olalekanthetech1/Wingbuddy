@@ -43,7 +43,7 @@ export class ExecutionPlannerService {
     persistentMode: ModeKey,
     history: Array<{ role: string; content: string }> = [],
   ): ExecutionPlan {
-    const semantic = semanticInteractionCache.get(text, persistentMode, history) || this.failSafeDecision(persistentMode);
+    const semantic = semanticInteractionCache.get(text, persistentMode, history) || this.failSafeDecision(persistentMode, text);
     const lowerText = text.toLowerCase();
 
     // Check for explicit temporary turn override
@@ -66,7 +66,7 @@ export class ExecutionPlannerService {
         // Classify task-appropriate mode for auto
         if (lowerText.includes("typescript") || lowerText.includes("code") || lowerText.includes("debug") || lowerText.includes("function") || lowerText.includes("async")) {
           effectiveMode = "coder";
-        } else if (lowerText.includes("equation") || lowerText.includes("solve") || lowerText.includes("calculate") || lowerText.includes("math") || /\d+\s*[\+\-\*\/]/.test(lowerText)) {
+        } else if (lowerText.includes("equation") || lowerText.includes("solve") || lowerText.includes("calculate") || lowerText.includes("math") || lowerText.search(/\d+\s*[\+\-\*\/]/) !== -1) {
           effectiveMode = "math";
         } else if (lowerText.includes("latest") || lowerText.includes("news") || lowerText.includes("score") || lowerText.includes("research") || lowerText.includes("current")) {
           effectiveMode = "deep_research";
@@ -94,7 +94,7 @@ export class ExecutionPlannerService {
 
     let enableSearch = semantic.enableSearch && profile.capabilities.toolPermissions.searchAllowed;
     if (effectiveMode === "deep_research") {
-      const isCasualGreeting = /^(?:hello|hi|hey|greetings|good\s+(?:morning|evening|afternoon))(?:\s+there)?[!.]*$/i.test(text.trim());
+      const isCasualGreeting = text.trim().search(/^(?:hello|hi|hey|greetings|good\s+(?:morning|evening|afternoon))(?:\s+there)?[!.]*$/i) !== -1;
       if (isCasualGreeting) {
         enableSearch = false;
       } else {
@@ -161,13 +161,40 @@ export class ExecutionPlannerService {
     return plan;
   }
 
-  private failSafeDecision(mode: ModeKey): SemanticInteractionDecision {
+  private failSafeDecision(mode: ModeKey, text?: string): SemanticInteractionDecision {
     const resolvedMode = mode === "auto" ? "general" : mode;
+    const lower = (text || "").toLowerCase().trim();
+
+    const isVideo =
+      lower.search(/\b(?:(?:can|could|would)\s+you\s+(?:please\s+)?)?(?:please\s+)?(?:generate|create|make|render|produce)\s+(?:a\s+)?video\b/i) !== -1 ||
+      lower.search(/\bvideo\s+of\b/i) !== -1 ||
+      lower.search(/^animate\b/i) !== -1;
+
+    const isImage =
+      lower.search(/^(?:(?:can|could|would)\s+you\s+(?:please\s+)?)?(?:please\s+)?(?:generate|create|make|draw|paint|render|imagine|produce)\s+(?:🎨\s*)?(?:(?:me|this|a|an)\s+(?:type\s+of\s+)?)?(?:image|photo|picture|drawing|illustration|render|portrait|wallpaper|artwork|art|graphic|visual|sketch|anime|cgi|infographic)\b/i) !== -1 ||
+      lower.search(/\b(?:(?:can|could|would)\s+you\s+(?:please\s+)?)?(?:please\s+)?(?:generate|create|make|draw|paint|render)\s+(?:a\s+|an\s+)?(?:infographic|artwork|digital\s+art|illustration|portrait|wallpaper)\b/i) !== -1 ||
+      lower.search(/^(?:generate|render|draw|paint|imagine)\s+🎨/i) !== -1 ||
+      lower.search(/\b(?:picture|photo|image|portrait|illustration|painting|drawing|wallpaper|infographic)\s+of\b/i) !== -1 ||
+      lower.search(/^(?:draw|paint|render|imagine)\s+(?:me\s+)?/i) !== -1 ||
+      lower.search(/(?:--ar\s+\d+:\d+|--style\s+raw|--v\s+\d+)/i) !== -1 ||
+      (lower.search(/^(?:generate|create|draw|paint)\s+/i) !== -1 && lower.search(/\b(?:photorealistic|cinematic\s+lighting|depth\s+of\s+field|8k|4k\s+render|bokeh|hyperrealistic|unreal\s+engine|wide\s+shot|close-up|volumetric\s+lighting|masterpiece|digital\s+art|infographic)\b/i) !== -1);
+
+    const intent = isVideo ? "video_generation" : isImage ? "image_generation" : "general";
+    let cleanedPrompt: string | undefined = undefined;
+    if (isImage && text) {
+      cleanedPrompt = text.trim().replace(/^(?:(?:can|could|would)\s+you\s+(?:please\s+)?)?(?:please\s+)?(?:generate|create|make|draw|paint|render|imagine|produce)\s+(?:🎨\s*)?(?:(?:me\s+|this\s+)?(?:type\s+of\s+)?(?:a\s+|an\s+)?(?:image|photo|picture|drawing|illustration|render|portrait|wallpaper|artwork|art|graphic|visual|sketch|anime|cgi|infographic)\s+(?:of\s+)?)?/i, "").trim();
+      if (!cleanedPrompt) cleanedPrompt = text.trim();
+    } else if (isVideo && text) {
+      cleanedPrompt = text.trim().replace(/^(?:(?:can|could|would)\s+you\s+(?:please\s+)?)?(?:please\s+)?(?:generate|create|make|render|animate|produce)\s+(?:(?:me\s+)?(?:a\s+|an\s+)?video\s+(?:of\s+)?)?/i, "").trim();
+      if (!cleanedPrompt) cleanedPrompt = text.trim();
+    }
+
     return {
-      intent: "general",
+      intent,
+      cleanedPrompt,
       promptTypes: ["DIRECT_COMMAND"],
       primaryPromptType: "DIRECT_COMMAND",
-      executionProfile: "unknown",
+      executionProfile: isVideo || isImage ? "one_shot" : "unknown",
       effectiveMode: resolvedMode,
       requiredCapabilities: [],
       enableSearch: false,
@@ -175,7 +202,7 @@ export class ExecutionPlannerService {
       isModeSwitch: false,
       isGreeting: false,
       complexity: "simple",
-      confidence: 0,
+      confidence: isImage || isVideo ? 0.95 : 0,
       taskIntent: "NO_TASK",
       conversationOperation: "new_request",
     };

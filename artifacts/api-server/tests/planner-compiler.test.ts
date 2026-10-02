@@ -419,16 +419,14 @@ describe("Planner Compiler & Deterministic Agent Planner (Tests 1–18)", () => 
       ],
     };
 
-    const result = await planner.plan(
-      {
-        requestId: "req_destruct_007",
-        telegramUserId: 1001,
-        goal: candidate.goal,
-        context: { capabilities: ["admin_session"] },
-        toolRegistry: registry,
-      },
-      candidate,
-    );
+    const result = PlannerCompiler.compile(candidate, {
+      requestId: "req_destruct_007",
+      telegramUserId: 1001,
+      graphId: "graph_007",
+      planRevision: 1,
+      toolRegistry: registry,
+      userCapabilities: ["admin_session"],
+    });
 
     expect(result.success).toBe(false);
     expect(result.errorCode).toBe("APPROVAL_REQUIRED");

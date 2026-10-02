@@ -19,7 +19,9 @@ export function mainMenuKeyboard(): InlineKeyboard {
     .text("🎙️ Voice", "menu:voice")
     .text("⏰ Reminders", "menu:reminders")
     .row()
+    .text("🌐 Web Workspace", "cmd:open_workspace")
     .text("⚙️ Settings", "menu:settings")
+    .row()
     .text("❓ Help", "menu:help");
 }
 
@@ -81,6 +83,7 @@ export function settingsKeyboard(): InlineKeyboard {
     .text("🎨 Personality", "settings:personality")
     .text("🎯 Mode", "settings:mode")
     .row()
+    .text("🌐 Web Workspace", "cmd:open_workspace")
     .text("◀️ Back", "menu:main");
 }
 
