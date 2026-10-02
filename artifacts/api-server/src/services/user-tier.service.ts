@@ -591,6 +591,13 @@ export class UserTierService {
     return { allowed: true, remaining: isUnlimited ? 999999 : Math.max(0, quota - used) };
   }
 
+  async recordToolUsage(userId: number | string, tool: 'image' | 'video' | 'research' | 'deep_reasoning'): Promise<void> {
+    const numericId = typeof userId === 'number' ? userId : Number(userId);
+    if (!Number.isNaN(numericId) && numericId > 0) {
+      return this.consumeToolQuota(numericId, tool);
+    }
+  }
+
   async consumeToolQuota(telegramUserId: number, tool: 'image' | 'video' | 'research' | 'deep_reasoning'): Promise<void> {
     const today = getUtcTodayDate();
     let column: any = null;

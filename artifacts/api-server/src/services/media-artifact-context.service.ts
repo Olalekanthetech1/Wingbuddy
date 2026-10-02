@@ -92,6 +92,30 @@ export function stripMediaArtifactMetadata(text: string): string {
   let cleaned = text.replace(/\[MEDIA_ARTIFACT\][\s\S]*?(?=(\n\n|$))/gi, "").trim();
   cleaned = cleaned.replace(/\[MEDIA_ARTIFACT\][\s\S]*/gi, "").trim();
   
+  // Intercept and format raw ReAct/tool JSON strings (e.g., {"action": "dalle.generate", ...})
+  if (cleaned.startsWith("{") && cleaned.endsWith("}") && (cleaned.includes('"action"') || cleaned.includes('"actionInput"'))) {
+    try {
+      const parsed = JSON.parse(cleaned);
+      if (parsed.actionInput) {
+        let promptText = "";
+        if (typeof parsed.actionInput === "string") {
+          try {
+            const inner = JSON.parse(parsed.actionInput);
+            promptText = inner.prompt || parsed.actionInput;
+          } catch {
+            promptText = parsed.actionInput;
+          }
+        } else if (typeof parsed.actionInput === "object") {
+          promptText = parsed.actionInput.prompt || JSON.stringify(parsed.actionInput);
+        }
+        return parsed.thought || `I've prepared the prompt: "${promptText}". Generating your visual now!`;
+      }
+      if (parsed.thought) return parsed.thought;
+    } catch {
+      // Ignore JSON parse error and keep original text if not valid JSON
+    }
+  }
+
   const generatedMatch = cleaned.match(/^\[Generated (?:Image|Video|Visual)[^\]]*for:\s*["']([\s\S]*?)["']\](?:\s*Enhanced:\s*["']([\s\S]*?)["'])?/i);
   if (generatedMatch) {
     const original = generatedMatch[1];
