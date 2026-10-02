@@ -737,6 +737,7 @@ export class WebChatService {
     req: Request,
     options?: { mode?: string; modelOverride?: string; searchEnabled?: boolean; clientMsgId?: string; conversationId?: number }
   ): Promise<void> {
+    const t_start = Date.now();
     const partitionId = await this.ensurePartitionUser(user);
     const pool = getPool();
 
@@ -826,7 +827,7 @@ export class WebChatService {
       data: { ...userMessage, conversationTitle: updatedTitle },
     });
 
-    // Set headers for EventStream
+    // Set headers for EventStream with unbuffered transmission
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache, no-transform");
     res.setHeader("Connection", "keep-alive");
@@ -834,6 +835,16 @@ export class WebChatService {
     if (typeof (res as any).flushHeaders === "function") {
       (res as any).flushHeaders();
     }
+
+    // Periodic heartbeat to prevent proxy timeout on Render or intermediate gateways
+    const heartbeatTimer = setInterval(() => {
+      if (!res.writableEnded) {
+        res.write(": ping\n\n");
+        if (typeof (res as any).flush === "function") {
+          (res as any).flush();
+        }
+      }
+    }, 15000);
 
     const sendEvent = (event: string, data: any) => {
       if (!res.writableEnded) {
@@ -1066,10 +1077,17 @@ export class WebChatService {
       }
     });
 
+    const t_context_ready = Date.now();
+    let t_first_token: number | null = null;
+    let t_first_delta: number | null = null;
+
     let fullText = "";
     let releasedText = "";
     let lastDbUpdate = Date.now();
     let isLeaking = false;
+
+    // Small word-boundary hold-back buffer (~45 characters)
+    const HOLD_BACK_TARGET = 45;
 
     try {
       const stream = adaptiveAIRouterService.routeStream(
@@ -1094,6 +1112,9 @@ export class WebChatService {
         }
 
         if (chunk.delta) {
+          if (!t_first_token) {
+            t_first_token = Date.now();
+          }
           fullText += chunk.delta;
 
           // Run output guard check on accumulated text
@@ -1109,9 +1130,23 @@ export class WebChatService {
             break;
           }
 
-          // Emit delta immediately for real-time token-by-token client rendering
-          releasedText += chunk.delta;
-          sendEvent("delta", { delta: chunk.delta });
+          // Release safe text up to word boundary leaving ~HOLD_BACK_TARGET chars in window
+          if (fullText.length - releasedText.length > HOLD_BACK_TARGET) {
+            const candidateEnd = fullText.length - HOLD_BACK_TARGET;
+            const lastSpace = fullText.lastIndexOf(" ", candidateEnd);
+            const lastNewline = fullText.lastIndexOf("\n", candidateEnd);
+            const boundary = Math.max(lastSpace, lastNewline);
+            const releaseUpTo = boundary > releasedText.length ? boundary + 1 : candidateEnd;
+
+            if (releaseUpTo > releasedText.length) {
+              const delta = fullText.slice(releasedText.length, releaseUpTo);
+              releasedText += delta;
+              if (!t_first_delta) {
+                t_first_delta = Date.now();
+              }
+              sendEvent("delta", { delta });
+            }
+          }
         }
 
         // Throttled database update (once every 1 second)
@@ -1153,13 +1188,13 @@ export class WebChatService {
 
       if (isLeaking) {
         const sanitized = categorizeAndLogError(new Error("Secure policy violation: Prompt leak detected."));
-        const fallbackText = `\n\n⚠️ I am Wingbuddy, your dedicated assistant. I cannot share technical configuration details. (Reference ID: ${sanitized.referenceId})`;
-        releasedText += fallbackText;
-        sendEvent("delta", { delta: fallbackText });
+        const fallbackText = `⚠️ I am Wingbuddy, your dedicated assistant. I cannot share technical configuration details. (Reference ID: ${sanitized.referenceId})`;
+        releasedText = fallbackText;
+        sendEvent("leak_detected", { text: fallbackText, messageId: assistantMessageId });
 
         await pool.query(
           `UPDATE messages SET content = $1, metadata_json = $2 WHERE id = $3;`,
-          [releasedText, JSON.stringify({ status: "interrupted", reason: "policy_violation", referenceId: sanitized.referenceId }), assistantMessageId]
+          [fallbackText, JSON.stringify({ status: "interrupted", reason: "policy_violation", referenceId: sanitized.referenceId }), assistantMessageId]
         );
 
         eventBusService.emitUserEvent({
@@ -1170,25 +1205,41 @@ export class WebChatService {
             id: assistantMessageId,
             conversationId,
             role: "model",
-            content: releasedText,
+            content: fallbackText,
             mediaType: "text",
             source: "web",
             createdAt: asstRes.rows[0].created_at,
           },
         });
 
-        sendEvent("done", { text: releasedText, conversationId });
+        sendEvent("done", { text: fallbackText, conversationId });
         isFinished = true;
         res.end();
         return;
       }
 
-      // Stream completed successfully - release remaining text
+      // Stream completed successfully - flush all remaining held text immediately
       if (fullText.length > releasedText.length) {
         const remaining = fullText.slice(releasedText.length);
         releasedText += remaining;
+        if (!t_first_delta) {
+          t_first_delta = Date.now();
+        }
         sendEvent("delta", { delta: remaining });
       }
+
+      const t_done = Date.now();
+      logger.info({
+        conversationId,
+        metrics: {
+          totalDurationMs: t_done - t_start,
+          contextPrepMs: t_context_ready - t_start,
+          timeToFirstTokenMs: t_first_token ? t_first_token - t_start : null,
+          timeToFirstDeltaMs: t_first_delta ? t_first_delta - t_start : null,
+          streamDurationMs: t_first_token ? t_done - t_first_token : null,
+          totalChars: fullText.length,
+        }
+      }, "CHAT_STREAM_COMPLETION_METRICS");
 
       // Save complete message to database
       await pool.query(
@@ -1242,9 +1293,12 @@ export class WebChatService {
         [sanitized.userMessage, JSON.stringify({ status: "failed", error: sanitized.category, referenceId: sanitized.referenceId }), assistantMessageId]
       );
     } finally {
+      clearInterval(heartbeatTimer);
       WebChatService.activeStreams.delete(conversationId);
       isFinished = true;
-      res.end();
+      if (!res.writableEnded) {
+        res.end();
+      }
     }
   }
 }

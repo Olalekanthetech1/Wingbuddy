@@ -2322,6 +2322,8 @@ export function renderUserDashboardHtml(): string {
       const thread = document.getElementById('chat-thread');
       if (!thread) return;
 
+      const isNearBottom = (thread.scrollHeight - thread.scrollTop - thread.clientHeight) < 100;
+
       let bubble = thread.querySelector('[data-msg-id="' + msgId + '"]');
       if (bubble) {
         bubble.dataset.content = text;
@@ -2337,7 +2339,9 @@ export function renderUserDashboardHtml(): string {
           createdAt: new Date()
         }, true);
       }
-      thread.scrollTop = thread.scrollHeight;
+      if (isNearBottom) {
+        thread.scrollTop = thread.scrollHeight;
+      }
     }
 
     let isSubmittingChat = false;
@@ -2411,8 +2415,7 @@ export function renderUserDashboardHtml(): string {
         let buffer = '';
         let assistantBubbleId = null;
         let assistantText = '';
-
-        removeThinkingIndicator();
+        let hasRenderedFirstChunk = false;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -2441,21 +2444,30 @@ export function renderUserDashboardHtml(): string {
                     const activeTitleEl = document.getElementById('active-chat-title');
                     if (activeTitleEl) activeTitleEl.textContent = payload.conversationTitle;
                   }
-                  
-                  // Insert empty assistant message box with status streaming
-                  appendMessageToThread({
-                    id: assistantBubbleId,
-                    role: 'model',
-                    content: '',
-                    createdAt: new Date()
-                  }, true);
+                  // Keep thinking indicator active until first delta arrives
                 } else if (event === 'delta') {
+                  if (!hasRenderedFirstChunk) {
+                    hasRenderedFirstChunk = true;
+                    removeThinkingIndicator();
+                    appendMessageToThread({
+                      id: assistantBubbleId,
+                      role: 'model',
+                      content: payload.delta || '',
+                      createdAt: new Date()
+                    }, true);
+                  }
                   assistantText += payload.delta;
                   updateStreamingMessageContent(assistantBubbleId, assistantText);
                 } else if (event === 'done') {
+                  removeThinkingIndicator();
                   updateStreamingMessageContent(assistantBubbleId, payload.text);
                   loadConversations();
+                } else if (event === 'leak_detected') {
+                  removeThinkingIndicator();
+                  assistantText = payload.text;
+                  updateStreamingMessageContent(assistantBubbleId, assistantText);
                 } else if (event === 'error') {
+                  removeThinkingIndicator();
                   appendMessageToThread({
                     id: 'err-' + Date.now(),
                     role: 'model',
