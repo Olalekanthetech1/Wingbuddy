@@ -1603,7 +1603,17 @@ export function renderUserDashboardHtml(): string {
         const res = await fetch('/api/user/memories', {
           headers: { 'Authorization': 'Bearer ' + token }
         });
-        const data = await res.json();
+        
+        let data;
+        const contentType = res.headers.get('content-type') || '';
+        if (res.status === 429 || !contentType.includes('application/json')) {
+          const text = await res.text();
+          const errorMsg = text.includes('Rate exceeded') ? 'Rate limit exceeded. Please try again shortly.' : 'Unable to parse server response.';
+          throw new Error(errorMsg);
+        } else {
+          data = await res.json();
+        }
+
         const list = document.getElementById('memory-list');
         list.innerHTML = '';
 
@@ -1627,6 +1637,10 @@ export function renderUserDashboardHtml(): string {
         });
       } catch (err) {
         console.error('Failed loading memories:', err);
+        const list = document.getElementById('memory-list');
+        if (list) {
+          list.innerHTML = \`<div class="glass-panel col-span-2 rounded-2xl p-8 text-center text-red-400/90 text-xs">⚠️ Failed loading memories: \${escapeHtml(err.message || err)}</div>\`;
+        }
       }
     }
 
@@ -2071,7 +2085,16 @@ export function renderUserDashboardHtml(): string {
           headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
           body: JSON.stringify({ key, content, category })
         });
-        const data = await res.json();
+        
+        let data;
+        const contentType = res.headers.get('content-type') || '';
+        if (res.status === 429 || !contentType.includes('application/json')) {
+          const text = await res.text();
+          throw new Error(text.includes('Rate exceeded') ? 'Rate limit exceeded. Please wait a moment and try again.' : 'Failed saving memory: unexpected response');
+        } else {
+          data = await res.json();
+        }
+        
         if (!res.ok) throw new Error(data.error || 'Failed saving memory');
         closeCreateMemoryModal();
         document.getElementById('mem-input-key').value = '';
@@ -2330,7 +2353,7 @@ export function renderUserDashboardHtml(): string {
                 '<p>2. Scroll down and select <strong class="text-indigo-400">"Add to Home Screen" ➕</strong>.</p>' +
                 '<p>3. Tap <strong class="text-emerald-400">Add</strong> to launch Wingbuddy as a native app!</p>' +
               '</div>' +
-              '<button onclick="document.getElementById(\'ios-pwa-modal\').remove()" class="mt-5 w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-200 transition">Close</button>' +
+              '<button onclick="this.closest(\\'#ios-pwa-modal\\').remove()" class="mt-5 w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-200 transition">Close</button>' +
             '</div>';
           document.body.appendChild(modal);
         }
