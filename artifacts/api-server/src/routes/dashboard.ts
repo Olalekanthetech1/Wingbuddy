@@ -23,10 +23,8 @@ import { apiKeyPoolService } from "../services/api-key-pool.service";
 import { GeminiService } from "../gemini/gemini.service";
 import { getConfig } from "../config/env";
 import { logger } from "../lib/logger";
-import { apiAdminGate } from "../middlewares/auth.middleware";
 
 const router: IRouter = Router();
-router.use(apiAdminGate);
 const reminderService = new ReminderService();
 const conversationService = new ConversationService();
 

@@ -595,8 +595,6 @@ router.get("/memories", async (req: Request, res: Response) => {
   try {
     const user = req.user!;
     const partitionId = webChatService.getPartitionUserId(user);
-    logger.debug({ partitionId, userId: user.id }, "Fetching user memories");
-    
     const memories = await memoryService.getUserMemories(partitionId);
     
     // Defensive BigInt serialization for Express
@@ -609,9 +607,8 @@ router.get("/memories", async (req: Request, res: Response) => {
     logger.error({ 
       error: err instanceof Error ? err.message : String(err),
       stack: err instanceof Error ? err.stack : undefined,
-      user: req.user?.id,
-      path: req.path
-    }, "CRITICAL_ROUTE_ERROR: Failed fetching user memories");
+      user: req.user?.id 
+    }, "Failed fetching user memories");
     res.status(500).json({ error: err.message || "Failed fetching memories" });
   }
 });

@@ -8,12 +8,7 @@ export type MemoryType =
   | "project_context"
   | "learning_context"
   | "interaction_preference"
-  | "important_context"
-  | "tech_context"
-  | "behavioral_rule"
-  | "personal_context"
-  | "user_goal"
-  | "style_preference";
+  | "important_context";
 
 export interface ExtractedMemoryItem {
   key: string;
@@ -46,7 +41,7 @@ export class MemoryService {
     importBatchId?: string;
     expiresAt?: Date;
   }): Promise<UserMemoryRecord | null> {
-    const telegramUserId = options.telegramUserId;
+    const telegramUserId = Number(options.telegramUserId);
     const key = options.key.trim().toLowerCase().replace(/[^a-z0-9_]/g, "_");
     const confidence = options.confidence ?? "high";
 
@@ -126,7 +121,8 @@ export class MemoryService {
     telegramUserId: number | bigint,
     options?: { type?: MemoryType; category?: string; minConfidence?: "medium" | "high" },
   ): Promise<UserMemoryRecord[]> {
-    const all = await chatDatabaseService.getUserMemories(telegramUserId);
+    const uid = Number(telegramUserId);
+    const all = await chatDatabaseService.getUserMemories(uid);
 
     return all.filter((m) => {
       if (m.status === "deleted" || m.status === "archived") return false;
@@ -179,24 +175,26 @@ export class MemoryService {
    * Searches memories using keyword and semantic similarity.
    */
   async searchMemories(telegramUserId: number | bigint, query: string): Promise<UserMemoryRecord[]> {
-    return chatDatabaseService.searchMemories(telegramUserId, query);
+    const uid = Number(telegramUserId);
+    return chatDatabaseService.searchMemories(uid, query);
   }
 
   /**
    * Forgets a single memory by ID or key.
    */
   async forgetMemory(telegramUserId: number | bigint, memoryIdOrKey: number | string): Promise<boolean> {
+    const uid = Number(telegramUserId);
     if (typeof memoryIdOrKey === "number") {
-      const deleted = await chatDatabaseService.deleteMemory(telegramUserId, memoryIdOrKey);
-      logger.info({ telegramUserId, memoryId: memoryIdOrKey, deleted }, "MEMORY_DELETED_BY_ID");
+      const deleted = await chatDatabaseService.deleteMemory(uid, memoryIdOrKey);
+      logger.info({ telegramUserId: uid, memoryId: memoryIdOrKey, deleted }, "MEMORY_DELETED_BY_ID");
       return deleted;
     } else {
       const key = memoryIdOrKey.trim().toLowerCase().replace(/[^a-z0-9_]/g, "_");
-      const memories = await chatDatabaseService.getUserMemories(telegramUserId);
+      const memories = await chatDatabaseService.getUserMemories(uid);
       const target = memories.find((m) => m.key === key);
       if (target) {
-        const deleted = await chatDatabaseService.deleteMemory(telegramUserId, target.id);
-        logger.info({ telegramUserId, key, deleted }, "MEMORY_DELETED_BY_KEY");
+        const deleted = await chatDatabaseService.deleteMemory(uid, target.id);
+        logger.info({ telegramUserId: uid, key, deleted }, "MEMORY_DELETED_BY_KEY");
         return deleted;
       }
     }
@@ -207,8 +205,9 @@ export class MemoryService {
    * Clears all long-term memories for a user.
    */
   async clearAllMemories(telegramUserId: number | bigint): Promise<number> {
-    const count = await chatDatabaseService.clearUserMemories(telegramUserId);
-    logger.info({ telegramUserId, count }, "MEMORY_ALL_CLEARED");
+    const uid = Number(telegramUserId);
+    const count = await chatDatabaseService.clearUserMemories(uid);
+    logger.info({ telegramUserId: uid, count }, "MEMORY_ALL_CLEARED");
     return count;
   }
 
@@ -390,8 +389,7 @@ ${pastedText}`;
     try {
       const response = await gemini.generateReply([], prompt, "Return valid JSON only.", { 
         isExtraction: true,
-        temperature: 0.1, // Lower temperature for more stable extraction
-        maxOutputTokens: 8192 // Ensure enough space for large extractions without hardcoded truncation
+        temperature: 0.1 // Lower temperature for more stable extraction
       });
       const cleaned = response.replace(/^```json/i, "").replace(/^```/i, "").replace(/```$/i, "").trim();
       const parsed = JSON.parse(cleaned);

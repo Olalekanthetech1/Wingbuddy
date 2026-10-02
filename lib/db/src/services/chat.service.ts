@@ -64,8 +64,8 @@ export interface ChatMessageRecord {
 
 export interface ChatSessionRecord {
   id: number;
-  telegramUserId: bigint;
-  chatId: bigint;
+  telegramUserId: number;
+  chatId: number;
   title: string | null;
   summary: string | null;
   isActive: boolean;
@@ -76,7 +76,7 @@ export interface ChatSessionRecord {
 
 export interface UserMemoryRecord {
   id: number;
-  telegramUserId: bigint;
+  telegramUserId: number;
   key: string;
   content: string;
   category: string;
@@ -101,7 +101,7 @@ export interface UserMemoryRecord {
 
 export interface AgentTaskRecord {
   id: number;
-  telegramUserId: bigint;
+  telegramUserId: number;
   conversationId: number | null;
   title: string;
   goal: string;
@@ -129,7 +129,7 @@ export interface AgentTaskStepRecord {
 
 export interface ConversationSummaryRecord {
   id: number;
-  telegramUserId: bigint;
+  telegramUserId: number;
   conversationId: number;
   summary: string;
   keyTakeawaysJson: string | null;
@@ -141,8 +141,8 @@ export interface ConversationSummaryRecord {
 
 export interface ReminderRecord {
   id: number;
-  telegramUserId: bigint;
-  chatId: bigint;
+  telegramUserId: number;
+  chatId: number;
   prompt: string;
   dueAt: Date;
   isCompleted: boolean;
@@ -153,7 +153,7 @@ export interface ReminderRecord {
 
 export interface UserFullContextRecord {
   id: number;
-  telegramUserId: bigint;
+  telegramUserId: number;
   username: string | null;
   firstName: string | null;
   lastName: string | null;
@@ -816,7 +816,7 @@ export class ChatDatabaseService {
           const results = res.rows
             .map((row) => ({
               id: row.id,
-              telegramUserId: BigInt(String(row.telegram_user_id)),
+              telegramUserId: Number(row.telegram_user_id),
               key: row.key,
               content: row.content,
               category: row.category || "general",
@@ -1004,7 +1004,7 @@ export class ChatDatabaseService {
 
     const fullContext: UserFullContextRecord = {
       id: user.id,
-      telegramUserId: BigInt(String(user.telegramUserId)),
+      telegramUserId: Number(user.telegramUserId),
       username: user.username,
       firstName: user.firstName,
       lastName: user.lastName,
@@ -1016,8 +1016,8 @@ export class ChatDatabaseService {
       memories: user.memories.map((m) => this.serializeMemory(m)),
       reminders: user.reminders.map((r) => ({
         id: r.id,
-        telegramUserId: BigInt(String(r.telegramUserId)),
-        chatId: BigInt(String(r.chatId)),
+        telegramUserId: Number(r.telegramUserId),
+        chatId: Number(r.chatId),
         prompt: r.prompt,
         dueAt: r.dueAt,
         isCompleted: r.isCompleted,
@@ -1400,7 +1400,7 @@ export class ChatDatabaseService {
 
     return {
       id: inserted.id,
-      telegramUserId: BigInt(String(inserted.telegramUserId)),
+      telegramUserId: Number(inserted.telegramUserId),
       conversationId: inserted.conversationId,
       summary: inserted.summary,
       keyTakeawaysJson: inserted.keyTakeawaysJson,
@@ -1425,7 +1425,7 @@ export class ChatDatabaseService {
     if (rows[0]) {
       return {
         id: rows[0].id,
-        telegramUserId: BigInt(String(rows[0].telegramUserId)),
+        telegramUserId: Number(rows[0].telegramUserId),
         conversationId: rows[0].conversationId,
         summary: rows[0].summary,
         keyTakeawaysJson: rows[0].keyTakeawaysJson,
@@ -1467,8 +1467,8 @@ export class ChatDatabaseService {
   }): ChatSessionRecord {
     return {
       id: session.id,
-      telegramUserId: BigInt(String(session.telegramUserId)),
-      chatId: BigInt(String(session.chatId)),
+      telegramUserId: Number(session.telegramUserId),
+      chatId: Number(session.chatId),
       title: session.title,
       summary: session.summary,
       isActive: session.isActive,
@@ -1481,7 +1481,7 @@ export class ChatDatabaseService {
   private serializeMemory(memory: Record<string, unknown>): UserMemoryRecord {
     return {
       id: Number(memory.id),
-      telegramUserId: BigInt(String(memory.telegramUserId || 0)),
+      telegramUserId: Number(memory.telegramUserId),
       key: String(memory.key || ""),
       content: String(memory.content || ""),
       category: String(memory.category || "general"),
@@ -1507,7 +1507,7 @@ export class ChatDatabaseService {
   private serializeTask(task: Record<string, unknown>): AgentTaskRecord {
     return {
       id: Number(task.id),
-      telegramUserId: BigInt(String(task.telegramUserId || 0)),
+      telegramUserId: Number(task.telegramUserId),
       conversationId: task.conversationId ? Number(task.conversationId) : null,
       title: String(task.title || ""),
       goal: String(task.goal || ""),
