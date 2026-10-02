@@ -3,7 +3,7 @@ import type { Response } from "express";
 import { logger } from "../lib/logger";
 
 export interface SyncEventPayload {
-  type: "chat_chunk" | "chat_message" | "task_update" | "reminder_alert" | "telegram_paired" | "system_status";
+  type: "chat_chunk" | "chat_message" | "task_update" | "reminder_alert" | "telegram_paired" | "system_status" | "media_job_update";
   userId?: number;
   telegramUserId?: number | string;
   data: any;

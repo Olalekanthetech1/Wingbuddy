@@ -455,3 +455,5 @@ export class SemanticInteractionResolverService {
     return semanticInteractionCache.get(text, persistentMode, history);
   }
 }
+
+export const semanticInteractionResolverService = SemanticInteractionResolverService;

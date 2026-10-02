@@ -40,7 +40,7 @@ router.get("/overview", async (req: Request, res: Response) => {
         SELECT 
           COUNT(*)::int as total,
           COUNT(*) FILTER (WHERE status = 'completed')::int as completed,
-          COUNT(*) FILTER (WHERE status IN ('in_progress', 'pending'))::int as active
+          COUNT(*) FILTER (WHERE status IN ('active', 'in_progress', 'pending', 'waiting'))::int as active
         FROM agent_tasks 
         WHERE telegram_user_id = $1
       `, [partitionId]),
@@ -407,6 +407,149 @@ router.post("/tasks", async (req: Request, res: Response) => {
     res.status(201).json({ task: insertRes.rows[0] });
   } catch (err: any) {
     res.status(500).json({ error: err.message || "Failed creating task" });
+  }
+});
+
+/**
+ * POST /api/user/tasks/stop-all
+ * Stops/cancels all active or pending tasks for the authenticated user
+ */
+router.post("/tasks/stop-all", async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const partitionId = webChatService.getPartitionUserId(user);
+    const pool = getPool();
+
+    // 1. Identify all active/pending/in_progress tasks
+    const activeTasksRes = await pool.query(
+      `SELECT id, title FROM agent_tasks 
+       WHERE telegram_user_id = $1 AND status IN ('active', 'pending', 'in_progress', 'waiting')`,
+      [partitionId]
+    );
+
+    if (activeTasksRes.rows.length === 0) {
+      res.json({ success: true, count: 0, message: "No active tasks to stop." });
+      return;
+    }
+
+    const taskIds = activeTasksRes.rows.map((r: { id: number }) => r.id);
+
+    // 2. Mark active tasks as cancelled
+    await pool.query(
+      `UPDATE agent_tasks 
+       SET status = 'cancelled', updated_at = NOW(), completed_at = NOW() 
+       WHERE id = ANY($1::int[]) AND telegram_user_id = $2`,
+      [taskIds, partitionId]
+    );
+
+    // 3. Mark uncompleted steps as cancelled
+    await pool.query(
+      `UPDATE agent_task_steps 
+       SET status = 'cancelled', updated_at = NOW() 
+       WHERE task_id = ANY($1::int[]) AND status != 'completed'`,
+      [taskIds]
+    );
+
+    res.json({
+      success: true,
+      count: taskIds.length,
+      message: `Stopped ${taskIds.length} active task${taskIds.length === 1 ? "" : "s"}.`,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed stopping tasks" });
+  }
+});
+
+/**
+ * DELETE /api/user/tasks/clear-all
+ * Permanently deletes all tasks and cascaded steps for the authenticated user
+ */
+router.delete("/tasks/clear-all", async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const partitionId = webChatService.getPartitionUserId(user);
+    const pool = getPool();
+
+    const deleteRes = await pool.query(
+      `DELETE FROM agent_tasks WHERE telegram_user_id = $1 RETURNING id`,
+      [partitionId]
+    );
+
+    const clearedCount = deleteRes.rowCount || 0;
+    res.json({
+      success: true,
+      count: clearedCount,
+      message: `Cleared ${clearedCount} task${clearedCount === 1 ? "" : "s"}.`,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed clearing tasks" });
+  }
+});
+
+/**
+ * POST /api/user/tasks/:id/stop
+ * Stops/cancels an individual task
+ */
+router.post("/tasks/:id/stop", async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const partitionId = webChatService.getPartitionUserId(user);
+    const taskId = parseInt(req.params.id, 10);
+    const pool = getPool();
+
+    const taskCheck = await pool.query(
+      `SELECT * FROM agent_tasks WHERE id = $1 AND telegram_user_id = $2`,
+      [taskId, partitionId]
+    );
+    if (taskCheck.rows.length === 0) {
+      res.status(404).json({ error: "Task not found" });
+      return;
+    }
+
+    const task = taskCheck.rows[0];
+    await pool.query(
+      `UPDATE agent_tasks SET status = 'cancelled', updated_at = NOW(), completed_at = NOW() WHERE id = $1`,
+      [taskId]
+    );
+    await pool.query(
+      `UPDATE agent_task_steps SET status = 'cancelled', updated_at = NOW() WHERE task_id = $1 AND status != 'completed'`,
+      [taskId]
+    );
+
+    res.json({ success: true, message: `Task "${task.title}" stopped`, taskId });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed stopping task" });
+  }
+});
+
+/**
+ * DELETE /api/user/tasks/:id
+ * Permanently deletes an individual task and its execution steps
+ */
+router.delete("/tasks/:id", async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const partitionId = webChatService.getPartitionUserId(user);
+    const taskId = parseInt(req.params.id, 10);
+    const pool = getPool();
+
+    const deleteRes = await pool.query(
+      `DELETE FROM agent_tasks WHERE id = $1 AND telegram_user_id = $2 RETURNING id, title`,
+      [taskId, partitionId]
+    );
+
+    if (deleteRes.rows.length === 0) {
+      res.status(404).json({ error: "Task not found" });
+      return;
+    }
+
+    res.json({
+      success: true,
+      message: `Task "${deleteRes.rows[0].title}" deleted successfully`,
+      taskId,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed deleting task" });
   }
 });
 

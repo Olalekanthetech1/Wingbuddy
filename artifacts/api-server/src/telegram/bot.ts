@@ -58,6 +58,7 @@ import { executionPersistence } from "../execution/persistence/execution-persist
 import { agentPlannerService } from "../planner/agent-planner.service";
 import { SemanticInteractionResolverService } from "../services/semantic-interaction-resolver.service";
 import { requestRegistryService } from "../services/request-registry.service";
+import { mediaJobOrchestratorService } from "../services/media/media-job-orchestrator.service";
 import { validateCandidateName, escapeHtml, userIdentityResolverService } from "../services/user-identity-resolver.service";
 import { CURRENT_ONBOARDING_VERSION } from "../services/onboarding.service";
 import {
@@ -836,102 +837,29 @@ export function createTelegramBot(): TelegramBotRuntime {
       await ctx.reply(quotaCheck.message || "Image quota exceeded.");
       return;
     }
-    const stopPresence = startTypingIndicator(ctx, { state: "generating", toolName: "image_generation", operationLabel: "image generation", chatAction: "upload_photo", userFacingProgress: false });
-    try {
-      const mediaResult = await UnifiedMediaEngine.execute({
-        modality: "image",
-        prompt: rawPrompt,
-        executionMode: "live",
-        userId: ctx.from.id,
-        userTier,
-        sourceInterface: "telegram",
-      });
 
-      if (!mediaResult.success || !mediaResult.artifact?.buffer) {
-        throw new Error(mediaResult.job.errorMessage || "Image generation did not produce a valid image buffer");
-      }
+    try {
+      const conversationId = await conversations.getOrCreateConversation(ctx.from.id, ctx.chat.id);
+      await conversations.addMessage(conversationId, "user", `/image ${rawPrompt}`);
 
       const safeRaw = rawPrompt.length > 180 ? rawPrompt.slice(0, 175) + "..." : rawPrompt;
-      const safeEnhanced = (mediaResult.job.enhancedPrompt || "").length > 200 ? mediaResult.job.enhancedPrompt.slice(0, 195) + "..." : (mediaResult.job.enhancedPrompt || "");
-      const isEnhancedDiff = safeEnhanced.toLowerCase() !== safeRaw.toLowerCase() && safeEnhanced.length > 5;
+      await ctx.reply(
+        `🎨 <b>Image Request Queued</b>\n\n<b>Prompt:</b> <i>${escapeHtml(safeRaw)}</i>\n\n⏳ <i>Synthesizing via diffusion engine. I will deliver the image directly here once synthesis completes!</i>`,
+        { parse_mode: "HTML" }
+      );
 
-      const imageBadge = `<i>Engine: ${escapeHtml(mediaResult.job.actualProvider)} (${escapeHtml(mediaResult.job.actualModel)})</i>`;
-      const enhancerTag = `<i>✨ AI Enhanced:</i>`;
-      const htmlCaption = [
-        `<b>🎨 Prompt:</b> ${escapeHtml(safeRaw)}`,
-        isEnhancedDiff ? `${enhancerTag} ${escapeHtml(safeEnhanced)}` : null,
-        imageBadge,
-      ].filter(Boolean).join("\n\n");
-      const plainCaption = [
-        `🎨 Prompt: ${safeRaw}`,
-        isEnhancedDiff ? `✨ AI Enhanced: ${safeEnhanced}` : null,
-        `Engine: ${mediaResult.job.actualProvider} (${mediaResult.job.actualModel})`,
-      ].filter(Boolean).join("\n\n");
-
-      let photoDelivered = false;
-      try {
-        await ctx.replyWithPhoto(new InputFile(mediaResult.artifact.buffer, "image.png"), {
-          caption: htmlCaption,
-          parse_mode: "HTML",
-          reply_markup: feedbackKeyboard(),
-        });
-        photoDelivered = true;
-      } catch (htmlErr) {
-        logger.warn({ stage: "image_caption_parse_error", error: safeErrorMetadata(htmlErr) }, "HTML photo caption failed; retrying with plain text");
-        try {
-          await ctx.replyWithPhoto(new InputFile(mediaResult.artifact.buffer, "image.png"), {
-            caption: plainCaption,
-            reply_markup: feedbackKeyboard(),
-          });
-          photoDelivered = true;
-        } catch (plainErr) {
-          logger.warn({ stage: "image_plain_caption_failed", error: safeErrorMetadata(plainErr) }, "Plain text photo caption failed; retrying without caption");
-          try {
-            await ctx.replyWithPhoto(new InputFile(mediaResult.artifact.buffer, "image.png"), {
-              reply_markup: feedbackKeyboard(),
-            });
-            photoDelivered = true;
-          } catch (noCapErr) {
-            logger.warn({ stage: "image_buffer_upload_failed", error: safeErrorMetadata(noCapErr) }, "Direct image buffer upload failed");
-          }
-        }
-      }
-
-      // Cloudinary / Public URL fallback
-      const directUrl = mediaResult.artifact.publicUrl;
-      if (!photoDelivered && directUrl && (directUrl.startsWith("http://") || directUrl.startsWith("https://"))) {
-        try {
-          await ctx.replyWithPhoto(directUrl, {
-            caption: plainCaption,
-            reply_markup: feedbackKeyboard(),
-          });
-          photoDelivered = true;
-        } catch (urlErr) {
-          logger.warn({ stage: "image_url_photo_failed", error: safeErrorMetadata(urlErr) }, "Photo delivery via Cloudinary URL failed; sending direct link");
-          try {
-            await ctx.reply(`🎨 <b>Here is your generated image:</b>\n<a href="${escapeHtml(directUrl)}">${escapeHtml(safeRaw)}</a>`, {
-              parse_mode: "HTML",
-              reply_markup: feedbackKeyboard(),
-            });
-            photoDelivered = true;
-          } catch (linkErr) {
-            logger.error({ stage: "image_link_failed", error: safeErrorMetadata(linkErr) }, "Direct link delivery failed");
-          }
-        }
-      }
-
-      if (photoDelivered) {
-        const conversationId = await conversations.getOrCreateConversation(ctx.from.id, ctx.chat.id);
-        await conversations.addMessage(conversationId, "user", `/image ${safeRaw}`);
-        await conversations.addMessage(conversationId, "model", `[Generated Image for: "${safeRaw}"]`);
-        await userTierService.consumeToolQuota(ctx.from.id, "image");
-      } else {
-        throw new Error("Failed to deliver image through any transport tier");
-      }
-    } catch (error) {
-      logger.error({ stage: "image_generation", error: safeErrorMetadata(error) }, "Image generation failed");
-      await ctx.reply("Sorry, I encountered an issue delivering that image. Your generation quota was not consumed. Please try again or rephrase your prompt.");
-    } finally { stopPresence(); }
+      await mediaJobOrchestratorService.enqueueJob({
+        ownerUserId: ctx.from.id,
+        conversationId,
+        modality: "image",
+        prompt: rawPrompt,
+        sourceInterface: "telegram",
+        telegramChatId: ctx.chat.id,
+      });
+    } catch (error: any) {
+      logger.error({ stage: "image_generation", error: safeErrorMetadata(error) }, "Image enqueue failed");
+      await ctx.reply(`Sorry, I encountered an issue: ${error.message || "Failed queuing image"}. Your quota was not consumed.`);
+    }
   });
 
   bot.command(["video", "vid", "clip", "generate_video"], async (ctx) => {
@@ -953,130 +881,29 @@ export function createTelegramBot(): TelegramBotRuntime {
       await ctx.reply(quotaCheck.message || "Video quota exceeded.");
       return;
     }
-    const stopPresence = startTypingIndicator(ctx, { state: "executing_tool", toolName: "video_generation", operationLabel: "video generation", chatAction: "upload_video", expectsLongRunning: true, userFacingProgress: false });
-    let progressMsg: number | undefined;
-    let statusMsgId: number | undefined;
+
     try {
-      const statusMsg = await ctx.reply(
-        "🎬 <b>Video Request Queued</b>\n\nVideo rendering is queued due to high demand. Generative diffusion typically takes 30–60 seconds.\n\n<i>I will notify you here once it is ready!</i>",
-        { parse_mode: "HTML" }
-      ).catch(() => null);
-      if (statusMsg) statusMsgId = statusMsg.message_id;
-
-      progressMsg = await interactionPresentationService.renderProgress(ctx, { state: "executing_tool", toolName: "video_generation", operationLabel: "video generation", chatAction: "upload_video", expectsLongRunning: true, elapsedMs: 0 });
-      const startedAt = Date.now();
-      const mediaResult = await UnifiedMediaEngine.execute({
-        modality: "video",
-        prompt: rawPrompt,
-        executionMode: "live",
-        userId: ctx.from.id,
-        userTier,
-        sourceInterface: "telegram",
-      });
-
-      if (!mediaResult.success || !mediaResult.artifact?.buffer) {
-        throw new Error(mediaResult.job.errorMessage || "Video generation did not produce a valid video buffer");
-      }
+      const conversationId = await conversations.getOrCreateConversation(ctx.from.id, ctx.chat.id);
+      await conversations.addMessage(conversationId, "user", `/video ${rawPrompt}`);
 
       const safeRaw = rawPrompt.length > 180 ? rawPrompt.slice(0, 175) + "..." : rawPrompt;
-      const safeEnhanced = (mediaResult.job.enhancedPrompt || "").length > 200 ? mediaResult.job.enhancedPrompt.slice(0, 195) + "..." : (mediaResult.job.enhancedPrompt || "");
-      const isEnhancedDiff = safeEnhanced.toLowerCase() !== safeRaw.toLowerCase() && safeEnhanced.length > 5;
+      await ctx.reply(
+        `🎬 <b>Video Request Queued</b>\n\n<b>Prompt:</b> <i>${escapeHtml(safeRaw)}</i>\n\n⏳ <i>Generative video rendering initiated (takes ~30–60s). I will deliver the video directly here once complete!</i>`,
+        { parse_mode: "HTML" }
+      );
 
-      const providerBadge = `${escapeHtml(mediaResult.job.actualProvider)} (${escapeHtml(mediaResult.job.videoTechnique || "video_diffusion")})`;
-      const enhancerTag = `<i>✨ AI Director:</i>`;
-      const htmlCaption = [
-        `<b>🎬 Prompt:</b> ${escapeHtml(safeRaw)}`,
-        isEnhancedDiff ? `${enhancerTag} ${escapeHtml(safeEnhanced)}` : null,
-        `<i>Engine: ${providerBadge}</i>`
-      ].filter(Boolean).join("\n\n");
-      const plainCaption = [
-        `🎬 Prompt: ${safeRaw}`,
-        isEnhancedDiff ? `✨ AI Director: ${safeEnhanced}` : null,
-        `Engine: ${mediaResult.job.actualProvider} (${mediaResult.job.videoTechnique || "video_diffusion"})`
-      ].filter(Boolean).join("\n\n");
-      
-      if (progressMsg) await ctx.api.deleteMessage(ctx.chat.id, progressMsg).catch(() => {});
-
-      let videoDelivered = false;
-      if (mediaResult.artifact.mimeType?.includes("video") && Buffer.isBuffer(mediaResult.artifact.buffer) && mediaResult.artifact.buffer.length > 1000) {
-        try {
-          await ctx.replyWithVideo(new InputFile(mediaResult.artifact.buffer, "video.mp4"), {
-            caption: htmlCaption,
-            parse_mode: "HTML",
-            reply_markup: feedbackKeyboard(),
-          });
-          videoDelivered = true;
-        } catch (captionErr) {
-          logger.warn({ stage: "video_html_caption_failed", err: String(captionErr) }, "HTML video caption failed; retrying with plain text");
-          try {
-            await ctx.replyWithVideo(new InputFile(mediaResult.artifact.buffer, "video.mp4"), {
-              caption: plainCaption,
-              reply_markup: feedbackKeyboard(),
-            });
-            videoDelivered = true;
-          } catch (plainErr) {
-            logger.warn({ stage: "video_plain_caption_failed", err: String(plainErr) }, "Plain text video caption failed; retrying with no caption");
-            try {
-              await ctx.replyWithVideo(new InputFile(mediaResult.artifact.buffer, "video.mp4"), {
-                reply_markup: feedbackKeyboard(),
-              });
-              videoDelivered = true;
-            } catch (noCapErr) {
-              logger.warn({ stage: "video_buffer_send_failed", err: String(noCapErr) }, "Direct video buffer upload failed");
-            }
-          }
-        }
-      }
-
-      // Cloudinary / Public URL fallback
-      const directUrl = mediaResult.artifact.publicUrl;
-      if (!videoDelivered && directUrl && (directUrl.startsWith("http://") || directUrl.startsWith("https://"))) {
-        try {
-          await ctx.replyWithVideo(directUrl, {
-            caption: plainCaption,
-            reply_markup: feedbackKeyboard(),
-          });
-          videoDelivered = true;
-        } catch (urlErr) {
-          logger.warn({ stage: "video_url_delivery_failed", err: String(urlErr) }, "Video delivery via URL failed; sending direct link");
-          try {
-            await ctx.reply(`🎬 <b>Here is your generated video:</b>\n<a href="${escapeHtml(directUrl)}">${escapeHtml(safeRaw)}</a>`, {
-              parse_mode: "HTML",
-              reply_markup: feedbackKeyboard(),
-            });
-            videoDelivered = true;
-          } catch (linkErr) {
-            logger.error({ stage: "video_link_delivery_failed", err: String(linkErr) }, "Direct link delivery failed");
-          }
-        }
-      }
-
-      if (statusMsgId) await ctx.api.deleteMessage(ctx.chat.id, statusMsgId).catch(() => {});
-
-      if (videoDelivered) {
-        const conversationId = await conversations.getOrCreateConversation(ctx.from.id, ctx.chat.id);
-        await conversations.addMessage(conversationId, "user", `/video ${safeRaw}`);
-        await conversations.addMessage(conversationId, "model", `[Generated Visual (${mediaResult.job.actualProvider}) for: "${safeRaw}"]`);
-        await userTierService.consumeToolQuota(ctx.from.id, "video");
-        logger.info({ stage: "video_generation", elapsedMs: Date.now() - startedAt }, "Video generation completed via UnifiedMediaEngine");
-      } else {
-        throw new Error("Failed to deliver video across all transport tiers");
-      }
-    } catch (error) {
-      logger.error({ stage: "video_generation", error: safeErrorMetadata(error) }, "Video generation failed");
-      if (progressMsg) await ctx.api.deleteMessage(ctx.chat.id, progressMsg).catch(() => {});
-      if (statusMsgId) await ctx.api.deleteMessage(ctx.chat.id, statusMsgId).catch(() => {});
-      const userFriendlyMsg = [
-        "🎬 <b>Video Engine Under Heavy Load</b>",
-        "",
-        "Our generative video diffusion engines are currently experiencing high demand or transient provider limits.",
-        "",
-        "🛡️ <i>Your generation quota was <b>not consumed</b>.</i>",
-        "",
-        "Please try your video request again in a few moments, or feel free to request an image generation instead!"
-      ].join("\n");
-      await ctx.reply(userFriendlyMsg, { parse_mode: "HTML" });
-    } finally { stopPresence(); }
+      await mediaJobOrchestratorService.enqueueJob({
+        ownerUserId: ctx.from.id,
+        conversationId,
+        modality: "video",
+        prompt: rawPrompt,
+        sourceInterface: "telegram",
+        telegramChatId: ctx.chat.id,
+      });
+    } catch (error: any) {
+      logger.error({ stage: "video_generation", error: safeErrorMetadata(error) }, "Video enqueue failed");
+      await ctx.reply(`Sorry, I encountered an issue: ${error.message || "Failed queuing video"}. Your quota was not consumed.`);
+    }
   });
 
   bot.command("personality", async (ctx) => { if (!(await requireAuthorized(ctx))) return; await personalityMenu(ctx); });
@@ -1811,216 +1638,70 @@ export function createTelegramBot(): TelegramBotRuntime {
           await ctx.reply(quotaCheck.message || "Video quota exceeded.");
           return;
         }
-        const stopVideoPresence = startTypingIndicator(ctx, { state: "executing_tool", toolName: "video_generation", operationLabel: "video generation", chatAction: "upload_video", expectsLongRunning: true, userFacingProgress: false });
-        let progressMessageId: number | undefined;
-        let statusMessageId: number | undefined;
+
         try {
-          // Queue Transparency
-          const statusMsg = await ctx.reply(
-            "🎬 <b>Video Request Queued</b>\n\nVideo rendering is queued due to high demand. Generative diffusion typically takes 30–60 seconds.\n\n<i>I will notify you here once it is ready!</i>",
+          const safeRaw = adaptivePlan.videoPrompt.length > 180 ? adaptivePlan.videoPrompt.slice(0, 175) + "..." : adaptivePlan.videoPrompt;
+          await ctx.reply(
+            `🎬 <b>Video Request Queued</b>\n\n<b>Prompt:</b> <i>${escapeHtml(safeRaw)}</i>\n\n⏳ <i>Generative video rendering initiated (takes ~30–60s). I will deliver the video directly here once complete!</i>`,
             { parse_mode: "HTML" }
-          ).catch(() => null);
-          if (statusMsg) statusMessageId = statusMsg.message_id;
+          );
 
-          progressMessageId = await interactionPresentationService.renderProgress(ctx, { state: "executing_tool", toolName: "video_generation", operationLabel: "video generation", chatAction: "upload_video", expectsLongRunning: true, userFacingProgress: true, elapsedMs: 0 });
-          const startedAt = Date.now();
-          const videoResult = await VideoGenerationService.generate(adaptivePlan.videoPrompt, gemini);
+          await runStage("user_message_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () =>
+            conversations.addMessage(globalContextData.conversationId, "user", prompt)
+          );
 
-          const vidProviderLabel = videoResult.provider === "huggingface" ? "🤗 Hugging Face" : videoResult.provider === "gemini" ? "✨ Google Imagen/Veo" : (videoResult.provider || "Adaptive Media Router");
-          const vidModelLabel = videoResult.model ? ` (${videoResult.model})` : "";
-          const vidEnhancerTag = videoResult.enhancerName ? `<i>✨ Enhanced (${escapeHtml(videoResult.enhancerName)}):</i>` : `<i>✨ AI Enhanced:</i>`;
-          
-          const safeRaw = (adaptivePlan.videoPrompt || "").length > 180 ? adaptivePlan.videoPrompt.slice(0, 175) + "..." : adaptivePlan.videoPrompt;
-          const safeEnhanced = (videoResult.enhancedPrompt || "").length > 200 ? videoResult.enhancedPrompt.slice(0, 195) + "..." : (videoResult.enhancedPrompt || "");
-          const isEnhancedDiff = safeEnhanced.toLowerCase() !== safeRaw.toLowerCase() && safeEnhanced.length > 5;
+          await mediaJobOrchestratorService.enqueueJob({
+            ownerUserId: ctx.from.id,
+            conversationId: globalContextData.conversationId,
+            modality: "video",
+            prompt: adaptivePlan.videoPrompt,
+            sourceInterface: "telegram",
+            telegramChatId: ctx.chat.id,
+          });
 
-          const htmlCaption = [
-            `<b>🎬 Prompt:</b> ${escapeHtml(safeRaw)}`,
-            isEnhancedDiff ? `${vidEnhancerTag} ${escapeHtml(safeEnhanced)}` : null,
-            `<i>Engine: ${escapeHtml(vidProviderLabel)}${escapeHtml(vidModelLabel)}</i>`
-          ].filter(Boolean).join("\n\n");
-          const plainCaption = [
-            `🎬 Prompt: ${safeRaw}`,
-            isEnhancedDiff ? `✨ AI Enhanced: ${safeEnhanced}` : null,
-            `Engine: ${vidProviderLabel}${vidModelLabel}`
-          ].filter(Boolean).join("\n\n");
-
-          if (progressMessageId) await ctx.api.deleteMessage(ctx.chat.id, progressMessageId).catch(() => {});
-
-          let videoDelivered = false;
-          if (videoResult.isVideo && Buffer.isBuffer(videoResult.buffer) && videoResult.buffer.length > 1000) {
-            try {
-              await ctx.replyWithVideo(new InputFile(videoResult.buffer, "video.mp4"), { caption: htmlCaption, parse_mode: "HTML", reply_markup: feedbackKeyboard() });
-              videoDelivered = true;
-            } catch (htmlCapErr) {
-              logger.warn({ stage: "video_caption_parse_error", error: safeErrorMetadata(htmlCapErr) }, "HTML video caption failed; retrying with plain text");
-              try {
-                await ctx.replyWithVideo(new InputFile(videoResult.buffer, "video.mp4"), { caption: plainCaption, reply_markup: feedbackKeyboard() });
-                videoDelivered = true;
-              } catch (plainCapErr) {
-                logger.warn({ stage: "video_plain_caption_failed", error: safeErrorMetadata(plainCapErr) }, "Plain text video caption failed; retrying with no caption");
-                try {
-                  await ctx.replyWithVideo(new InputFile(videoResult.buffer, "video.mp4"), { reply_markup: feedbackKeyboard() });
-                  videoDelivered = true;
-                } catch (noCapErr) {
-                  logger.warn({ stage: "video_buffer_upload_failed", error: safeErrorMetadata(noCapErr) }, "Direct video buffer upload failed");
-                }
-              }
-            }
-          }
-
-          // Cloudinary / Public URL fallback
-          if (!videoDelivered && videoResult.url && (videoResult.url.startsWith("http://") || videoResult.url.startsWith("https://"))) {
-            try {
-              await ctx.replyWithVideo(videoResult.url, { caption: plainCaption, reply_markup: feedbackKeyboard() });
-              videoDelivered = true;
-            } catch (urlErr) {
-              logger.warn({ stage: "video_url_delivery_failed", error: safeErrorMetadata(urlErr) }, "Video delivery via URL failed; sending direct link");
-              try {
-                await ctx.reply(`🎬 <b>Here is your generated video:</b>\n<a href="${escapeHtml(videoResult.url)}">${escapeHtml(safeRaw)}</a>`, {
-                  parse_mode: "HTML",
-                  reply_markup: feedbackKeyboard(),
-                });
-                videoDelivered = true;
-              } catch (linkErr) {
-                logger.error({ stage: "video_link_delivery_failed", error: safeErrorMetadata(linkErr) }, "Direct link video delivery failed");
-              }
-            }
-          }
-
-          if (statusMessageId) await ctx.api.deleteMessage(ctx.chat.id, statusMessageId).catch(() => {});
-
-          if (videoDelivered) {
-            await runStage("user_message_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => conversations.addMessage(globalContextData.conversationId, "user", prompt));
-            await runStage("model_response_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => conversations.addMessage(globalContextData.conversationId, "model", `[Generated Video (${videoResult.provider}) for: "${safeRaw}"]`));
-            await userTierService.consumeToolQuota(ctx.from.id, "video");
-            logger.info({ stage: "video_generation", elapsedMs: Date.now() - startedAt }, "Natural video generation completed and delivered");
-            if (registeredRequest) requestRegistryService.markCompleted(registeredRequest.requestId, { provider: videoResult.provider, mediaType: "video" });
-            return;
-          } else {
-            throw new Error("Failed to deliver video across all transport tiers");
-          }
-        } catch (vidError) {
-          logger.error({ vidError: safeErrorMetadata(vidError) }, "Natural video generation failed; notifying user with quota protection");
-          if (progressMessageId) await ctx.api.deleteMessage(ctx.chat.id, progressMessageId).catch(() => {});
-          if (statusMessageId) await ctx.api.deleteMessage(ctx.chat.id, statusMessageId).catch(() => {});
-          const friendlyNotice = [
-            "🎬 <b>Video Engine Under Heavy Load</b>",
-            "",
-            "Our generative video diffusion engines are currently experiencing high demand or transient provider limits. Your video generation quota was <b>not consumed</b>.",
-            "",
-            "Please try your video request again in a few moments, or feel free to request an image generation instead!"
-          ].join("\n");
-          await ctx.reply(friendlyNotice, { parse_mode: "HTML" });
+          if (registeredRequest) requestRegistryService.markCompleted(registeredRequest.requestId, { mediaType: "video" });
           return;
-        } finally { stopVideoPresence(); }
+        } catch (vidError: any) {
+          logger.error({ vidError: safeErrorMetadata(vidError) }, "Natural video queuing failed");
+          await ctx.reply(`Sorry, video generation could not be queued: ${vidError.message || "Engine unavailable"}. Your quota was not consumed.`);
+          return;
+        }
       }
 
       if (!media && adaptivePlan.detectedIntent === "image_generation" && adaptivePlan.imagePrompt) {
-        const userTier = await userTierService.getUserTier(ctx.from.id);
         const quotaCheck = await userTierService.checkToolQuota(ctx.from.id, "image");
         if (!quotaCheck.allowed) {
           await ctx.reply(quotaCheck.message || "Image quota exceeded.");
           return;
         }
-        const stopImagePresence = startTypingIndicator(ctx, { state: "generating", toolName: "image_generation", operationLabel: "image generation", chatAction: "upload_photo", userFacingProgress: false });
+
         try {
-          const mediaResult = await UnifiedMediaEngine.execute({
+          const safeRaw = adaptivePlan.imagePrompt.length > 180 ? adaptivePlan.imagePrompt.slice(0, 175) + "..." : adaptivePlan.imagePrompt;
+          await ctx.reply(
+            `🎨 <b>Image Request Queued</b>\n\n<b>Prompt:</b> <i>${escapeHtml(safeRaw)}</i>\n\n⏳ <i>Synthesizing via diffusion engine. I will deliver the image directly here once synthesis completes!</i>`,
+            { parse_mode: "HTML" }
+          );
+
+          await runStage("user_message_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () =>
+            conversations.addMessage(globalContextData.conversationId, "user", prompt)
+          );
+
+          await mediaJobOrchestratorService.enqueueJob({
+            ownerUserId: ctx.from.id,
+            conversationId: globalContextData.conversationId,
             modality: "image",
             prompt: adaptivePlan.imagePrompt,
-            executionMode: "live",
-            userId: ctx.from.id,
-            userTier,
             sourceInterface: "telegram",
+            telegramChatId: ctx.chat.id,
           });
 
-          if (!mediaResult.success || !mediaResult.artifact?.buffer) {
-            throw new Error(mediaResult.job.errorMessage || "Image generation did not produce a valid image buffer");
-          }
-
-          const safeRaw = (adaptivePlan.imagePrompt || "").length > 180 ? adaptivePlan.imagePrompt.slice(0, 175) + "..." : adaptivePlan.imagePrompt;
-          const safeEnhanced = (mediaResult.job.enhancedPrompt || "").length > 200 ? mediaResult.job.enhancedPrompt.slice(0, 195) + "..." : (mediaResult.job.enhancedPrompt || "");
-          const isEnhancedDiff = safeEnhanced.toLowerCase() !== safeRaw.toLowerCase() && safeEnhanced.length > 5;
-
-          const imageBadge = `<i>Engine: ${escapeHtml(mediaResult.job.actualProvider)} (${escapeHtml(mediaResult.job.actualModel)})</i>`;
-          const enhancerTag = `<i>✨ AI Enhanced:</i>`;
-          
-          const htmlCaption = [
-            `<b>🎨 Prompt:</b> ${escapeHtml(safeRaw)}`,
-            isEnhancedDiff ? `${enhancerTag} ${escapeHtml(safeEnhanced)}` : null,
-            imageBadge,
-          ].filter(Boolean).join("\n\n");
-          const plainCaption = [
-            `🎨 Prompt: ${safeRaw}`,
-            isEnhancedDiff ? `✨ AI Enhanced: ${safeEnhanced}` : null,
-            `Engine: ${mediaResult.job.actualProvider} (${mediaResult.job.actualModel})`,
-          ].filter(Boolean).join("\n\n");
-
-          let photoDelivered = false;
-          if (Buffer.isBuffer(mediaResult.artifact.buffer) && mediaResult.artifact.buffer.length >= 500) {
-            try {
-              await ctx.replyWithPhoto(new InputFile(mediaResult.artifact.buffer, "image.png"), {
-                caption: htmlCaption,
-                parse_mode: "HTML",
-                reply_markup: feedbackKeyboard(),
-              });
-              photoDelivered = true;
-            } catch (htmlErr) {
-              logger.warn({ stage: "image_caption_parse_error", error: safeErrorMetadata(htmlErr) }, "HTML photo caption failed; retrying with plain text");
-              try {
-                await ctx.replyWithPhoto(new InputFile(mediaResult.artifact.buffer, "image.png"), {
-                  caption: plainCaption,
-                  reply_markup: feedbackKeyboard(),
-                });
-                photoDelivered = true;
-              } catch (plainErr) {
-                logger.warn({ stage: "image_plain_caption_failed", error: safeErrorMetadata(plainErr) }, "Plain text photo caption failed; retrying without caption");
-                try {
-                  await ctx.replyWithPhoto(new InputFile(mediaResult.artifact.buffer, "image.png"), {
-                    reply_markup: feedbackKeyboard(),
-                  });
-                  photoDelivered = true;
-                } catch (noCapErr) {
-                  logger.warn({ stage: "image_buffer_upload_failed", error: safeErrorMetadata(noCapErr) }, "Direct image buffer upload failed");
-                }
-              }
-            }
-          }
-
-          // Cloudinary / Public URL delivery fallback
-          if (!photoDelivered && mediaResult.artifact?.publicUrl && (mediaResult.artifact.publicUrl.startsWith("http://") || mediaResult.artifact.publicUrl.startsWith("https://"))) {
-            const directUrl = mediaResult.artifact.publicUrl;
-            try {
-              await ctx.replyWithPhoto(directUrl, { caption: plainCaption, reply_markup: feedbackKeyboard() });
-              photoDelivered = true;
-            } catch (urlErr) {
-              logger.warn({ stage: "image_url_photo_failed", error: safeErrorMetadata(urlErr) }, "Photo delivery via Cloudinary URL failed; sending direct link");
-              try {
-                await ctx.reply(`🎨 <b>Here is your generated image:</b>\n<a href="${escapeHtml(directUrl)}">${escapeHtml(safeRaw)}</a>`, {
-                  parse_mode: "HTML",
-                  reply_markup: feedbackKeyboard(),
-                });
-                photoDelivered = true;
-              } catch (linkErr) {
-                logger.error({ stage: "image_link_failed", error: safeErrorMetadata(linkErr) }, "Direct link delivery failed");
-              }
-            }
-          }
-
-          if (photoDelivered) {
-            await runStage("user_message_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => conversations.addMessage(globalContextData.conversationId, "user", prompt));
-            await runStage("model_response_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => conversations.addMessage(globalContextData.conversationId, "model", `[Generated Image (${mediaResult.job.actualProvider}) for: "${safeRaw}"]`));
-            await userTierService.consumeToolQuota(ctx.from.id, "image");
-            if (registeredRequest) requestRegistryService.markCompleted(registeredRequest.requestId, { provider: mediaResult.job.actualProvider, mediaType: "image" });
-            return;
-          } else {
-            throw new Error("Failed to deliver generated image through any transport tier");
-          }
-        } catch (imgError) {
-          logger.error({ stage: "image_generation", error: safeErrorMetadata(imgError) }, "Natural image generation delivery failed; notifying user");
-          await ctx.reply("Sorry, I encountered an issue delivering your generated image to Telegram. Your generation quota was not consumed. Please try again or rephrase your prompt.");
+          if (registeredRequest) requestRegistryService.markCompleted(registeredRequest.requestId, { mediaType: "image" });
           return;
-        } finally { stopImagePresence(); }
+        } catch (imgError: any) {
+          logger.error({ stage: "image_generation", error: safeErrorMetadata(imgError) }, "Natural image queuing failed");
+          await ctx.reply(`Sorry, image generation could not be queued: ${imgError.message || "Engine unavailable"}. Your quota was not consumed.`);
+          return;
+        }
       }
 
       const assembledContext = await contextManagerService.assembleContext({ telegramUserId: ctx.from.id, conversationId: globalContextData.conversationId, userMessage: currentPrompt, effectiveModeInstruction: adaptivePlan.effectiveModeInstruction, activeTask: activeTaskContext, history: globalContextData.recentHistory });

@@ -3,6 +3,8 @@ import {
   boolean,
   index,
   integer,
+  jsonb,
+  numeric,
   pgTable,
   serial,
   text,
@@ -72,6 +74,9 @@ export const messagesTable = pgTable(
     source: text("source").default("web").notNull(),
     audioUrl: text("audio_url"),
     tokenCount: integer("token_count"),
+    assetId: integer("asset_id"),
+    jobId: text("job_id"),
+    metadataJson: text("metadata_json"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
@@ -437,6 +442,65 @@ export const userTimezonesTable = pgTable(
   ],
 );
 
+export const mediaAssetsTable = pgTable(
+  "media_assets",
+  {
+    id: serial("id").primaryKey(),
+    ownerUserId: bigint("owner_user_id", { mode: "number" }).notNull(),
+    conversationId: integer("conversation_id"),
+    type: text("type").notNull(),
+    mimeType: text("mime_type").notNull(),
+    width: integer("width"),
+    height: integer("height"),
+    durationSeconds: numeric("duration_seconds"),
+    engine: text("engine").notNull(),
+    prompt: text("prompt").notNull(),
+    enhancedPrompt: text("enhanced_prompt"),
+    paramsJson: jsonb("params_json").default({}).notNull(),
+    url: text("url").notNull(),
+    storageProvider: text("storage_provider").default("cloudinary").notNull(),
+    storagePublicId: text("storage_public_id"),
+    status: text("status").default("ready").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("media_assets_owner_idx").on(table.ownerUserId, table.createdAt),
+    index("media_assets_conv_idx").on(table.conversationId, table.createdAt),
+  ],
+);
+
+export const mediaJobsTable = pgTable(
+  "media_jobs",
+  {
+    jobId: text("job_id").primaryKey(),
+    idempotencyKey: text("idempotency_key").unique(),
+    ownerUserId: bigint("owner_user_id", { mode: "number" }).notNull(),
+    conversationId: integer("conversation_id"),
+    messageId: integer("message_id"),
+    modality: text("modality").notNull(),
+    prompt: text("prompt").notNull(),
+    enhancedPrompt: text("enhanced_prompt"),
+    paramsJson: jsonb("params_json").default({}).notNull(),
+    status: text("status").default("queued").notNull(),
+    failureReason: text("failure_reason"),
+    errorMessage: text("error_message"),
+    assetId: integer("asset_id"),
+    engine: text("engine"),
+    requestedEngine: text("requested_engine"),
+    failoversJson: jsonb("failovers_json").default([]).notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("media_jobs_owner_status_idx").on(table.ownerUserId, table.status),
+    index("media_jobs_conv_idx").on(table.conversationId, table.createdAt),
+    index("media_jobs_idempotency_idx").on(table.idempotencyKey),
+  ],
+);
+
 export type User = typeof usersTable.$inferSelect;
 export type Conversation = typeof conversationsTable.$inferSelect;
 export type Message = typeof messagesTable.$inferSelect;
@@ -453,4 +517,6 @@ export type NodeExecutionRecord = typeof nodeExecutionsTable.$inferSelect;
 export type ExecutionLeaseRecord = typeof executionLeasesTable.$inferSelect;
 export type ExecutionApprovalRecord = typeof executionApprovalsTable.$inferSelect;
 export type UserTimezone = typeof userTimezonesTable.$inferSelect;
+export type MediaAsset = typeof mediaAssetsTable.$inferSelect;
+export type MediaJobRecord = typeof mediaJobsTable.$inferSelect;
 

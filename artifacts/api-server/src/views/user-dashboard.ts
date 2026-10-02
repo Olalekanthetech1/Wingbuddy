@@ -106,6 +106,41 @@ export function renderUserDashboardHtml(): string {
       overflow-wrap: break-word;
       max-width: 100%;
     }
+
+    /* Bottom Navigation 5-Column Equal Grid */
+    #unified-bottom-nav {
+      position: fixed;
+      inset: auto 0 0 0;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+    #unified-bottom-nav button {
+      min-width: 0;
+      min-height: 56px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 2px;
+      font-size: 11px;
+    }
+    #unified-bottom-nav button span.label {
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #unified-bottom-nav .icon-wrap {
+      position: relative;
+    }
+    #badge-task-count {
+      position: absolute;
+      top: -4px;
+      right: -8px;
+      min-width: 16px;
+      font-size: 10px;
+    }
   </style>
 </head>
 <body class="h-screen flex flex-col antialiased overflow-hidden selection:bg-brand-500 selection:text-white bg-app-bg text-app-text">
@@ -312,7 +347,7 @@ export function renderUserDashboardHtml(): string {
             </div>
 
             <!-- Tile 3: Reminders & Alerts -->
-            <div onclick="switchTab('reminders')" class="glass-panel hover:border-brand-500/40 rounded-2xl p-4 sm:p-5 transition cursor-pointer group">
+            <div onclick="switchTab('tasks'); switchTasksSubtab('reminders');" class="glass-panel hover:border-brand-500/40 rounded-2xl p-4 sm:p-5 transition cursor-pointer group">
               <div class="flex items-center justify-between text-app-text opacity-60 mb-2">
                 <span class="text-xs font-semibold">Reminders</span>
                 <span class="text-base group-hover:scale-110 transition">⏰</span>
@@ -480,6 +515,19 @@ export function renderUserDashboardHtml(): string {
         <!-- Chat Input Form -->
         <div class="p-4 border-t border-app-border bg-app-surface shrink-0 pb-20 sm:pb-24">
           <div class="max-w-4xl mx-auto">
+            <!-- Capability-Aware Media Generation Toolbar -->
+            <div id="media-capability-bar" class="flex items-center gap-2 mb-2 px-1 text-xs">
+              <button id="btn-quick-image" type="button" onclick="triggerMediaShortcut('image')" class="px-2.5 py-1 rounded-lg border text-[11px] font-medium flex items-center gap-1.5 transition cursor-pointer bg-app-highlight border-app-border text-app-text hover:border-brand-500/50">
+                <span>🎨 /image</span>
+                <span id="badge-image-status" class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+              </button>
+              <button id="btn-quick-video" type="button" onclick="triggerMediaShortcut('video')" class="px-2.5 py-1 rounded-lg border text-[11px] font-medium flex items-center gap-1.5 transition cursor-pointer bg-app-highlight border-app-border text-app-text hover:border-brand-500/50">
+                <span>🎬 /video</span>
+                <span id="badge-video-status" class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+              </button>
+              <span id="media-capability-info" class="text-[10px] text-app-text opacity-50 truncate hidden sm:inline">Async jobs • Cloudinary persistent vault</span>
+            </div>
+
             <form id="chat-form" onsubmit="handleChatSubmit(event)" class="relative flex items-end gap-2">
               <textarea id="chat-input" rows="1" placeholder="Type a message or task goal..."
                         class="w-full rounded-xl bg-app-highlight border border-app-border focus:border-brand-500 px-4 py-3.5 text-sm text-app-text placeholder:text-app-text placeholder:opacity-40 focus:outline-none resize-none min-h-[50px] max-h-[160px] leading-relaxed transition-[height] duration-75"></textarea>
@@ -491,21 +539,63 @@ export function renderUserDashboardHtml(): string {
         </div>
       </section>
 
-      <!-- TAB 2: SCHEDULED TASKS -->
+      <!-- TAB 2: SCHEDULED TASKS & REMINDERS (Folded Segmented Control) -->
       <section id="tab-view-tasks" class="hidden flex-1 overflow-y-auto p-4 sm:p-8 max-w-5xl w-full mx-auto space-y-6 pb-28 sm:pb-36">
-        <div class="flex items-center justify-between border-b border-app-border pb-4">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-app-border pb-4">
           <div>
-            <h2 class="text-xl font-bold text-app-text">Scheduled Tasks &amp; Autonomous Digests</h2>
-            <p class="text-xs text-app-text opacity-60 mt-1">Autonomous multi-step jobs executing in background and publishing digests to Telegram &amp; Web.</p>
+            <h2 class="text-xl font-bold text-app-text" id="tasks-header-title">Scheduled Work &amp; Reminders</h2>
+            <p class="text-xs text-app-text opacity-60 mt-1" id="tasks-header-subtitle">Autonomous background jobs and proactive timed alerts synced across Telegram &amp; Web.</p>
           </div>
-          <button onclick="openCreateTaskModal()" class="px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold transition flex items-center gap-2">
-            <span>+ Create Task</span>
-          </button>
+
+          <!-- Segmented Tab Switcher (Tasks | Reminders) -->
+          <div class="flex items-center p-1 bg-app-highlight border border-app-border rounded-xl shrink-0">
+            <button id="tasks-segment-btn-tasks" type="button" onclick="switchTasksSubtab('tasks')" class="px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 bg-brand-600 text-white shadow-sm cursor-pointer">
+              <span>⚡ Tasks</span>
+              <span id="tasks-subtab-badge" class="hidden px-1.5 py-0.2 rounded-full text-[10px] bg-white/20 text-white font-bold leading-none">0</span>
+            </button>
+            <button id="tasks-segment-btn-reminders" type="button" onclick="switchTasksSubtab('reminders')" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 text-app-text opacity-60 hover:opacity-100 hover:text-app-text cursor-pointer">
+              <span>⏰ Reminders</span>
+              <span id="reminders-subtab-badge" class="hidden px-1.5 py-0.2 rounded-full text-[10px] bg-app-surface text-app-text font-bold leading-none">0</span>
+            </button>
+          </div>
         </div>
 
-        <div id="tasks-list" class="grid grid-cols-1 gap-4">
-          <!-- Tasks dynamically rendered here -->
-          <div class="text-center py-12 text-app-text opacity-40 text-xs">Loading active tasks...</div>
+        <!-- SUBTAB 1: AUTONOMOUS TASKS -->
+        <div id="tasks-subtab-tasks" class="space-y-4">
+          <div class="flex items-center justify-between gap-2 flex-wrap">
+            <span class="text-xs text-app-text opacity-70 font-semibold">Autonomous multi-step jobs</span>
+            <div class="flex items-center gap-2 flex-wrap">
+              <button onclick="stopAllTasks()" id="btn-stop-all-tasks" class="px-3.5 py-2 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 dark:text-amber-400 border border-amber-500/20 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer" title="Stop all running or pending autonomous tasks">
+                <span>⏹️ Stop All</span>
+              </button>
+              <button onclick="clearAllTasks()" id="btn-clear-all-tasks" class="px-3.5 py-2 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-500 dark:text-red-400 border border-red-500/20 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer" title="Permanently delete all tasks">
+                <span>🗑️ Clear All</span>
+              </button>
+              <button onclick="openCreateTaskModal()" class="px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-sm shadow-brand-600/20 cursor-pointer">
+                <span>+ Create Task</span>
+              </button>
+            </div>
+          </div>
+
+          <div id="tasks-list" class="grid grid-cols-1 gap-4">
+            <!-- Tasks dynamically rendered here -->
+            <div class="text-center py-12 text-app-text opacity-40 text-xs">Loading active tasks...</div>
+          </div>
+        </div>
+
+        <!-- SUBTAB 2: PROACTIVE REMINDERS -->
+        <div id="tasks-subtab-reminders" class="hidden space-y-4">
+          <div class="flex items-center justify-between gap-2 flex-wrap">
+            <span class="text-xs text-app-text opacity-70 font-semibold">Scheduled alerts &amp; alarms</span>
+            <button onclick="openCreateReminderModal()" class="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow-sm">
+              <span>+ Create Reminder</span>
+            </button>
+          </div>
+
+          <div id="reminders-list" class="space-y-3">
+            <!-- Reminders dynamically rendered here -->
+            <div class="text-center py-12 text-app-text opacity-40 text-xs">Loading reminders...</div>
+          </div>
         </div>
       </section>
 
@@ -524,24 +614,6 @@ export function renderUserDashboardHtml(): string {
         <div id="memory-list" class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <!-- Memories dynamically rendered here -->
           <div class="text-center py-12 text-app-text opacity-40 text-xs">Loading user memory vault...</div>
-        </div>
-      </section>
-
-      <!-- TAB 4: REMINDERS -->
-      <section id="tab-view-reminders" class="hidden flex-1 overflow-y-auto p-4 sm:p-8 max-w-5xl w-full mx-auto space-y-6 pb-28 sm:pb-36">
-        <div class="flex items-center justify-between border-b border-app-border pb-4">
-          <div>
-            <h2 class="text-xl font-bold text-app-text">Proactive Reminders &amp; Alarms</h2>
-            <p class="text-xs text-app-text opacity-60 mt-1">Scheduled alerts pushed to your Telegram and active Web workspace.</p>
-          </div>
-          <button onclick="openCreateReminderModal()" class="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold transition flex items-center gap-2">
-            <span>+ Create Reminder</span>
-          </button>
-        </div>
-
-        <div id="reminders-list" class="space-y-3">
-          <!-- Reminders dynamically rendered here -->
-          <div class="text-center py-12 text-app-text opacity-40 text-xs">Loading reminders...</div>
         </div>
       </section>
 
@@ -698,32 +770,38 @@ export function renderUserDashboardHtml(): string {
     </main>
   </div>
 
-  <!-- UNIFIED FLOATING BOTTOM NAVIGATION DOCK -->
-  <nav id="unified-bottom-nav" class="fixed bottom-0 sm:bottom-4 left-0 right-0 sm:left-1/2 sm:-translate-x-1/2 sm:w-auto z-40 bg-app-bg/95 sm:bg-app-surface/95 backdrop-blur-xl sm:backdrop-blur-2xl border-t sm:border border-app-border px-2 sm:px-3 py-1.5 sm:py-2 flex items-center justify-around sm:justify-center gap-1 sm:gap-2 shadow-2xl sm:shadow-[0_20px_50px_rgba(0,0,0,0.85)] sm:rounded-2xl">
-    <button onclick="switchTab('overview')" id="mobile-nav-btn-overview" class="flex flex-col sm:flex-row items-center gap-0.5 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-brand-600 dark:text-brand-300 bg-brand-500/10 dark:bg-brand-500/20 border border-brand-500/30 dark:border-brand-500/40 text-[10px] sm:text-xs font-bold transition shadow-sm">
-      <span class="text-base sm:text-lg">📊</span>
-      <span>Overview</span>
+  <!-- UNIFIED 5-TAB EQUAL-WIDTH FLOATING BOTTOM NAVIGATION -->
+  <nav id="unified-bottom-nav" class="fixed inset-x-0 bottom-0 z-40 bg-app-bg/95 sm:bg-app-surface/95 backdrop-blur-xl border-t border-app-border grid grid-cols-5 w-full pb-[env(safe-area-inset-bottom,0px)] shadow-2xl" role="navigation" aria-label="Main Navigation">
+    <button onclick="switchTab('overview')" id="mobile-nav-btn-overview" class="min-w-0 min-h-[56px] py-1 flex flex-col items-center justify-center gap-0.5 text-[11px] font-semibold text-brand-600 dark:text-brand-300 transition cursor-pointer" aria-current="page">
+      <div class="icon-wrap relative inline-flex items-center justify-center w-8 h-8 rounded-full bg-brand-500/15 text-brand-600 dark:text-brand-400">
+        <span class="text-base leading-none">📊</span>
+      </div>
+      <span class="label max-w-full overflow-hidden text-ellipsis whitespace-nowrap px-1 text-brand-600 dark:text-brand-300 font-bold">Overview</span>
     </button>
-    <button onclick="switchTab('chat')" id="mobile-nav-btn-chat" class="flex flex-col sm:flex-row items-center gap-0.5 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-app-text/50 hover:text-app-text hover:bg-app-highlight border border-transparent text-[10px] sm:text-xs font-semibold transition">
-      <span class="text-base sm:text-lg">💬</span>
-      <span>Chat</span>
+    <button onclick="switchTab('chat')" id="mobile-nav-btn-chat" class="min-w-0 min-h-[56px] py-1 flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium text-app-text/60 hover:text-app-text transition cursor-pointer">
+      <div class="icon-wrap relative inline-flex items-center justify-center w-8 h-8 rounded-full text-app-text/70">
+        <span class="text-base leading-none">💬</span>
+      </div>
+      <span class="label max-w-full overflow-hidden text-ellipsis whitespace-nowrap px-1 text-app-text/60">Chat</span>
     </button>
-    <button onclick="switchTab('tasks')" id="mobile-nav-btn-tasks" class="flex flex-col sm:flex-row items-center gap-0.5 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-app-text/50 hover:text-app-text hover:bg-app-highlight border border-transparent text-[10px] sm:text-xs font-semibold transition relative">
-      <span class="text-base sm:text-lg">⚡</span>
-      <span>Tasks</span>
-      <span id="badge-task-count" class="px-1.5 py-0.2 rounded-full bg-brand-500/20 text-brand-600 dark:text-brand-400 text-[10px] font-bold">0</span>
+    <button onclick="switchTab('tasks')" id="mobile-nav-btn-tasks" class="min-w-0 min-h-[56px] py-1 flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium text-app-text/60 hover:text-app-text transition cursor-pointer">
+      <div class="icon-wrap relative inline-flex items-center justify-center w-8 h-8 rounded-full text-app-text/70">
+        <span class="text-base leading-none">⚡</span>
+        <span id="badge-task-count" class="hidden absolute -top-1 -right-2 min-w-[16px] h-4 px-1 rounded-full bg-brand-500 text-white text-[10px] font-bold flex items-center justify-center leading-none shadow-sm">0</span>
+      </div>
+      <span class="label max-w-full overflow-hidden text-ellipsis whitespace-nowrap px-1 text-app-text/60">Tasks</span>
     </button>
-    <button onclick="switchTab('memory')" id="mobile-nav-btn-memory" class="flex flex-col sm:flex-row items-center gap-0.5 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-app-text/50 hover:text-app-text hover:bg-app-highlight border border-transparent text-[10px] sm:text-xs font-semibold transition">
-      <span class="text-base sm:text-lg">🧠</span>
-      <span>Memory</span>
+    <button onclick="switchTab('memory')" id="mobile-nav-btn-memory" class="min-w-0 min-h-[56px] py-1 flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium text-app-text/60 hover:text-app-text transition cursor-pointer">
+      <div class="icon-wrap relative inline-flex items-center justify-center w-8 h-8 rounded-full text-app-text/70">
+        <span class="text-base leading-none">🧠</span>
+      </div>
+      <span class="label max-w-full overflow-hidden text-ellipsis whitespace-nowrap px-1 text-app-text/60">Memory</span>
     </button>
-    <button onclick="switchTab('reminders')" id="mobile-nav-btn-reminders" class="flex flex-col sm:flex-row items-center gap-0.5 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-app-text/50 hover:text-app-text hover:bg-app-highlight border border-transparent text-[10px] sm:text-xs font-semibold transition">
-      <span class="text-base sm:text-lg">⏰</span>
-      <span>Reminders</span>
-    </button>
-    <button onclick="switchTab('settings')" id="mobile-nav-btn-settings" class="flex flex-col sm:flex-row items-center gap-0.5 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-app-text/50 hover:text-app-text hover:bg-app-highlight border border-transparent text-[10px] sm:text-xs font-semibold transition">
-      <span class="text-base sm:text-lg">⚙️</span>
-      <span>Sync</span>
+    <button onclick="switchTab('settings')" id="mobile-nav-btn-settings" class="min-w-0 min-h-[56px] py-1 flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium text-app-text/60 hover:text-app-text transition cursor-pointer">
+      <div class="icon-wrap relative inline-flex items-center justify-center w-8 h-8 rounded-full text-app-text/70">
+        <span class="text-base leading-none">⚙️</span>
+      </div>
+      <span class="label max-w-full overflow-hidden text-ellipsis whitespace-nowrap px-1 text-app-text/60">Settings</span>
     </button>
   </nav>
 
@@ -1057,6 +1135,7 @@ export function renderUserDashboardHtml(): string {
         loadTasks();
         loadMemories();
         loadReminders();
+        loadMediaHealth();
 
         // Handle initial URL hash or tab routing
         const hash = (window.location.hash || '').replace('#', '');
@@ -1333,6 +1412,19 @@ export function renderUserDashboardHtml(): string {
         }
       });
 
+      sseEventSource.addEventListener('media_job_update', (e) => {
+        try {
+          const payload = JSON.parse(e.data);
+          if (payload.data) {
+            removeThinkingIndicator();
+            updateMediaJobBubble(payload.data);
+          }
+          loadOverview();
+        } catch (err) {
+          console.error('Failed parsing media_job_update SSE event:', err);
+        }
+      });
+
       sseEventSource.addEventListener('telegram_paired', (e) => {
         try {
           const payload = JSON.parse(e.data);
@@ -1584,6 +1676,326 @@ export function renderUserDashboardHtml(): string {
       if (bubble) bubble.remove();
     }
 
+    const activeMediaTimers = new Map();
+
+    function triggerMediaShortcut(modality) {
+      const input = document.getElementById('chat-input');
+      if (input) {
+        input.value = '/' + modality + ' ';
+        input.focus();
+      }
+    }
+
+    async function loadMediaHealth() {
+      try {
+        const res = await fetch('/api/media/health');
+        if (!res.ok) return;
+        const data = await res.json();
+        const btnImg = document.getElementById('btn-quick-image');
+        const badgeImg = document.getElementById('badge-image-status');
+        const btnVid = document.getElementById('btn-quick-video');
+        const badgeVid = document.getElementById('badge-video-status');
+        
+        if (data.image) {
+          if (data.image.available) {
+            if (badgeImg) badgeImg.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400';
+            if (btnImg) {
+              btnImg.title = 'Image diffusion ready: ' + data.image.provider + ' (' + data.image.model + ')';
+              btnImg.classList.remove('opacity-40', 'cursor-not-allowed');
+            }
+          } else {
+            if (badgeImg) badgeImg.className = 'w-1.5 h-1.5 rounded-full bg-rose-500';
+            if (btnImg) {
+              btnImg.title = 'Image engine offline: ' + (data.image.reason || 'No text-to-image model registered');
+              btnImg.classList.add('opacity-40');
+            }
+          }
+        }
+
+        if (data.video) {
+          if (data.video.available) {
+            if (badgeVid) badgeVid.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400';
+            if (btnVid) {
+              btnVid.title = 'Video diffusion ready: ' + data.video.provider + ' (' + data.video.model + ')';
+              btnVid.classList.remove('opacity-40', 'cursor-not-allowed');
+            }
+          } else {
+            if (badgeVid) badgeVid.className = 'w-1.5 h-1.5 rounded-full bg-rose-500';
+            if (btnVid) {
+              btnVid.title = 'Video engine offline: ' + (data.video.reason || 'No text-to-video model registered');
+              btnVid.classList.add('opacity-40');
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Failed querying media health:', err);
+      }
+    }
+
+    async function downloadMediaAsset(assetId) {
+      const token = localStorage.getItem('wb_session_token');
+      try {
+        const res = await fetch('/api/media/assets/' + assetId + '/download', {
+          headers: { 'Authorization': 'Bearer ' + token }
+        });
+        if (!res.ok) throw new Error('Download failed');
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const disposition = res.headers.get('content-disposition');
+        let filename = 'wingbuddy-media-' + assetId;
+        if (disposition && disposition.includes('filename=')) {
+          filename = disposition.split('filename=')[1].replace(/["']/g, '').trim();
+        }
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+      } catch (err) {
+        console.error('Download error:', err);
+        alert('Download error: ' + err.message);
+      }
+    }
+
+    async function regenerateMediaAsset(assetId) {
+      const token = localStorage.getItem('wb_session_token');
+      try {
+        const res = await fetch('/api/media/assets/' + assetId + '/regenerate', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token }
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed regenerating');
+        appendMessageToThread({
+          id: data.messageId,
+          jobId: data.job.jobId,
+          job: data.job,
+          role: 'model',
+          content: data.job.prompt,
+        }, true);
+      } catch (err) {
+        alert('Failed regenerating: ' + err.message);
+      }
+    }
+
+    async function varyMediaAsset(assetId) {
+      const variationPrompt = prompt('Enter nuance or style variation (e.g. "cinematic neon lighting", "make it darker", "cyberpunk anime style"):');
+      if (variationPrompt === null) return;
+      const token = localStorage.getItem('wb_session_token');
+      try {
+        const res = await fetch('/api/media/assets/' + assetId + '/vary', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+          body: JSON.stringify({ variationPrompt })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed creating variation');
+        appendMessageToThread({
+          id: data.messageId,
+          jobId: data.job.jobId,
+          job: data.job,
+          role: 'model',
+          content: data.job.prompt,
+        }, true);
+      } catch (err) {
+        alert('Failed creating variation: ' + err.message);
+      }
+    }
+
+    async function retryMediaJob(jobId) {
+      const token = localStorage.getItem('wb_session_token');
+      try {
+        const res = await fetch('/api/media/jobs/' + jobId + '/retry', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token }
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed retrying job');
+        appendMessageToThread({
+          id: data.messageId,
+          jobId: data.job.jobId,
+          job: data.job,
+          role: 'model',
+          content: data.job.prompt,
+        }, true);
+      } catch (err) {
+        alert('Failed retrying: ' + err.message);
+      }
+    }
+
+    function renderMediaAttachment(msg, bubbleEl) {
+      const asset = msg.asset || msg.job?.asset;
+      const job = msg.job;
+      const status = job ? job.status : (asset ? 'succeeded' : 'ready');
+      const modality = (asset ? asset.type : (job?.modality || msg.mediaType || 'image'));
+      let rawPrompt = (asset?.prompt || job?.prompt || msg.content || '');
+      rawPrompt = rawPrompt.replace(/^🎨 Generating image for: "|^🎬 Generating video for: "|"$|"/g, '');
+
+      // 1. COMPLETED ASSET (Succeeded)
+      if (asset && asset.url) {
+        const isVideo = asset.type === 'video' || (asset.mimeType && asset.mimeType.includes('video'));
+        const width = asset.width || (isVideo ? 576 : 1024);
+        const height = asset.height || (isVideo ? 320 : 1024);
+        const aspectRatio = width + ' / ' + height;
+        const engineLabel = asset.engine || 'Diffusion Engine';
+
+        let mediaTag = '';
+        if (isVideo) {
+          mediaTag = '<div class="relative w-full rounded-xl overflow-hidden bg-black/40 border border-app-border" style="aspect-ratio: ' + aspectRatio + '; max-height: 480px;">' +
+            '<video playsinline preload="metadata" controls class="w-full h-full object-contain" poster="">' +
+            '<source src="' + escapeHtml(asset.url) + '" type="' + escapeHtml(asset.mimeType || 'video/mp4') + '">' +
+            'Your browser does not support HTML5 video playback.' +
+            '</video></div>';
+        } else {
+          mediaTag = '<div class="relative w-full rounded-xl overflow-hidden bg-black/20 border border-app-border" style="aspect-ratio: ' + aspectRatio + '; max-height: 480px;">' +
+            '<img src="' + escapeHtml(asset.url) + '" alt="' + escapeHtml(rawPrompt) + '" loading="lazy" decoding="async" class="w-full h-full object-contain transition-opacity duration-300" />' +
+            '</div>';
+        }
+
+        return '<div class="space-y-3 w-full" data-asset-id="' + asset.id + '">' +
+          '<div class="flex items-center justify-between gap-2 text-xs font-semibold">' +
+            '<span class="flex items-center gap-1.5 text-brand-400">' +
+              '<span>' + (isVideo ? '🎬' : '🎨') + '</span>' +
+              '<span class="capitalize">' + escapeHtml(modality) + ' Synthesized</span>' +
+            '</span>' +
+            '<span class="text-[10px] px-2 py-0.5 rounded-full bg-app-highlight border border-app-border text-app-text opacity-75 font-mono">' +
+              escapeHtml(engineLabel) +
+            '</span>' +
+          '</div>' +
+          mediaTag +
+          '<p class="text-xs text-app-text opacity-80 leading-relaxed italic">"' + escapeHtml(rawPrompt) + '"</p>' +
+          '<div class="flex items-center gap-2 pt-1 border-t border-app-border/40 flex-wrap">' +
+            '<button onclick="downloadMediaAsset(' + asset.id + ')" class="px-2.5 py-1.5 rounded-lg bg-app-highlight hover:bg-app-border text-app-text text-xs font-medium flex items-center gap-1.5 transition cursor-pointer">' +
+              '<span>⬇️ Download</span>' +
+            '</button>' +
+            '<button onclick="regenerateMediaAsset(' + asset.id + ')" class="px-2.5 py-1.5 rounded-lg bg-app-highlight hover:bg-app-border text-app-text text-xs font-medium flex items-center gap-1.5 transition cursor-pointer" title="Re-run with exact same params">' +
+              '<span>🔄 Regenerate</span>' +
+            '</button>' +
+            '<button onclick="varyMediaAsset(' + asset.id + ')" class="px-2.5 py-1.5 rounded-lg bg-brand-500/10 hover:bg-brand-500/20 text-brand-400 border border-brand-500/20 text-xs font-medium flex items-center gap-1.5 transition cursor-pointer" title="Create variation with nuance prompt">' +
+              '<span>✨ Vary</span>' +
+            '</button>' +
+          '</div>' +
+        '</div>';
+      }
+
+      // 2. FAILED STATE
+      if (status === 'failed') {
+        let reasonMsg = job?.errorMessage || 'Generation failed.';
+        if (job?.failureReason === 'quota') {
+          reasonMsg = 'Daily generation quota reached. Upgrade tier or wait for reset.';
+        } else if (job?.failureReason === 'capacity') {
+          reasonMsg = 'Diffusion engine at peak capacity. Please retry in a moment.';
+        } else if (job?.failureReason === 'content_policy') {
+          reasonMsg = 'Prompt declined by provider content safety filters.';
+        } else if (job?.failureReason === 'timeout') {
+          reasonMsg = 'Generation timed out before completion.';
+        }
+
+        const jobId = job?.jobId || msg.jobId;
+
+        return '<div class="space-y-3 w-full p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-app-text" data-job-id="' + (jobId || '') + '">' +
+          '<div class="flex items-center justify-between gap-2">' +
+            '<span class="flex items-center gap-1.5 text-rose-400 font-bold text-xs">' +
+              '<span>⚠️</span>' +
+              '<span>' + (modality === 'video' ? 'Video' : 'Image') + ' Generation Failed</span>' +
+            '</span>' +
+            '<span class="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300">' +
+              escapeHtml(job?.failureReason || 'error') +
+            '</span>' +
+          '</div>' +
+          '<p class="text-xs text-rose-300/90 leading-relaxed">' + escapeHtml(reasonMsg) + '</p>' +
+          '<p class="text-[11px] opacity-60 italic">Prompt: "' + escapeHtml(rawPrompt) + '"</p>' +
+          (jobId ? '<div class="pt-1"><button onclick="retryMediaJob(&quot;' + jobId + '&quot;)" class="px-3 py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"><span>🔄 Retry</span></button></div>' : '') +
+        '</div>';
+      }
+
+      // 3. QUEUED OR RUNNING STATE (Honest progress: Indeterminate spinner + live elapsed timer)
+      const jobId = job?.jobId || msg.jobId || 'job-' + Date.now();
+      const startTime = job?.startedAt ? new Date(job.startedAt).getTime() : Date.now();
+      const initialElapsed = Math.max(0, Math.floor((Date.now() - startTime) / 1000));
+
+      // Setup live interval on bubble element
+      if (bubbleEl) {
+        if (activeMediaTimers.has(jobId)) {
+          clearInterval(activeMediaTimers.get(jobId));
+        }
+        const timerId = setInterval(() => {
+          const counterEl = bubbleEl.querySelector('[data-timer-id="' + jobId + '"]');
+          if (counterEl) {
+            const elapsed = Math.max(0, Math.floor((Date.now() - startTime) / 1000));
+            counterEl.textContent = elapsed + 's';
+          } else {
+            clearInterval(timerId);
+            activeMediaTimers.delete(jobId);
+          }
+        }, 1000);
+        activeMediaTimers.set(jobId, timerId);
+      }
+
+      return '<div class="space-y-3 w-full p-4 rounded-xl bg-app-highlight border border-brand-500/30 text-app-text" data-job-id="' + jobId + '">' +
+        '<div class="flex items-center justify-between gap-2">' +
+          '<span class="flex items-center gap-2 text-brand-400 font-bold text-xs">' +
+            '<span class="w-3.5 h-3.5 rounded-full border-2 border-brand-400 border-t-transparent animate-spin inline-block"></span>' +
+            '<span>' + (modality === 'video' ? '🎬 Synthesizing Video' : '🎨 Synthesizing Image') + '</span>' +
+          '</span>' +
+          '<span class="text-[11px] font-mono text-app-text opacity-70 flex items-center gap-1">' +
+            '<span>⏱️ Elapsed:</span>' +
+            '<span data-timer-id="' + jobId + '" class="font-bold text-brand-300">' + initialElapsed + 's</span>' +
+          '</span>' +
+        '</div>' +
+        '<div class="p-2.5 rounded-lg bg-app-surface/60 border border-app-border text-xs text-app-text opacity-90 leading-relaxed italic">"' + escapeHtml(rawPrompt) + '"</div>' +
+        '<div class="flex items-center justify-between text-[11px] opacity-60">' +
+          '<span>' + (status === 'running' ? 'Diffusing synthesized artifact...' : 'Queued in diffusion pipeline...') + '</span>' +
+          '<span class="text-[10px] font-mono">' + jobId + '</span>' +
+        '</div>' +
+      '</div>';
+    }
+
+    function updateMediaJobBubble(data) {
+      if (!data || !data.jobId) return;
+      const thread = document.getElementById('chat-thread');
+      if (!thread) return;
+
+      let bubble = thread.querySelector('[data-job-id="' + data.jobId + '"]');
+      if (!bubble && data.messageId) {
+        bubble = thread.querySelector('[data-msg-id="' + data.messageId + '"]');
+      }
+
+      if (bubble) {
+        if (activeMediaTimers.has(data.jobId)) {
+          clearInterval(activeMediaTimers.get(data.jobId));
+          activeMediaTimers.delete(data.jobId);
+        }
+
+        const msgObj = {
+          id: data.messageId || bubble.dataset.msgId,
+          jobId: data.jobId,
+          role: 'model',
+          content: data.prompt || '',
+          job: data,
+          asset: data.asset,
+          createdAt: data.createdAt,
+        };
+
+        const contentContainer = bubble.querySelector('.chat-content-body') || bubble.querySelector('.prose');
+        if (contentContainer) {
+          contentContainer.innerHTML = renderMediaAttachment(msgObj, bubble);
+        }
+      } else {
+        appendMessageToThread({
+          id: data.messageId,
+          jobId: data.jobId,
+          role: 'model',
+          content: data.prompt,
+          job: data,
+          asset: data.asset,
+          createdAt: data.createdAt || new Date(),
+        }, true);
+      }
+    }
+
     function appendMessageToThread(msg, shouldScroll = true) {
       if (!msg) return;
       const isUser = msg.role === 'user';
@@ -1627,7 +2039,7 @@ export function renderUserDashboardHtml(): string {
       }
 
       // 3. Prevent duplicate assistant/model messages with identical content in short succession
-      if (!isUser && msg.content) {
+      if (!isUser && msg.content && !msg.asset && !msg.job) {
         const lastMsgBubble = thread.lastElementChild;
         if (lastMsgBubble && lastMsgBubble.dataset.role === 'model' && lastMsgBubble.dataset.content === msg.content) {
           if (msgIdStr) renderedMessageIds.add(msgIdStr);
@@ -1648,6 +2060,8 @@ export function renderUserDashboardHtml(): string {
       if (msgIdStr) bubble.dataset.msgId = msgIdStr;
       if (clientMsgId) bubble.dataset.clientMsgId = clientMsgId;
       if (msg.isOptimistic) bubble.dataset.optimistic = 'true';
+      if (msg.jobId || msg.job?.jobId) bubble.dataset.jobId = msg.jobId || msg.job?.jobId;
+      if (msg.asset?.id) bubble.dataset.assetId = msg.asset.id;
 
       let sourceBadge = '';
       if (msg.source === 'telegram_voice') {
@@ -1658,7 +2072,13 @@ export function renderUserDashboardHtml(): string {
         sourceBadge = '<span class="px-1.5 py-0.2 rounded bg-app-highlight text-app-text opacity-70 text-[9px] font-mono">💻 Web</span>';
       }
 
-      const formattedContent = isUser ? escapeHtml(msg.content) : (typeof marked !== 'undefined' ? marked.parse(msg.content || '') : escapeHtml(msg.content || ''));
+      const isMedia = Boolean(msg.asset || msg.job || msg.jobId);
+      let innerContent = '';
+      if (isMedia) {
+        innerContent = renderMediaAttachment(msg, bubble);
+      } else {
+        innerContent = isUser ? escapeHtml(msg.content) : (typeof marked !== 'undefined' ? marked.parse(msg.content || '') : escapeHtml(msg.content || ''));
+      }
 
       bubble.innerHTML = \`
         <div class="max-w-[88%] sm:max-w-[75%] rounded-2xl p-4 \${isUser ? 'chat-bubble-user rounded-tr-sm' : 'chat-bubble-ai rounded-tl-sm'} space-y-1.5 shadow-md break-words">
@@ -1669,7 +2089,7 @@ export function renderUserDashboardHtml(): string {
               <span>\${new Date(msg.createdAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
             </div>
           </div>
-          <div class="text-sm leading-relaxed prose prose-invert max-w-none break-words">\${formattedContent}</div>
+          <div class="text-sm leading-relaxed prose prose-invert max-w-none break-words chat-content-body">\${innerContent}</div>
         </div>
       \`;
 
@@ -1808,15 +2228,55 @@ export function renderUserDashboardHtml(): string {
       }
     }
 
-    async function clearChatHistory() {
-      if (!confirm('Are you sure you want to clear your conversation history?')) return;
-      const token = localStorage.getItem('wb_session_token');
-      await fetch('/api/user/chat/clear', {
-        method: 'DELETE',
-        headers: { 'Authorization': 'Bearer ' + token }
-      });
-      renderedMessageIds.clear();
-      loadChatMessages();
+    function updateTasksNavBadge(count) {
+      const badge = document.getElementById('badge-task-count');
+      if (badge) {
+        if (count > 0) {
+          badge.innerText = String(count);
+          badge.classList.remove('hidden');
+          badge.classList.add('flex');
+        } else {
+          badge.innerText = '0';
+          badge.classList.add('hidden');
+          badge.classList.remove('flex');
+        }
+      }
+      const taskSubBadge = document.getElementById('tasks-subtab-badge');
+      if (taskSubBadge) {
+        taskSubBadge.innerText = String(count);
+        if (count > 0) taskSubBadge.classList.remove('hidden');
+        else taskSubBadge.classList.add('hidden');
+      }
+    }
+
+    function formatMemoryReadableTitle(mem) {
+      if (!mem) return 'Memory Note';
+      if (mem.summary && typeof mem.summary === 'string' && mem.summary.trim()) {
+        return mem.summary.trim();
+      }
+      if (mem.content && typeof mem.content === 'string' && mem.content.trim()) {
+        const cleanContent = mem.content.trim();
+        const firstLine = cleanContent.split(String.fromCharCode(10))[0].trim();
+        if (firstLine.length <= 48) {
+          return firstLine.charAt(0).toUpperCase() + firstLine.slice(1);
+        }
+        const match = firstLine.match(/^([^.!?]{5,45}[.!?]?)/);
+        if (match && match[1]) {
+          return match[1].charAt(0).toUpperCase() + match[1].slice(1);
+        }
+        return firstLine.slice(0, 42).trim() + '...';
+      }
+      if (mem.key && typeof mem.key === 'string') {
+        const cleanKey = mem.key
+          .replace(/^(explicit_fact|fact|pref|memory)_[0-9]+(_[0-9]+)?/i, '')
+          .replace(/^(pref_|user_|fact_)/i, '')
+          .replace(/_/g, ' ')
+          .trim();
+        if (cleanKey) {
+          return cleanKey.charAt(0).toUpperCase() + cleanKey.slice(1);
+        }
+      }
+      return 'Saved Memory';
     }
 
     // Tasks Management
@@ -1828,31 +2288,54 @@ export function renderUserDashboardHtml(): string {
         });
         const data = await res.json();
         const list = document.getElementById('tasks-list');
+        if (!list) return;
         list.innerHTML = '';
 
-        if (!data.tasks || data.tasks.length === 0) {
+        const allTasks = data.tasks || [];
+        const runningOrWaiting = allTasks.filter(t => ['active', 'pending', 'in_progress', 'waiting'].includes(t.status));
+        updateTasksNavBadge(runningOrWaiting.length);
+
+        if (allTasks.length === 0) {
           list.innerHTML = '<div class="glass-panel rounded-2xl p-8 text-center text-app-text opacity-50 text-xs">No autonomous tasks created yet. Click "+ Create Task" to automate recurring research or workflows.</div>';
           return;
         }
 
-        document.getElementById('badge-task-count').innerText = data.tasks.length;
-
         data.tasks.forEach(task => {
           const card = document.createElement('div');
           card.className = 'glass-panel rounded-2xl p-5 space-y-3';
+          const isRunning = ['active', 'pending', 'in_progress', 'waiting'].includes(task.status);
+          const isCancelled = task.status === 'cancelled';
+          const isCompleted = task.status === 'completed';
+          const badgeClass = isRunning
+            ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30'
+            : isCancelled
+            ? 'bg-red-500/10 text-red-500 dark:text-red-400 border border-red-500/20'
+            : isCompleted
+            ? 'bg-sky-500/20 text-sky-600 dark:text-sky-400 border border-sky-500/30'
+            : 'bg-app-highlight text-app-text opacity-60 border border-app-border';
+
           card.innerHTML = \`
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2.5">
-                <span class="w-8 h-8 rounded-lg bg-brand-500/10 text-brand-500 dark:text-brand-400 flex items-center justify-center font-bold text-sm">⚡</span>
-                <div>
-                  <h3 class="font-bold text-app-text text-sm">\${escapeHtml(task.title)} <span class="text-app-text opacity-40 text-xs font-mono font-normal">#\${task.id}</span></h3>
-                  <p class="text-xs text-app-text opacity-60 mt-0.5">\${escapeHtml(task.goal)}</p>
+            <div class="flex items-center justify-between gap-3">
+              <div class="flex items-center gap-2.5 min-w-0">
+                <span class="w-8 h-8 rounded-lg bg-brand-500/10 text-brand-500 dark:text-brand-400 flex items-center justify-center font-bold text-sm shrink-0">⚡</span>
+                <div class="min-w-0">
+                  <h3 class="font-bold text-app-text text-sm truncate">\${escapeHtml(task.title)} <span class="text-app-text opacity-40 text-xs font-mono font-normal">#\${task.id}</span></h3>
+                  <p class="text-xs text-app-text opacity-60 mt-0.5 line-clamp-2">\${escapeHtml(task.goal)}</p>
                 </div>
               </div>
-              <div class="flex items-center gap-2">
-                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase \${task.status === 'active' ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400' : 'bg-app-highlight text-app-text opacity-50'}">\${task.status}</span>
-                <button onclick="runTaskNow('\${task.id}')" class="px-3 py-1 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold transition flex items-center gap-1">
-                  <span>⚡ Run Now</span>
+              <div class="flex items-center gap-2 shrink-0">
+                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase \${badgeClass}">\${escapeHtml(task.status)}</span>
+                \${isRunning ? \`
+                  <button onclick="stopSingleTask('\${task.id}')" class="px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-500 dark:text-amber-400 border border-amber-500/30 text-xs font-bold transition flex items-center gap-1 cursor-pointer" title="Stop this active task">
+                    <span>⏹️ Stop</span>
+                  </button>
+                \` : \`
+                  <button onclick="runTaskNow('\${task.id}')" class="px-2.5 py-1 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold transition flex items-center gap-1 cursor-pointer" title="Run task now">
+                    <span>⚡ Run</span>
+                  </button>
+                \`}
+                <button onclick="deleteSingleTask('\${task.id}')" class="p-1.5 rounded-lg text-app-text opacity-40 hover:opacity-100 hover:text-red-500 hover:bg-red-500/10 transition cursor-pointer" title="Delete this task">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                 </button>
               </div>
             </div>
@@ -1885,8 +2368,98 @@ export function renderUserDashboardHtml(): string {
         const data = await res.json();
         alert(data.message || 'Task execution triggered!');
         loadTasks();
+        if (typeof loadOverview === 'function') loadOverview(true);
       } catch (err) {
         alert('Failed triggering task');
+      }
+    }
+
+    async function stopSingleTask(taskId) {
+      const token = localStorage.getItem('wb_session_token');
+      try {
+        const res = await fetch('/api/user/tasks/' + taskId + '/stop', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token }
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed stopping task');
+        await loadTasks();
+        if (typeof loadOverview === 'function') loadOverview(true);
+      } catch (err) {
+        alert(err.message || 'Failed stopping task');
+      }
+    }
+
+    async function deleteSingleTask(taskId) {
+      const token = localStorage.getItem('wb_session_token');
+      if (!confirm('Are you sure you want to permanently delete this task?')) return;
+      try {
+        const res = await fetch('/api/user/tasks/' + taskId, {
+          method: 'DELETE',
+          headers: { 'Authorization': 'Bearer ' + token }
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed deleting task');
+        await loadTasks();
+        if (typeof loadOverview === 'function') loadOverview(true);
+      } catch (err) {
+        alert(err.message || 'Failed deleting task');
+      }
+    }
+
+    async function stopAllTasks() {
+      const token = localStorage.getItem('wb_session_token');
+      if (!confirm('Stop all actively running or pending autonomous tasks?')) return;
+      const btn = document.getElementById('btn-stop-all-tasks');
+      if (btn) {
+        btn.disabled = true;
+        btn.classList.add('opacity-50', 'pointer-events-none');
+      }
+      try {
+        const res = await fetch('/api/user/tasks/stop-all', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token }
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed stopping tasks');
+        alert(data.message || 'All active tasks stopped.');
+        await loadTasks();
+        if (typeof loadOverview === 'function') loadOverview(true);
+      } catch (err) {
+        alert(err.message || 'Error stopping tasks');
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.classList.remove('opacity-50', 'pointer-events-none');
+        }
+      }
+    }
+
+    async function clearAllTasks() {
+      const token = localStorage.getItem('wb_session_token');
+      if (!confirm('⚠️ Are you sure you want to clear and permanently delete ALL tasks? This action cannot be undone.')) return;
+      const btn = document.getElementById('btn-clear-all-tasks');
+      if (btn) {
+        btn.disabled = true;
+        btn.classList.add('opacity-50', 'pointer-events-none');
+      }
+      try {
+        const res = await fetch('/api/user/tasks/clear-all', {
+          method: 'DELETE',
+          headers: { 'Authorization': 'Bearer ' + token }
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed clearing tasks');
+        alert(data.message || 'All tasks cleared.');
+        await loadTasks();
+        if (typeof loadOverview === 'function') loadOverview(true);
+      } catch (err) {
+        alert(err.message || 'Error clearing tasks');
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.classList.remove('opacity-50', 'pointer-events-none');
+        }
       }
     }
 
@@ -1919,12 +2492,13 @@ export function renderUserDashboardHtml(): string {
         data.memories.forEach(mem => {
           const card = document.createElement('div');
           card.className = 'glass-panel rounded-2xl p-4 space-y-2';
+          const readableTitle = formatMemoryReadableTitle(mem);
           card.innerHTML = \`
             <div class="flex items-center justify-between text-xs">
               <span class="px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-600 dark:text-purple-300 font-bold uppercase text-[10px]">\${escapeHtml(mem.category || 'general')}</span>
-              <button onclick="deleteMemory('\${encodeURIComponent(mem.key)}')" class="text-app-text opacity-40 hover:opacity-100 hover:text-red-500 transition text-[11px]">Delete</button>
+              <button onclick="deleteMemory('\${encodeURIComponent(mem.key)}')" class="text-app-text opacity-40 hover:opacity-100 hover:text-red-500 transition text-[11px] cursor-pointer">Delete</button>
             </div>
-            <div class="font-bold text-app-text text-xs font-mono">\${escapeHtml(mem.key)}</div>
+            <div class="font-bold text-app-text text-sm">\${escapeHtml(readableTitle)}</div>
             <p class="text-xs text-app-text opacity-70 leading-relaxed">\${escapeHtml(mem.content)}</p>
           \`;
           list.appendChild(card);
@@ -1957,9 +2531,19 @@ export function renderUserDashboardHtml(): string {
         });
         const data = await res.json();
         const list = document.getElementById('reminders-list');
+        if (!list) return;
         list.innerHTML = '';
 
-        if (!data.reminders || data.reminders.length === 0) {
+        const allReminders = data.reminders || [];
+        const pendingReminders = allReminders.filter(r => r.status === 'pending');
+        const remSubBadge = document.getElementById('reminders-subtab-badge');
+        if (remSubBadge) {
+          remSubBadge.innerText = String(pendingReminders.length);
+          if (pendingReminders.length > 0) remSubBadge.classList.remove('hidden');
+          else remSubBadge.classList.add('hidden');
+        }
+
+        if (allReminders.length === 0) {
           list.innerHTML = '<div class="glass-panel rounded-2xl p-8 text-center text-app-text opacity-50 text-xs">No active reminders. Tell Wingbuddy "Remind me to..." anytime in chat.</div>';
           return;
         }
@@ -2165,6 +2749,7 @@ export function renderUserDashboardHtml(): string {
         const taskSubEl = document.getElementById('ov-metric-tasks-sub');
         if (taskEl) taskEl.innerText = taskActive;
         if (taskSubEl) taskSubEl.innerText = taskTotal === 0 ? 'No scheduled tasks' : (taskActive + ' active • ' + taskTotal + ' total');
+        updateTasksNavBadge(taskActive);
 
         // Reminders count
         const remPending = m.reminders?.pending ?? 0;
@@ -2226,15 +2811,18 @@ export function renderUserDashboardHtml(): string {
           if (rows.length === 0) {
             memList.innerHTML = '<div class="p-4 rounded-xl bg-app-highlight text-center text-app-text opacity-40 text-xs">No memories stored in context vault yet. Chat with Wingbuddy to retain long-term facts.</div>';
           } else {
-            memList.innerHTML = rows.map(m => \`
-              <div class="p-3 rounded-xl bg-app-highlight border border-app-border flex items-center justify-between gap-3">
-                <div class="min-w-0 flex-1">
-                  <div class="font-bold text-app-text text-xs truncate">\${escapeHtml(m.key)}</div>
-                  <div class="text-[11px] text-app-text opacity-50 truncate mt-0.5">\${escapeHtml(m.content)}</div>
+            memList.innerHTML = rows.map(m => {
+              const readableTitle = formatMemoryReadableTitle(m);
+              return \`
+                <div class="p-3 rounded-xl bg-app-highlight border border-app-border flex items-center justify-between gap-3">
+                  <div class="min-w-0 flex-1">
+                    <div class="font-bold text-app-text text-xs truncate">\${escapeHtml(readableTitle)}</div>
+                    <div class="text-[11px] text-app-text opacity-50 truncate mt-0.5">\${escapeHtml(m.content)}</div>
+                  </div>
+                  <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/20 text-purple-600 dark:text-purple-300 uppercase shrink-0">\${escapeHtml(m.category || 'general')}</span>
                 </div>
-                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/20 text-purple-600 dark:text-purple-300 uppercase shrink-0">\${escapeHtml(m.category || 'general')}</span>
-              </div>
-            \`).join('');
+              \`;
+            }).join('');
           }
         }
 
@@ -2456,35 +3044,99 @@ export function renderUserDashboardHtml(): string {
       }
     }
 
-    // Tab Switching
+    let currentTasksSubtab = 'tasks';
+    function switchTasksSubtab(subtab) {
+      currentTasksSubtab = subtab;
+      const isTasks = subtab === 'tasks';
+      const secTasks = document.getElementById('tasks-subtab-tasks');
+      const secReminders = document.getElementById('tasks-subtab-reminders');
+      const btnTasks = document.getElementById('tasks-segment-btn-tasks');
+      const btnReminders = document.getElementById('tasks-segment-btn-reminders');
+      const hdrTitle = document.getElementById('tasks-header-title');
+      const hdrSub = document.getElementById('tasks-header-subtitle');
+
+      if (secTasks) secTasks.classList.toggle('hidden', !isTasks);
+      if (secReminders) secReminders.classList.toggle('hidden', isTasks);
+
+      if (btnTasks) {
+        if (isTasks) {
+          btnTasks.className = 'px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 bg-brand-600 text-white shadow-sm cursor-pointer';
+        } else {
+          btnTasks.className = 'px-3.5 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 text-app-text opacity-60 hover:opacity-100 hover:text-app-text cursor-pointer';
+        }
+      }
+      if (btnReminders) {
+        if (!isTasks) {
+          btnReminders.className = 'px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 bg-brand-600 text-white shadow-sm cursor-pointer';
+        } else {
+          btnReminders.className = 'px-3.5 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 text-app-text opacity-60 hover:opacity-100 hover:text-app-text cursor-pointer';
+        }
+      }
+
+      if (hdrTitle) {
+        hdrTitle.innerText = isTasks ? 'Scheduled Autonomous Tasks' : 'Proactive Reminders & Alarms';
+      }
+      if (hdrSub) {
+        hdrSub.innerText = isTasks
+          ? 'Autonomous multi-step jobs executing in background and publishing digests.'
+          : 'Timed alerts and reminders dispatched to Telegram and active Web workspace.';
+      }
+
+      if (isTasks) {
+        loadTasks();
+      } else {
+        loadReminders();
+      }
+    }
+
+    // Tab Switching (5 tabs: Overview, Chat, Tasks, Memory, Settings)
     function switchTab(tabId, updateHash = true) {
-      currentTab = tabId;
+      let targetTab = tabId;
+      if (tabId === 'reminders') {
+        targetTab = 'tasks';
+        switchTasksSubtab('reminders');
+      }
+      currentTab = targetTab;
       if (updateHash) {
         try {
           history.replaceState(null, '', '#' + tabId);
         } catch(e) {}
       }
-      const tabs = ['overview', 'chat', 'tasks', 'memory', 'reminders', 'settings'];
+      const tabs = ['overview', 'chat', 'tasks', 'memory', 'settings'];
       tabs.forEach(t => {
         const view = document.getElementById('tab-view-' + t);
         const mobileBtn = document.getElementById('mobile-nav-btn-' + t);
-        if (view) view.classList.toggle('hidden', t !== tabId);
+        const isActive = t === targetTab;
+        if (view) view.classList.toggle('hidden', !isActive);
         if (mobileBtn) {
-          if (t === tabId) {
-            mobileBtn.className = 'flex flex-col sm:flex-row items-center gap-0.5 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-brand-600 dark:text-brand-300 bg-brand-500/10 dark:bg-brand-500/20 border border-brand-500/30 dark:border-brand-500/40 text-[10px] sm:text-xs font-bold transition shadow-sm';
+          const iconWrap = mobileBtn.querySelector('.icon-wrap');
+          const label = mobileBtn.querySelector('.label');
+          if (isActive) {
+            mobileBtn.setAttribute('aria-current', 'page');
+            mobileBtn.className = 'min-w-0 min-h-[56px] py-1 flex flex-col items-center justify-center gap-0.5 text-[11px] font-semibold text-brand-600 dark:text-brand-300 transition cursor-pointer';
+            if (iconWrap) iconWrap.className = 'icon-wrap relative inline-flex items-center justify-center w-8 h-8 rounded-full bg-brand-500/15 text-brand-600 dark:text-brand-400';
+            if (label) label.className = 'label max-w-full overflow-hidden text-ellipsis whitespace-nowrap px-1 text-brand-600 dark:text-brand-300 font-bold';
           } else {
-            mobileBtn.className = 'flex flex-col sm:flex-row items-center gap-0.5 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-app-text/50 hover:text-app-text hover:bg-app-highlight border border-transparent text-[10px] sm:text-xs font-semibold transition';
+            mobileBtn.removeAttribute('aria-current');
+            mobileBtn.className = 'min-w-0 min-h-[56px] py-1 flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium text-app-text/60 hover:text-app-text transition cursor-pointer';
+            if (iconWrap) iconWrap.className = 'icon-wrap relative inline-flex items-center justify-center w-8 h-8 rounded-full text-app-text/70';
+            if (label) label.className = 'label max-w-full overflow-hidden text-ellipsis whitespace-nowrap px-1 text-app-text/60';
           }
         }
       });
 
-      if (tabId === 'chat') {
+      if (targetTab === 'chat') {
         const input = document.getElementById('chat-input');
         if (input) setTimeout(() => input.focus(), 80);
         const thread = document.getElementById('chat-thread');
         if (thread) thread.scrollTop = thread.scrollHeight;
-      } else if (tabId === 'overview') {
+      } else if (targetTab === 'overview') {
         loadOverview();
+      } else if (targetTab === 'tasks') {
+        if (currentTasksSubtab === 'tasks') loadTasks();
+        else loadReminders();
+      } else if (targetTab === 'memory') {
+        loadMemories();
       }
     }
 
@@ -2553,12 +3205,19 @@ export function renderUserDashboardHtml(): string {
 
     // Explicitly expose globals to window for reliable HTML event binding
     window.switchTab = switchTab;
+    window.switchTasksSubtab = switchTasksSubtab;
     window.openTelegramSettings = openTelegramSettings;
     window.openTelegramSyncModal = openTelegramSyncModal;
     window.generateTelegramLink = generateTelegramLink;
     window.copyPairingLink = copyPairingLink;
     window.updateNotifyPreference = updateNotifyPreference;
     window.handleLogout = handleLogout;
+    window.loadTasks = loadTasks;
+    window.runTaskNow = runTaskNow;
+    window.stopSingleTask = stopSingleTask;
+    window.deleteSingleTask = deleteSingleTask;
+    window.stopAllTasks = stopAllTasks;
+    window.clearAllTasks = clearAllTasks;
 
     function escapeHtml(str) {
       if (!str) return '';

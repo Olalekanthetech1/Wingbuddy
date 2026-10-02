@@ -68,6 +68,13 @@ app.use(
   })
 );
 app.use(cors());
+app.use((_req, res, next) => {
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'self' 'unsafe-inline' 'unsafe-eval' https:; img-src 'self' data: blob: https://res.cloudinary.com https://images.unsplash.com https://*.huggingface.co; media-src 'self' blob: https://res.cloudinary.com https://*.huggingface.co; connect-src 'self' https: wss:;"
+  );
+  next();
+});
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

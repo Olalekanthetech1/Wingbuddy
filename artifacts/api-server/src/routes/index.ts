@@ -19,12 +19,14 @@ import diagnosticsRouter from "./diagnostics";
 import authRouter from "./auth";
 import userRouter from "./user";
 import reactionThemeRouter from "./reaction-theme";
+import mediaRouter from "./media";
 
 const router: IRouter = Router();
 
 router.use(healthRouter);
 router.use("/auth", authRouter);
 router.use("/user", userRouter);
+router.use("/media", mediaRouter);
 router.use(reactionThemeRouter);
 router.use(keysRouter);
 router.use(providerKeysRouter);

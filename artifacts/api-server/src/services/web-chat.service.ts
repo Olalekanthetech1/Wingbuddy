@@ -10,6 +10,8 @@ import { userTierService } from "./user-tier.service";
 import { unifiedModelRegistryService } from "./unified-model-registry.service";
 import type { AuthenticatedUser } from "./auth.service";
 import { buildUserPromptIdentityBlock, userIdentityResolverService } from "./user-identity-resolver.service";
+import { mediaJobOrchestratorService } from "./media/media-job-orchestrator.service";
+import { semanticInteractionResolverService } from "./semantic-interaction-resolver.service";
 
 const conversationService = new ConversationService();
 
@@ -242,23 +244,87 @@ export class WebChatService {
     }
 
     const query = `
-      SELECT m.id, m.role, m.content, m.media_type, m.source, m.audio_url, m.created_at, m.conversation_id
+      SELECT 
+        m.id, m.role, m.content, m.media_type, m.source, m.audio_url, m.created_at, m.conversation_id,
+        m.asset_id, m.job_id, m.metadata_json,
+        a.type as a_type, a.mime_type as a_mime, a.width as a_width, a.height as a_height,
+        a.duration_seconds as a_duration, a.engine as a_engine, a.prompt as a_prompt,
+        a.params_json as a_params, a.url as a_url, a.storage_provider as a_storage,
+        j.status as j_status, j.failure_reason as j_failure_reason, j.error_message as j_error_message,
+        j.started_at as j_started_at, j.completed_at as j_completed_at
       FROM messages m
+      LEFT JOIN media_assets a ON m.asset_id = a.id
+      LEFT JOIN media_jobs j ON m.job_id = j.job_id
       WHERE m.conversation_id = $1
       ORDER BY m.created_at ASC
       LIMIT $2;
     `;
     const res = await pool.query(query, [targetConvId, limit]);
-    const messages = res.rows.map((r) => ({
-      id: r.id,
-      conversationId: r.conversation_id,
-      role: r.role,
-      content: r.content,
-      mediaType: r.media_type || "text",
-      source: r.source || "web",
-      audioUrl: r.audio_url || undefined,
-      createdAt: r.created_at,
-    }));
+    const messages = res.rows.map((r) => {
+      let asset: any = undefined;
+      if (r.asset_id && r.a_url) {
+        asset = {
+          id: r.asset_id,
+          conversationId: r.conversation_id,
+          type: r.a_type || (r.media_type === "video" ? "video" : "image"),
+          mimeType: r.a_mime || (r.media_type === "video" ? "video/mp4" : "image/png"),
+          width: r.a_width || 1024,
+          height: r.a_height || 1024,
+          durationSeconds: r.a_duration ? Number(r.a_duration) : undefined,
+          engine: r.a_engine || "",
+          prompt: r.a_prompt || r.content,
+          params: r.a_params || {},
+          url: r.a_url,
+          storageProvider: r.a_storage || "cloudinary",
+          status: "ready",
+        };
+      }
+
+      let job: any = undefined;
+      if (r.job_id) {
+        job = {
+          jobId: r.job_id,
+          status: r.j_status || "queued",
+          failureReason: r.j_failure_reason,
+          errorMessage: r.j_error_message,
+          startedAt: r.j_started_at,
+          completedAt: r.j_completed_at,
+        };
+      }
+
+      if (r.metadata_json) {
+        try {
+          const meta = typeof r.metadata_json === "string" ? JSON.parse(r.metadata_json) : r.metadata_json;
+          if (meta.jobId && !job) {
+            job = {
+              jobId: meta.jobId,
+              status: meta.status || "queued",
+              failureReason: meta.failureReason,
+              errorMessage: meta.errorMessage,
+              startedAt: meta.startedAt,
+            };
+          }
+          if (meta.asset && !asset) {
+            asset = meta.asset;
+          }
+        } catch {}
+      }
+
+      return {
+        id: r.id,
+        conversationId: r.conversation_id,
+        role: r.role,
+        content: r.content,
+        mediaType: r.media_type || (asset ? asset.type : "text"),
+        source: r.source || "web",
+        audioUrl: r.audio_url || undefined,
+        jobId: r.job_id || job?.jobId || undefined,
+        assetId: r.asset_id || asset?.id || undefined,
+        job,
+        asset,
+        createdAt: r.created_at,
+      };
+    });
 
     return { messages, conversationId: targetConvId };
   }
@@ -400,6 +466,88 @@ export class WebChatService {
       return { userMessage, assistantMessage };
     }
 
+    // 3.5 Check for explicit media shortcuts (/image, /video, /img, /clip, /draw) or semantic intent
+    const trimmedInput = content.trim();
+    const isImageCmd = /^\/(image|img|draw|paint)\b/i.test(trimmedInput);
+    const isVideoCmd = /^\/(video|vid|clip)\b/i.test(trimmedInput);
+
+    let mediaModality: "image" | "video" | null = null;
+    let mediaPrompt = "";
+
+    if (isImageCmd) {
+      mediaModality = "image";
+      mediaPrompt = trimmedInput.replace(/^\/(image|img|draw|paint)\s*/i, "").trim();
+    } else if (isVideoCmd) {
+      mediaModality = "video";
+      mediaPrompt = trimmedInput.replace(/^\/(video|vid|clip)\s*/i, "").trim();
+    } else {
+      // Orchestrator intent detection via semantic interaction resolver
+      try {
+        const histQuick = await pool.query(
+          `SELECT role, content FROM messages WHERE conversation_id = $1 AND id != $2 ORDER BY created_at DESC LIMIT 6;`,
+          [conversationId, userMessage.id]
+        );
+        const histPayload = histQuick.rows.reverse().map((m) => ({
+          role: (m.role === "model" ? "assistant" : "user") as "assistant" | "user",
+          content: m.content,
+        }));
+
+        const semanticDecision = await semanticInteractionResolverService.resolve({
+          text: content,
+          persistentMode: userRecord?.mode || "general",
+          history: histPayload,
+        });
+
+        if (semanticDecision.intent === "image_generation") {
+          mediaModality = "image";
+          mediaPrompt = semanticDecision.cleanedPrompt || content;
+        } else if (semanticDecision.intent === "video_generation") {
+          mediaModality = "video";
+          mediaPrompt = semanticDecision.cleanedPrompt || content;
+        }
+      } catch (intentErr) {
+        logger.warn({ intentErr }, "Failed evaluating semantic intent for media");
+      }
+    }
+
+    if (mediaModality && mediaPrompt) {
+      // Enqueue async media job immediately (non-blocking)
+      const { job, messageId: placeholderMsgId } = await mediaJobOrchestratorService.enqueueJob({
+        ownerUserId: partitionId,
+        conversationId,
+        modality: mediaModality,
+        prompt: mediaPrompt,
+        sourceInterface: "web",
+        clientMsgId: options?.clientMsgId,
+      });
+
+      const initialPlaceholderText = mediaModality === "video"
+        ? `🎬 Generating video for: "${mediaPrompt}"`
+        : `🎨 Generating image for: "${mediaPrompt}"`;
+
+      const assistantMessage = {
+        id: placeholderMsgId,
+        conversationId,
+        role: "model",
+        content: initialPlaceholderText,
+        mediaType: mediaModality,
+        source: "web",
+        jobId: job.jobId,
+        job,
+        createdAt: job.createdAt,
+      };
+
+      // Emit assistant placeholder message to SSE
+      eventBusService.emitUserEvent({
+        type: "chat_message",
+        userId: user.id,
+        telegramUserId: user.telegramUserId,
+        data: assistantMessage,
+      });
+
+      return { userMessage, assistantMessage, conversationId, conversationTitle: updatedTitle };
+    }
+
     // 4. Retrieve relevant contextual memories
     let contextualMemories = "";
     try {
@@ -445,12 +593,33 @@ export class WebChatService {
       timezone: liveUserRow?.user_tz || "UTC",
     });
 
+    // Context Continuity: Short record of recently generated media artifacts
+    let mediaArtifactsContext = "";
+    try {
+      const recentMediaRes = await pool.query(
+        `SELECT id, type, prompt, engine, url FROM media_assets WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 3;`,
+        [conversationId]
+      );
+      if (recentMediaRes.rows.length > 0) {
+        mediaArtifactsContext = [
+          "[Recent Generated Media Artifacts in this Conversation Thread]:",
+          ...recentMediaRes.rows.map(
+            (r) => `- ${r.type.toUpperCase()} #${r.id} (Engine: ${r.engine}): Prompt "${r.prompt}". URL: ${r.url}`
+          ),
+          "If the user asks follow-up changes (e.g. 'make it darker', 'vary that image', 'turn that into a video'), refer to the most recent artifact above."
+        ].join("\n");
+      }
+    } catch (mediaContextErr) {
+      logger.warn({ mediaContextErr }, "Failed fetching media context for prompt");
+    }
+
     const systemPrompt = [
       "You are the Wingbuddy AI Assistant operating inside the unified Web Workspace & Telegram ecosystem.",
       identityBlock,
       activeAdminConfigInfo ? `[Authoritative System Configuration]:\n${activeAdminConfigInfo}` : "",
       persona?.systemPrompt ? `Active Persona (${persona.name}): ${persona.systemPrompt}` : "",
       contextualMemories ? `[User Memory & Preferences Vault]:\n${contextualMemories}` : "",
+      mediaArtifactsContext,
       "Strict Zero-Fallback Policy: Answer authoritatively with real, accurate information. If asked about your model or system configuration, cite the authoritative Admin Configured Primary Model above. If live web research or search results are needed, be precise and cite facts with Markdown links. Never use mock data, hardcoded placeholder values, static fallbacks, or simulated responses. All outputs and features must rely exclusively on live, dynamic, adaptive data and verified system capabilities.",
       "Format code snippets with full syntax highlighting markdown.",
     ]

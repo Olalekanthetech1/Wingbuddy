@@ -430,6 +430,62 @@ export async function ensureDatabaseSchema(pgPool?: pg.Pool): Promise<void> {
     CREATE UNIQUE INDEX IF NOT EXISTS user_timezones_telegram_user_id_idx ON user_timezones(telegram_user_id);
     CREATE INDEX IF NOT EXISTS user_timezones_tz_idx ON user_timezones(timezone);
 
+    -- Media Assets (Persistent Generated Images and Videos)
+    CREATE TABLE IF NOT EXISTS media_assets (
+      id SERIAL PRIMARY KEY,
+      owner_user_id BIGINT NOT NULL,
+      conversation_id INTEGER,
+      type TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      width INTEGER,
+      height INTEGER,
+      duration_seconds NUMERIC,
+      engine TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      enhanced_prompt TEXT,
+      params_json JSONB DEFAULT '{}'::jsonb,
+      url TEXT NOT NULL,
+      storage_provider TEXT NOT NULL DEFAULT 'cloudinary',
+      storage_public_id TEXT,
+      status TEXT NOT NULL DEFAULT 'ready',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS media_assets_owner_idx ON media_assets(owner_user_id, created_at);
+    CREATE INDEX IF NOT EXISTS media_assets_conv_idx ON media_assets(conversation_id, created_at);
+
+    -- Media Jobs (Async State Machine: queued, running, succeeded, failed)
+    CREATE TABLE IF NOT EXISTS media_jobs (
+      job_id TEXT PRIMARY KEY,
+      idempotency_key TEXT UNIQUE,
+      owner_user_id BIGINT NOT NULL,
+      conversation_id INTEGER,
+      message_id INTEGER,
+      modality TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      enhanced_prompt TEXT,
+      params_json JSONB DEFAULT '{}'::jsonb,
+      status TEXT NOT NULL DEFAULT 'queued',
+      failure_reason TEXT,
+      error_message TEXT,
+      asset_id INTEGER REFERENCES media_assets(id) ON DELETE SET NULL,
+      engine TEXT,
+      requested_engine TEXT,
+      failovers_json JSONB DEFAULT '[]'::jsonb,
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS media_jobs_owner_status_idx ON media_jobs(owner_user_id, status);
+    CREATE INDEX IF NOT EXISTS media_jobs_conv_idx ON media_jobs(conversation_id, created_at);
+    CREATE INDEX IF NOT EXISTS media_jobs_idempotency_idx ON media_jobs(idempotency_key);
+
+    -- Ensure structured attachment columns exist on messages
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS asset_id INTEGER REFERENCES media_assets(id) ON DELETE SET NULL;
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS job_id TEXT;
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS metadata_json TEXT;
+
     -- CDC PostgreSQL Trigger for reminders
     CREATE OR REPLACE FUNCTION notify_reminders_cdc() RETURNS trigger AS $$
     BEGIN
