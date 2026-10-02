@@ -303,9 +303,9 @@ router.post("/revoke-all-sessions", requireAuth, async (req: Request, res: Respo
 });
 
 /**
- * POST /api/auth/preferences
+ * POST & PUT /api/auth/preferences
  */
-router.post("/preferences", requireAuth, async (req: Request, res: Response) => {
+const handlePreferences = async (req: Request, res: Response) => {
   try {
     const userId = req.user!.id;
     const { notificationPreference, contextSyncMode } = req.body;
@@ -318,7 +318,10 @@ router.post("/preferences", requireAuth, async (req: Request, res: Response) => 
   } catch (err: any) {
     res.status(500).json({ error: err.message || "Failed updating preferences" });
   }
-});
+};
+
+router.post("/preferences", requireAuth, handlePreferences);
+router.put("/preferences", requireAuth, handlePreferences);
 
 /**
  * POST /api/auth/logout
