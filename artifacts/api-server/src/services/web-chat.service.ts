@@ -831,6 +831,9 @@ export class WebChatService {
     res.setHeader("Cache-Control", "no-cache, no-transform");
     res.setHeader("Connection", "keep-alive");
     res.setHeader("X-Accel-Buffering", "no");
+    if (typeof (res as any).flushHeaders === "function") {
+      (res as any).flushHeaders();
+    }
 
     const sendEvent = (event: string, data: any) => {
       if (!res.writableEnded) {
@@ -891,7 +894,7 @@ export class WebChatService {
     } else if (isVideoCmd) {
       mediaModality = "video";
       mediaPrompt = trimmedInput.replace(/^\/(video|vid|clip)\s*/i, "").trim();
-    } else {
+    } else if (/\b(image|picture|photo|illustration|drawing|paint|video|animation|clip|movie|generate|draw|create|render)\b/i.test(trimmedInput)) {
       try {
         const histQuick = await pool.query(
           `SELECT role, content FROM messages WHERE conversation_id = $1 AND id != $2 ORDER BY created_at DESC LIMIT 6;`,
@@ -1084,8 +1087,6 @@ export class WebChatService {
         }
       );
 
-      const HOLD_BACK_CHAR_COUNT = 150;
-
       for await (const chunk of stream) {
         if (isAborted) {
           logger.info("Aborting generator stream processing per client abort flag.");
@@ -1095,7 +1096,7 @@ export class WebChatService {
         if (chunk.delta) {
           fullText += chunk.delta;
 
-          // Run output guard check on the rolling hold-back buffer
+          // Run output guard check on accumulated text
           const leakCheck = OutputGuardService.detectLeak({
             response: fullText,
             systemPrompt,
@@ -1103,20 +1104,14 @@ export class WebChatService {
           });
 
           if (leakCheck.isLeak) {
-            logger.warn({ reason: leakCheck.reason }, "Prompt leak detected in streaming rolling buffer. Stopping stream.");
+            logger.warn({ reason: leakCheck.reason }, "Prompt leak detected in streaming buffer. Stopping stream.");
             isLeaking = true;
             break;
           }
 
-          // Release safe text
-          if (fullText.length > HOLD_BACK_CHAR_COUNT) {
-            const safeLen = fullText.length - HOLD_BACK_CHAR_COUNT;
-            if (safeLen > releasedText.length) {
-              const delta = fullText.slice(releasedText.length, safeLen);
-              releasedText += delta;
-              sendEvent("delta", { delta });
-            }
-          }
+          // Emit delta immediately for real-time token-by-token client rendering
+          releasedText += chunk.delta;
+          sendEvent("delta", { delta: chunk.delta });
         }
 
         // Throttled database update (once every 1 second)
