@@ -77,9 +77,31 @@ export class GeminiService {
   }
 
   private buildContents(history: GeminiMessage[], message: string, attachments?: MultimodalAttachment[]): Content[] {
-    const userParts: Array<{ text?: string; inlineData?: { mimeType?: string; data?: string } }> = [{ text: message }];
-    for (const att of attachments || []) userParts.push({ inlineData: { mimeType: att.mimeType, data: att.data } });
-    return [...history.map((item) => ({ role: item.role, parts: [{ text: item.content }] })), { role: "user", parts: userParts as unknown as Content["parts"] }];
+    const userParts: Array<{ text?: string; inlineData?: { mimeType?: string; data?: string } }> = [];
+    const cleanMsg = typeof message === "string" ? message.trim() : "";
+    if (cleanMsg) {
+      userParts.push({ text: cleanMsg });
+    }
+    for (const att of attachments || []) {
+      if (att && typeof att.data === "string" && att.data.trim() && typeof att.mimeType === "string" && att.mimeType.trim()) {
+        userParts.push({ inlineData: { mimeType: att.mimeType.trim(), data: att.data.trim() } });
+      }
+    }
+    if (userParts.length === 0) {
+      userParts.push({ text: "..." });
+    }
+
+    const formattedHistory = (history || [])
+      .filter((item) => item && typeof item.content === "string")
+      .map((item) => {
+        const cleanContent = item.content.trim();
+        return {
+          role: item.role === "model" ? "model" : "user",
+          parts: [{ text: cleanContent || "..." }],
+        };
+      });
+
+    return [...formattedHistory, { role: "user", parts: userParts as unknown as Content["parts"] }];
   }
 
   private buildConfig(guidance?: AssistantGuidance | string, options?: GenerateReplyOptions): Record<string, unknown> {
@@ -98,12 +120,20 @@ export class GeminiService {
   }
 
   private adaptiveRequest(history: GeminiMessage[], message: string, guidance?: AssistantGuidance | string, options?: GenerateReplyOptions): AIChatRequest {
+    const cleanMsg = typeof message === "string" ? message.trim() : "...";
+    const filteredHistory = (history || [])
+      .filter((item) => item && typeof item.content === "string")
+      .map((item) => ({
+        role: item.role === "model" ? "assistant" as const : "user" as const,
+        content: item.content.trim() || "...",
+      }));
+
     return {
       model: this.model,
       messages: [
         { role: "system", content: buildSystemInstruction(this.systemInstruction, guidance) },
-        ...history.map((item) => ({ role: item.role === "model" ? "assistant" as const : "user" as const, content: item.content })),
-        { role: "user", content: message },
+        ...filteredHistory,
+        { role: "user", content: cleanMsg || "..." },
       ],
       temperature: options?.temperature,
       maxOutputTokens: undefined,

@@ -63,6 +63,8 @@ export interface SemanticInteractionDecision {
   conversationOperation?: string;
   conversationTargetHistoryIndices?: number[];
   unresolvedReference?: string;
+  isMediaVariation?: boolean;
+  isMediaRegeneration?: boolean;
 }
 
 interface CacheEntry {

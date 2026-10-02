@@ -95,6 +95,15 @@ router.post("/models/:id/primary", async (req: Request, res: Response) => {
   catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
 });
 
+router.post("/models/:id/role/:role", async (req: Request, res: Response) => {
+  try {
+    const rawId = req.params.id; const id = Array.isArray(rawId) ? rawId[0] : rawId;
+    const rawRole = req.params.role; const role = (Array.isArray(rawRole) ? rawRole[0] : rawRole) as UnifiedModelRole;
+    const model = await unifiedModelRegistryService.setRole(id, role);
+    res.json({ message: `Role ${role} assigned to model and saved to PostgreSQL`, model });
+  } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
+});
+
 router.delete("/models/:id", async (req: Request, res: Response) => {
   try { const rawId = req.params.id; const id = Array.isArray(rawId) ? rawId[0] : rawId; await unifiedModelRegistryService.remove(id); aiModelCatalogService.invalidate(); res.json({ message: "Model removed from unified PostgreSQL registry" }); }
   catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }

@@ -204,11 +204,11 @@ export function renderUserDashboardHtml(): string {
       <!-- User Profile Menu -->
       <div class="flex items-center gap-1.5 sm:gap-2.5 pl-1.5 sm:pl-2 border-l border-app-border shrink-0">
         <div id="user-avatar" class="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-gradient-to-tr from-brand-500 to-sky-400 flex items-center justify-center text-white font-bold text-xs uppercase shadow-sm shrink-0">
-          U
+          —
         </div>
         <div class="hidden md:block text-left">
-          <div id="user-name" class="text-xs font-bold text-app-text truncate max-w-[100px]">User</div>
-          <div id="user-email" class="text-[10px] text-app-text opacity-60 truncate max-w-[100px]">user@example.com</div>
+          <div id="user-name" class="text-xs font-bold text-app-text truncate max-w-[100px]">...</div>
+          <div id="user-email" class="text-[10px] text-app-text opacity-60 truncate max-w-[100px]">...</div>
         </div>
         <button onclick="handleLogout()" title="Sign Out" class="p-1.5 rounded-lg text-app-text opacity-50 hover:opacity-100 hover:bg-app-highlight transition shrink-0">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
@@ -290,11 +290,11 @@ export function renderUserDashboardHtml(): string {
             <div class="flex flex-wrap items-start justify-between gap-2.5 min-w-0">
               <div class="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
                 <div id="ov-profile-avatar" class="w-10 h-10 sm:w-12 sm:h-12 rounded-2xl bg-gradient-to-tr from-brand-500 to-indigo-500 flex items-center justify-center text-white font-extrabold text-sm sm:text-base uppercase shadow-md shadow-brand-500/20 shrink-0">
-                  U
+                  —
                 </div>
                 <div class="min-w-0 flex-1">
-                  <div id="ov-profile-name" class="font-extrabold text-app-text text-sm sm:text-base truncate">Loading profile...</div>
-                  <div id="ov-profile-email" class="text-xs text-app-text opacity-50 font-mono break-all overflow-hidden text-ellipsis max-w-full">user@domain</div>
+                  <div id="ov-profile-name" class="font-extrabold text-app-text text-sm sm:text-base truncate">...</div>
+                  <div id="ov-profile-email" class="text-xs text-app-text opacity-50 font-mono break-all overflow-hidden text-ellipsis max-w-full">...</div>
                   <div class="text-[10px] text-emerald-400 font-medium mt-0.5 flex items-center gap-1 truncate">
                     <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0"></span>
                     <span class="truncate">Cloud Workspace Synced</span>
@@ -1144,8 +1144,8 @@ export function renderUserDashboardHtml(): string {
     }
 
     function renderUserProfile(user) {
-      const name = user.name || (user.email ? user.email.split('@')[0] : 'User');
-      const initial = (name || user.email || 'U')[0].toUpperCase();
+      const name = user.name || (user.email ? user.email.split('@')[0] : '...');
+      const initial = (name || user.email || '—')[0].toUpperCase();
       const nameEl = document.getElementById('user-name');
       const emailEl = document.getElementById('user-email');
       const avatarEl = document.getElementById('user-avatar');
@@ -2636,15 +2636,15 @@ export function renderUserDashboardHtml(): string {
         // 1. User & Profile Card
         const u = data.user || currentUser || {};
         const displayName = u.displayName || u.preferredName || null;
-        const greeting = u.greeting || 'Hey 👋';
-        const userEmail = u.email || 'user@example.com';
+        const greeting = u.greeting || '...';
+        const userEmail = u.email || '...';
         const userId = u.id || u.telegramUserId || '—';
 
         const nameEl = document.getElementById('ov-user-name');
         if (nameEl) nameEl.innerText = displayName ? displayName : greeting;
 
         const profNameEl = document.getElementById('ov-profile-name');
-        if (profNameEl) profNameEl.innerText = displayName ? displayName : (u.hasName ? 'User' : 'No name set');
+        if (profNameEl) profNameEl.innerText = displayName ? displayName : (u.hasName ? '...' : '...');
 
         const profEmailEl = document.getElementById('ov-profile-email');
         if (profEmailEl) profEmailEl.innerText = userEmail;
@@ -2667,9 +2667,9 @@ export function renderUserDashboardHtml(): string {
 
         const avatarEl = document.getElementById('ov-profile-avatar');
         if (avatarEl) {
-          const initial = displayName ? displayName[0].toUpperCase() : (u.email ? u.email[0].toUpperCase() : 'U');
+          const initial = displayName ? displayName[0].toUpperCase() : (u.email ? u.email[0].toUpperCase() : '—');
           if (u.picture) {
-            avatarEl.innerHTML = '<img src="' + escapeHtml(u.picture) + '" alt="' + escapeHtml(displayName || 'User') + '" referrerpolicy="no-referrer" class="w-full h-full rounded-2xl object-cover" onerror="this.onerror=null; this.parentElement.innerText=\\'' + initial + '\\';" />';
+            avatarEl.innerHTML = '<img src="' + escapeHtml(u.picture) + '" alt="' + escapeHtml(displayName || '...') + '" referrerpolicy="no-referrer" class="w-full h-full rounded-2xl object-cover" onerror="this.onerror=null; this.parentElement.innerText=\\'' + initial + '\\';" />';
           } else {
             avatarEl.innerText = initial;
           }

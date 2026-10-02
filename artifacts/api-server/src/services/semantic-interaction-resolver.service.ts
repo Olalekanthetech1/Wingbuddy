@@ -93,8 +93,8 @@ function jsonOnlyPrompt(
   const capabilityContract = availableCapabilities().join(",");
 
   return [
-    "Interpret the user's current request for an adaptive AI-assistant runtime.",
-    "Infer meaning from the complete turn and recent conversation. Do not use keyword presence, regex rules, fixed phrase matching, substring heuristics, or message-length shortcuts.",
+    "Interpret the user's current request for an adaptive AI-assistant runtime. You MUST utilize the provided conversation history to resolve pronouns, implicit references, and follow-up instructions.",
+    "Strict Model-Driven Classification: Do not use keyword presence or simple matching. Deeply analyze the intent and context. If a user asks to modify, enhance, redo, or vary a previous result, identify the complex relationship.",
     "Return ONLY one valid JSON object and no markdown.",
     "Available intent contract:", INTENTS.join(", "),
     "Available prompt type contract:", PROMPT_TYPES.join(", "),
@@ -119,6 +119,10 @@ function jsonOnlyPrompt(
     "ZERO_SHOT is a secondary structural label: use it when the user asks for a task without demonstrations, especially when there is no contextual example guidance. Do not label ordinary greetings as ZERO_SHOT.",
     "Artifact follow-up semantics: when recent conversation contains a [MEDIA_ARTIFACT] record and the current request asks to retrieve, share, provide, show, inspect, or identify information about that already-created artifact, classify the operation as answer_about_artifact rather than generating a new artifact. A request for a previously generated asset's public URL is retrieval, not image_generation or video_generation.",
     "When conversationOperation is answer_about_artifact, use a conversational execution profile and do not select image_generation or video_generation as the intent merely because the referenced artifact is media.",
+    "Media Generation & Follow-Up Semantics:",
+    "- When the user requests new visual content (e.g., asking to draw, paint, generate, render, visualize, animate, or create an image or video), classify intent as image_generation or video_generation, and set cleanedPrompt to the extracted subject or description.",
+    "- Complex Request Recognition (Variations & Modifications): Detect instructions to modify, vary, redo, or continue previous media generation. This includes natural language like 'make it blue', 'add a dog', 'do it again but anime style', 'zoom in', 'different version', etc.",
+    "- Contextual Prompt Synthesis: When a variation/modification is detected, the 'cleanedPrompt' MUST be a synthesized, complete, self-contained description that merges the original subject from history with the new modifiers. Example: history shows 'a dragon', user says 'make it green', cleanedPrompt becomes 'a green dragon'. Set 'isMediaVariation' to true for modifications, or 'isMediaRegeneration' to true for exact retries.",
     "Execution semantics:",
     "- conversational: answer in the current conversation without durable orchestration.",
     "- one_shot: complete one bounded operation now, including immediate image/video/search/reasoning work, without persistent task state unless explicitly requested.",
@@ -133,7 +137,7 @@ function jsonOnlyPrompt(
     `Persistent mode: ${persistentMode}`,
     `Recent conversation:\n${recent || "(none)"}`,
     `Current request:\n${request}`,
-    "JSON schema: { intent, promptTypes, primaryPromptType, executionProfile, effectiveMode, requiredCapabilities, enableSearch, thinkingLevel, isModeSwitch, requestedMode, cleanedPrompt, isGreeting, complexity, confidence, taskIntent, taskTitle, taskGoal, taskIdHint, taskSteps, cronExpression, snoozeMinutes, durabilityEvidence, conversationOperation, conversationTargetHistoryIndices, unresolvedReference }",
+    "JSON schema: { intent, promptTypes, primaryPromptType, executionProfile, effectiveMode, requiredCapabilities, enableSearch, thinkingLevel, isModeSwitch, requestedMode, cleanedPrompt, isGreeting, complexity, confidence, taskIntent, taskTitle, taskGoal, taskIdHint, taskSteps, cronExpression, snoozeMinutes, durabilityEvidence, conversationOperation, conversationTargetHistoryIndices, unresolvedReference, isMediaVariation, isMediaRegeneration }",
     "Do not authorize tools, external actions, approvals, destructive actions, or persistent storage from this classifier. It only resolves the semantic request profile; execution policy is enforced downstream.",
     `Available mode profiles:\n${modeProfiles}`,
   ].join("\n\n");
@@ -246,6 +250,8 @@ function sanitizeDecision(raw: unknown, fallbackMode: ModeKey): SemanticInteract
     unresolvedReference: typeof data.unresolvedReference === "string" && data.unresolvedReference.trim()
       ? data.unresolvedReference.trim().slice(0, 1000)
       : undefined,
+    isMediaVariation: Boolean(data.isMediaVariation),
+    isMediaRegeneration: Boolean(data.isMediaRegeneration),
   };
 }
 
@@ -254,7 +260,7 @@ export class SemanticInteractionResolverService {
     text: string;
     persistentMode: ModeKey;
     history?: Array<{ role: string; content: string }>;
-    gemini: GeminiService;
+    gemini?: GeminiService;
   }): Promise<SemanticInteractionDecision> {
     const history = params.history || [];
     const cached = semanticInteractionCache.get(params.text, params.persistentMode, history);
@@ -265,7 +271,7 @@ export class SemanticInteractionResolverService {
       intent: "general",
       promptTypes: ["DIRECT_COMMAND"],
       primaryPromptType: "DIRECT_COMMAND",
-      executionProfile: "unknown",
+      executionProfile: "conversational",
       effectiveMode: params.persistentMode,
       requiredCapabilities: Array.from(profile.capabilitiesList),
       enableSearch: profile.researchPolicy === "always",
@@ -280,14 +286,12 @@ export class SemanticInteractionResolverService {
     };
 
     const trimmed = params.text.trim();
-    const lower = trimmed.toLowerCase();
+    const promptForLLM = jsonOnlyPrompt(params.text, params.persistentMode, history);
 
+    // 1. Try Gemini Service (Native/Primary)
     if (params.gemini) {
       try {
-        const rawResponse = await params.gemini.generateReply([
-          { role: "system", content: jsonOnlyPrompt(params.text, params.persistentMode, history) },
-          { role: "user", content: params.text },
-        ]);
+        const rawResponse = await params.gemini.generateReply([], promptForLLM);
         const jsonStr = rawResponse.replace(/```json\n?|\n?```/g, "").trim();
         const parsed = JSON.parse(jsonStr);
         const decision = sanitizeDecision(parsed, params.persistentMode);
@@ -295,160 +299,30 @@ export class SemanticInteractionResolverService {
         logger.info({ intent: decision.intent, text: trimmed, enableSearch: decision.enableSearch }, "PROMPT_INTENT_RESOLVED_LLM");
         return decision;
       } catch (err) {
-        logger.debug({ error: safeErrorMetadata(err) }, "Gemini semantic resolution failed, using fast decision fallback");
+        logger.warn({ error: safeErrorMetadata(err) }, "Primary Gemini semantic resolution attempt failed; routing via adaptive AI router");
       }
     }
 
-    // 1. Greetings & Pleasantries
-    const isGreeting = /^(hi|hello|hey|good\s*(morning|afternoon|evening|day)|yo|howdy|sup|greetings)(\s+there|\s+bot|\s+olalekan|\s+ai)?[\s!.]*$/i.test(lower);
-    if (isGreeting) {
-      const fastDecision: SemanticInteractionDecision = {
-        ...fallback,
-        intent: "greeting",
-        promptTypes: ["CONVERSATIONAL"],
-        primaryPromptType: "CONVERSATIONAL",
-        executionProfile: "conversational",
-        isGreeting: true,
-        confidence: 1.0,
-        complexity: "simple",
-      };
-      semanticInteractionCache.set(params.text, params.persistentMode, history, fastDecision);
-      return fastDecision;
-    }
-
-    // 2. Affirmations & Acknowledgements
-    const isAffirmation = /^(thanks|thank\s*you|ok|okay|sure|great|awesome|cool|got\s*it|yes|no|yep|nope|nice|alright|perfect|cheers)[\s!.]*$/i.test(lower);
-    if (isAffirmation) {
-      const fastDecision: SemanticInteractionDecision = {
-        ...fallback,
-        intent: "general",
-        promptTypes: ["CONVERSATIONAL"],
-        primaryPromptType: "CONVERSATIONAL",
-        executionProfile: "conversational",
-        confidence: 1.0,
-        complexity: "simple",
-      };
-      semanticInteractionCache.set(params.text, params.persistentMode, history, fastDecision);
-      return fastDecision;
-    }
-
-    // 3. Task Management Commands
-    if (/^(show|view|list|my)\s+(tasks|reminders|scheduled)\b/i.test(lower)) {
-      const decision: SemanticInteractionDecision = {
-        ...fallback,
-        intent: "task_management",
-        taskIntent: "VIEW_TASKS",
-        executionProfile: "conversational",
-        confidence: 1.0,
-      };
+    // 2. Dynamic Adaptive AI Router fallback (Routes to best active LLM candidate in real-time)
+    try {
+      // Use 'auto' role for the router to pick the best healthy extraction candidate
+      const routed = await adaptiveAIRouterService.route({
+        model: "auto",
+        messages: [{ role: "user", content: promptForLLM }],
+      }, { mode: params.persistentMode, isExtraction: true });
+      const jsonStr = routed.response.text.replace(/```json\n?|\n?```/g, "").trim();
+      const parsed = JSON.parse(jsonStr);
+      const decision = sanitizeDecision(parsed, params.persistentMode);
       semanticInteractionCache.set(params.text, params.persistentMode, history, decision);
+      logger.info({ intent: decision.intent, text: trimmed, enableSearch: decision.enableSearch }, "PROMPT_INTENT_RESOLVED_ADAPTIVE");
       return decision;
+    } catch (routerErr) {
+      logger.warn({ error: safeErrorMetadata(routerErr) }, "Adaptive AI router semantic resolution failed");
     }
 
-    if (/^(snooze|delay|postpone)\b/i.test(lower)) {
-      const matchMin = lower.match(/(\d+)\s*(?:m|min|minute)/i);
-      const snoozeMinutes = matchMin ? parseInt(matchMin[1], 10) : 15;
-      const decision: SemanticInteractionDecision = {
-        ...fallback,
-        intent: "task_management",
-        taskIntent: "SNOOZE_TASK",
-        snoozeMinutes,
-        executionProfile: "conversational",
-        confidence: 1.0,
-      };
-      semanticInteractionCache.set(params.text, params.persistentMode, history, decision);
-      return decision;
-    }
-
-    if (/^(done|complete|finish|mark\s*(?:as\s*)?done)\b/i.test(lower)) {
-      const decision: SemanticInteractionDecision = {
-        ...fallback,
-        intent: "task_management",
-        taskIntent: "COMPLETE_TASK",
-        executionProfile: "conversational",
-        confidence: 1.0,
-      };
-      semanticInteractionCache.set(params.text, params.persistentMode, history, decision);
-      return decision;
-    }
-
-    if (/^(cancel|delete|stop|abort)\s+(?:task|reminder|schedule|#?\d+)/i.test(lower)) {
-      const idMatch = lower.match(/#?(\d+)/);
-      const decision: SemanticInteractionDecision = {
-        ...fallback,
-        intent: "task_management",
-        taskIntent: "CANCEL_TASK",
-        taskIdHint: idMatch ? parseInt(idMatch[1], 10) : undefined,
-        executionProfile: "conversational",
-        confidence: 1.0,
-      };
-      semanticInteractionCache.set(params.text, params.persistentMode, history, decision);
-      return decision;
-    }
-
-    if (/^(remind\s+me|schedule|set\s+a\s+reminder|every\s+(?:day|week|month|monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b/i.test(lower)) {
-      const decision: SemanticInteractionDecision = {
-        ...fallback,
-        intent: "task_management",
-        taskIntent: "SCHEDULE_TASK",
-        taskTitle: trimmed,
-        taskGoal: trimmed,
-        executionProfile: "durable",
-        confidence: 0.95,
-      };
-      semanticInteractionCache.set(params.text, params.persistentMode, history, decision);
-      return decision;
-    }
-
-    // 4. Web Search Intent
-    const needsSearch = /^(search|look\s*up|google|find\s*out|latest\s*news|current\s*(?:price|weather|score|news))\b/i.test(lower) ||
-      /\b(who\s*won|latest|today|this\s*week|current\s*events)\b/i.test(lower);
-
-    // 5. Direct Media Intent
-    const mediaPrefix = "(?:(?:can|could|would)\\s+you\\s+(?:please\\s+)?)?(?:please\\s+)?";
-    const isVideo =
-      new RegExp(`\\b${mediaPrefix}(?:generate|create|make|render|produce)\\s+(?:a\\s+)?video\\b`, "i").test(lower) ||
-      /\bvideo\s+of\b/i.test(lower) ||
-      /^animate\b/i.test(lower);
-
-    const isImage =
-      new RegExp(`^${mediaPrefix}(?:generate|create|make|draw|paint|render|imagine|produce)\\s+(?:🎨\\s*)?(?:(?:me|this|a|an)\\s+(?:type\\s+of\\s+)?)?(?:image|photo|picture|drawing|illustration|render|portrait|wallpaper|artwork|art|graphic|visual|sketch|anime|cgi|infographic)\\b`, "i").test(lower) ||
-      new RegExp(`\\b${mediaPrefix}(?:generate|create|make|draw|paint|render)\\s+(?:a\\s+|an\\s+)?(?:infographic|artwork|digital\\s+art|illustration|portrait|wallpaper)\\b`, "i").test(lower) ||
-      /^(?:generate|render|draw|paint|imagine)\s+🎨/i.test(lower) ||
-      /\b(?:picture|photo|image|portrait|illustration|painting|drawing|wallpaper|infographic)\s+of\b/i.test(lower) ||
-      /^(?:draw|paint|render|imagine)\s+(?:me\s+)?/i.test(lower) ||
-      /(?:--ar\s+\d+:\d+|--style\s+raw|--v\s+\d+)/i.test(lower) ||
-      (/^(?:generate|create|draw|paint)\s+/i.test(lower) && /\b(?:photorealistic|cinematic\s+lighting|depth\s+of\s+field|8k|4k\s+render|bokeh|hyperrealistic|unreal\s+engine|wide\s+shot|close-up|volumetric\s+lighting|masterpiece|digital\s+art|infographic)\b/i.test(lower));
-
-    const intent = isVideo ? "video_generation" : isImage ? "image_generation" : "general";
-    const executionProfile: RequestExecutionProfile = isVideo || isImage ? "one_shot" : "conversational";
-
-    let cleanedPrompt: string | undefined = undefined;
-    if (isImage) {
-      cleanedPrompt = trimmed
-        .replace(/^(?:(?:can|could|would)\s+you\s+(?:please\s+)?)?(?:please\s+)?(?:generate|create|make|draw|paint|render|imagine|produce)\s+(?:🎨\s*)?(?:(?:me\s+|this\s+)?(?:type\s+of\s+)?(?:a\s+|an\s+)?(?:image|photo|picture|drawing|illustration|render|portrait|wallpaper|artwork|art|graphic|visual|sketch|anime|cgi|infographic)\s+(?:of\s+)?)?/i, "")
-        .trim();
-      if (!cleanedPrompt) cleanedPrompt = trimmed;
-    } else if (isVideo) {
-      cleanedPrompt = trimmed
-        .replace(/^(?:(?:can|could|would)\s+you\s+(?:please\s+)?)?(?:please\s+)?(?:generate|create|make|render|animate|produce)\s+(?:(?:me\s+)?(?:a\s+|an\s+)?video\s+(?:of\s+)?)?/i, "")
-        .trim();
-      if (!cleanedPrompt) cleanedPrompt = trimmed;
-    }
-
-    const fastDecision: SemanticInteractionDecision = {
-      ...fallback,
-      intent,
-      cleanedPrompt,
-      executionProfile,
-      enableSearch: needsSearch,
-      confidence: 0.95,
-      complexity: "simple",
-    };
-
-    semanticInteractionCache.set(params.text, params.persistentMode, history, fastDecision);
-    logger.info({ intent: fastDecision.intent, text: trimmed, enableSearch: fastDecision.enableSearch }, "PROMPT_INTENT_RESOLVED_DIRECT");
-    return fastDecision;
+    // 3. Clean fallback if AI network is completely unreachable
+    semanticInteractionCache.set(params.text, params.persistentMode, history, fallback);
+    return fallback;
   }
 
   static getCached(text: string, persistentMode: ModeKey, history: Array<{ role: string; content: string }> = []): SemanticInteractionDecision | undefined {

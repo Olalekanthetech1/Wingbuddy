@@ -74,7 +74,16 @@ export function renderDashboardModelControls(): string {
         const isPrimary = activePrimaryId ? (m.id === activePrimaryId) : ((m.roles || []).includes(categoryPrimaryRole) || (categoryPrimaryRole === 'primary_chat' && (m.roles || []).includes('primary')));
         const caps = (m.capabilities || []).map(c => '<span class="pill">' + esc(c) + '</span>').join('');
         
-        return '<div class="wb-model-card ' + (isPrimary ? 'preferred-legacy' : '') + '"><div><strong>' + esc(m.name) + '</strong>' + (isPrimary ? ' <span class="pill good">Primary</span>' : '') + '<div class="mono" style="font-size:12px;color:var(--blue);margin-top:3px">' + esc(m.provider) + ' / ' + esc(m.modelId) + '</div><div class="wb-model-meta">' + roles + '<span class="pill ' + (enabled ? 'good' : 'bad') + '">' + (enabled ? 'Enabled' : 'Disabled') + '</span><span class="pill">Priority ' + esc(m.priority) + '</span>' + caps + '</div></div><div class="wb-model-actions">' + (!isPrimary && enabled ? '<button class="btn primary" data-model-primary="' + esc(m.id) + '">Set as Primary</button>' : '') + '<button class="btn" data-model-edit="' + esc(m.id) + '">Edit</button><button class="btn" data-model-test="' + esc(m.id) + '">Test</button><button class="btn" data-model-toggle="' + esc(m.id) + '" data-enabled="' + enabled + '">' + (enabled ? 'Disable' : 'Enable') + '</button><button class="btn danger" data-model-delete="' + esc(m.id) + '">Delete</button></div></div>';
+        const hasFast = (m.roles || []).includes('fast');
+        const hasReasoning = (m.roles || []).includes('reasoning');
+        
+        let extraActions = '';
+        if (window.__wbActiveTab === 'chat' && enabled) {
+          if (!hasFast) extraActions += '<button class="btn" data-model-role="fast" data-id="' + esc(m.id) + '">Set as Fast</button>';
+          if (!hasReasoning) extraActions += '<button class="btn" data-model-role="reasoning" data-id="' + esc(m.id) + '">Set as Reasoning</button>';
+        }
+
+        return '<div class="wb-model-card ' + (isPrimary ? 'preferred-legacy' : '') + '"><div><strong>' + esc(m.name) + '</strong>' + (isPrimary ? ' <span class="pill good">Primary</span>' : '') + '<div class="mono" style="font-size:12px;color:var(--blue);margin-top:3px">' + esc(m.provider) + ' / ' + esc(m.modelId) + '</div><div class="wb-model-meta">' + roles + '<span class="pill ' + (enabled ? 'good' : 'bad') + '">' + (enabled ? 'Enabled' : 'Disabled') + '</span><span class="pill">Priority ' + esc(m.priority) + '</span>' + caps + '</div></div><div class="wb-model-actions">' + (!isPrimary && enabled ? '<button class="btn primary" data-model-primary="' + esc(m.id) + '">Set as Primary</button>' : '') + extraActions + '<button class="btn" data-model-edit="' + esc(m.id) + '">Edit</button><button class="btn" data-model-test="' + esc(m.id) + '">Test</button><button class="btn" data-model-toggle="' + esc(m.id) + '" data-enabled="' + enabled + '">' + (enabled ? 'Disable' : 'Enable') + '</button><button class="btn danger" data-model-delete="' + esc(m.id) + '">Delete</button></div></div>';
       };
 
       
@@ -159,6 +168,26 @@ export function renderDashboardModelControls(): string {
     if(primaryBtn){
       const id = primaryBtn.getAttribute('data-model-primary');
       if(id) await setPrimary(id, primaryBtn);
+      return;
+    }
+    const roleBtn = t.closest('[data-model-role]');
+    if(roleBtn){
+      const id = roleBtn.getAttribute('data-id');
+      const role = roleBtn.getAttribute('data-model-role');
+      if(id && role){
+        roleBtn.disabled = true;
+        roleBtn.textContent = 'Setting…';
+        try {
+          await api('/api/models/'+encodeURIComponent(id)+'/role/'+encodeURIComponent(role), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+          toast('✓ Role ' + role + ' assigned');
+          await loadModelRegistry();
+          if(typeof window.loadRuntimeConfig==='function') await window.loadRuntimeConfig();
+        } catch(err) {
+          toast('Role update failed: '+err.message, true);
+          roleBtn.disabled = false;
+          roleBtn.textContent = 'Set as ' + role.charAt(0).toUpperCase() + role.slice(1);
+        }
+      }
       return;
     }
     const editBtn = t.closest('[data-model-edit]');

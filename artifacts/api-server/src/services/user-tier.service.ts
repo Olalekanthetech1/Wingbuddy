@@ -97,7 +97,6 @@ const POLICY_KEY = "user_tier_access_policy";
 
 function isAdminTelegramUser(telegramUserId: number | bigint): boolean {
   const numId = Number(telegramUserId);
-  if (numId === 6307001401) return true;
   const envAdminId = Number(process.env.ADMIN_TELEGRAM_ID);
   if (envAdminId && numId === envAdminId) return true;
   const envAdminList = process.env.ADMIN_USER_IDS ? process.env.ADMIN_USER_IDS.split(",").map(s => Number(s.trim())) : [];

@@ -307,6 +307,30 @@ export class UnifiedModelRegistryService {
     await this.persist(next);
     return next.find((model) => model.id === id)!;
   }
+
+  async setRole(id: string, role: UnifiedModelRole): Promise<UnifiedModelRecord> {
+    const models = await this.list();
+    const target = models.find((model) => model.id === id);
+    if (!target) throw new Error("Model not found");
+    if (!ROLES.includes(role)) throw new Error(`Invalid role: ${role}`);
+    if (!target.enabled) throw new Error("Enable the model before assigning it a role.");
+
+    const next = models.map((model) => {
+      if (model.id === id) {
+        return { ...model, roles: unique([...model.roles, role]) };
+      }
+      // For fast, reasoning, extraction, embedding roles, we enforce single model (at top priority)
+      // but actually they can be multiple, app.ts just picks the first.
+      // However, for UI clarity, it's better if "Set as Reasoning" makes it the exclusive reasoning model.
+      if (["fast", "reasoning", "extraction", "embedding"].includes(role)) {
+        return { ...model, roles: model.roles.filter((r) => r !== role) };
+      }
+      return model;
+    });
+
+    await this.persist(next);
+    return next.find((model) => model.id === id)!;
+  }
   async remove(id: string): Promise<void> { const models = await this.list(); const target = models.find((model) => model.id === id); if (!target) throw new Error("Model not found"); await this.persist(models.filter((model) => model.id !== id)); }
   async test(id: string): Promise<{ ok: boolean; latencyMs: number; error?: string }> { const model = (await this.list()).find((item) => item.id === id); if (!model) throw new Error("Model not found"); return aiProviderRegistryService.test(model.provider, model.modelId); }
 

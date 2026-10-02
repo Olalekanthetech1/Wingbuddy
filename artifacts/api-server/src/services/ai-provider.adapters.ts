@@ -118,7 +118,17 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): 
 
 class GeminiAdapter implements AIProviderAdapter {
   readonly providerId = "gemini" as const;
-  private toContents(messages: AIMessage[]) { return messages.filter((message) => message.role !== "tool").map((message) => ({ role: message.role === "assistant" ? "model" : "user", parts: [{ text: message.content }] })); }
+  private toContents(messages: AIMessage[]) {
+    return messages
+      .filter((message) => message.role !== "tool" && message.role !== "system")
+      .map((message) => {
+        const cleanText = typeof message.content === "string" ? message.content.trim() : "";
+        return {
+          role: message.role === "assistant" ? "model" : "user",
+          parts: [{ text: cleanText || "..." }],
+        };
+      });
+  }
   private systemInstruction(messages: AIMessage[]): string | undefined { return messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n") || undefined; }
   async chat(request: AIChatRequest, provider: AIProviderRecord, apiKey?: string): Promise<AIChatResponse> {
     const client = new GoogleGenAI({ apiKey: requireApiKey(provider, apiKey) });
