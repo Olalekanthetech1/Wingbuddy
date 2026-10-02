@@ -1188,28 +1188,28 @@ export function renderUserDashboardHtml(): string {
         card.innerHTML = \`
           <div class="flex items-start justify-between gap-4">
             <div class="flex items-center gap-3">
-              <span class="text-2xl">${p.emoji}</span>
+              <span class="text-2xl">\${p.emoji}</span>
               <div>
                 <div class="flex items-center gap-2">
-                  <h4 class="font-bold text-app-text text-sm">${escapeHtml(p.name)}</h4>
-                  <span class="text-[9px] font-mono text-app-text opacity-50 tracking-tighter uppercase px-1.5 py-0.5 rounded bg-app-highlight">${p.id}</span>
+                  <h4 class="font-bold text-app-text text-sm">\${escapeHtml(p.name)}</h4>
+                  <span class="text-[9px] font-mono text-app-text opacity-50 tracking-tighter uppercase px-1.5 py-0.5 rounded bg-app-highlight">\${p.id}</span>
                 </div>
-                <p class="text-[11px] text-app-text opacity-60 mt-0.5">${escapeHtml(p.tagline)}</p>
+                <p class="text-[11px] text-app-text opacity-60 mt-0.5">\${escapeHtml(p.tagline)}</p>
               </div>
             </div>
             <div class="flex items-center gap-2">
-              <button onclick="togglePersona('${p.id}', ${!p.enabled})" class="px-3 py-1.5 rounded-lg text-[10px] font-bold transition ${p.enabled ? 'bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-500 dark:text-red-400 border border-red-500/20'}">
-                ${p.enabled ? '🟢 Enabled' : '🔴 Disabled'}
+              <button onclick="togglePersona('\${p.id}', \${!p.enabled})" class="px-3 py-1.5 rounded-lg text-[10px] font-bold transition \${p.enabled ? 'bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-500 dark:text-red-400 border border-red-500/20'}">
+                \${p.enabled ? '🟢 Enabled' : '🔴 Disabled'}
               </button>
-              <button onclick="openEditPersonaModal('${p.id}')" class="p-2 rounded-lg bg-app-highlight hover:bg-app-highlight/80 text-app-text opacity-60 hover:opacity-100 transition">✏️</button>
+              <button onclick="openEditPersonaModal('\${p.id}')" class="p-2 rounded-lg bg-app-highlight hover:bg-app-highlight/80 text-app-text opacity-60 hover:opacity-100 transition">✏️</button>
             </div>
           </div>
           <div class="p-3 bg-app-highlight rounded-xl border border-app-border">
             <div class="text-[9px] font-bold text-app-text opacity-50 uppercase tracking-widest mb-1.5 flex items-center justify-between">
               <span>System Instructions</span>
-              <span class="${p.isBuiltIn ? 'text-indigo-600 dark:text-indigo-400' : 'text-amber-600 dark:text-amber-400'}">${p.isBuiltIn ? 'Built-in' : 'Custom'}</span>
+              <span class="\${p.isBuiltIn ? 'text-indigo-600 dark:text-indigo-400' : 'text-amber-600 dark:text-amber-400'}">\${p.isBuiltIn ? 'Built-in' : 'Custom'}</span>
             </div>
-            <p class="text-[11px] text-app-text opacity-80 font-mono leading-relaxed line-clamp-3">${escapeHtml(p.systemPrompt)}</p>
+            <p class="text-[11px] text-app-text opacity-80 font-mono leading-relaxed line-clamp-3">\${escapeHtml(p.systemPrompt)}</p>
           </div>
         \`;
         list.appendChild(card);
@@ -1413,22 +1413,22 @@ export function renderUserDashboardHtml(): string {
         const snippet = c.lastMessageSnippet ? escapeHtml(c.lastMessageSnippet) : 'No messages yet';
         
         return \`
-          <div onclick="switchConversation(${c.id})" class="group cursor-pointer p-3 rounded-xl border transition flex items-center justify-between gap-3 ${isActive ? 'bg-brand-500/10 dark:bg-brand-600/20 border-brand-500/30 dark:border-brand-500/40 text-app-text shadow-sm' : 'bg-app-highlight border-app-border text-app-text opacity-70 hover:opacity-100 hover:bg-app-highlight/80'}">
+          <div onclick="switchConversation(\${c.id})" class="group cursor-pointer p-3 rounded-xl border transition flex items-center justify-between gap-3 \${isActive ? 'bg-brand-500/10 dark:bg-brand-600/20 border-brand-500/30 dark:border-brand-500/40 text-app-text shadow-sm' : 'bg-app-highlight border-app-border text-app-text opacity-70 hover:opacity-100 hover:bg-app-highlight/80'}">
             <div class="flex items-center gap-3 min-w-0 flex-1">
-              <div class="w-8 h-8 rounded-lg flex items-center justify-center text-sm shrink-0 ${isActive ? 'bg-brand-500 text-white' : 'bg-app-highlight text-app-text opacity-50 group-hover:opacity-100'}">
+              <div class="w-8 h-8 rounded-lg flex items-center justify-center text-sm shrink-0 \${isActive ? 'bg-brand-500 text-white' : 'bg-app-highlight text-app-text opacity-50 group-hover:opacity-100'}">
                 💬
               </div>
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2">
-                  <h4 class="font-bold text-xs truncate ${isActive ? 'text-brand-600 dark:text-brand-300 font-extrabold' : 'text-app-text'}">${escapeHtml(c.title || 'New Chat')}</h4>
-                  ${isActive ? '<span class="px-1.5 py-0.2 text-[9px] font-mono font-bold rounded bg-brand-500/20 text-brand-600 dark:text-brand-300 border border-brand-500/30 dark:border-brand-500/40">ACTIVE</span>' : ''}
+                  <h4 class="font-bold text-xs truncate \${isActive ? 'text-brand-600 dark:text-brand-300 font-extrabold' : 'text-app-text'}">\${escapeHtml(c.title || 'New Chat')}</h4>
+                  \${isActive ? '<span class="px-1.5 py-0.2 text-[9px] font-mono font-bold rounded bg-brand-500/20 text-brand-600 dark:text-brand-300 border border-brand-500/30 dark:border-brand-500/40">ACTIVE</span>' : ''}
                 </div>
-                <p class="text-[11px] text-app-text opacity-50 truncate mt-0.5">${snippet}</p>
+                <p class="text-[11px] text-app-text opacity-50 truncate mt-0.5">\${snippet}</p>
               </div>
             </div>
             <div class="flex items-center gap-2 shrink-0">
-              <span class="text-[10px] text-app-text opacity-40 font-mono hidden sm:inline-block">${timeStr}</span>
-              <button onclick="deleteConversation(${c.id}, event)" class="p-1.5 rounded-lg text-app-text opacity-40 hover:opacity-100 hover:text-red-500 transition cursor-pointer" title="Delete this conversation">
+              <span class="text-[10px] text-app-text opacity-40 font-mono hidden sm:inline-block">\${timeStr}</span>
+              <button onclick="deleteConversation(\${c.id}, event)" class="p-1.5 rounded-lg text-app-text opacity-40 hover:opacity-100 hover:text-red-500 transition cursor-pointer" title="Delete this conversation">
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
               </button>
             </div>
@@ -1845,13 +1845,13 @@ export function renderUserDashboardHtml(): string {
               <div class="flex items-center gap-2.5">
                 <span class="w-8 h-8 rounded-lg bg-brand-500/10 text-brand-500 dark:text-brand-400 flex items-center justify-center font-bold text-sm">⚡</span>
                 <div>
-                  <h3 class="font-bold text-app-text text-sm">${escapeHtml(task.title)} <span class="text-app-text opacity-40 text-xs font-mono font-normal">#${task.id}</span></h3>
-                  <p class="text-xs text-app-text opacity-60 mt-0.5">${escapeHtml(task.goal)}</p>
+                  <h3 class="font-bold text-app-text text-sm">\${escapeHtml(task.title)} <span class="text-app-text opacity-40 text-xs font-mono font-normal">#\${task.id}</span></h3>
+                  <p class="text-xs text-app-text opacity-60 mt-0.5">\${escapeHtml(task.goal)}</p>
                 </div>
               </div>
               <div class="flex items-center gap-2">
-                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${task.status === 'active' ? 'bg-emerald-500/20 text-emerald-500 dark:text-emerald-400' : 'bg-app-highlight text-app-text opacity-50'}">${task.status}</span>
-                <button onclick="runTaskNow('${task.id}')" class="px-3 py-1 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold transition flex items-center gap-1">
+                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase \${task.status === 'active' ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400' : 'bg-app-highlight text-app-text opacity-50'}">\${task.status}</span>
+                <button onclick="runTaskNow('\${task.id}')" class="px-3 py-1 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold transition flex items-center gap-1">
                   <span>⚡ Run Now</span>
                 </button>
               </div>
@@ -1861,8 +1861,8 @@ export function renderUserDashboardHtml(): string {
                 <div class="text-[11px] font-bold text-app-text opacity-50">Execution Plan Steps:</div>
                 \${task.steps.map(s => \`
                   <div class="flex items-center justify-between text-xs py-1 px-2 rounded bg-app-highlight">
-                    <span class="text-app-text opacity-80">${s.step_order}. ${escapeHtml(s.title)}</span>
-                    <span class="text-[10px] font-mono text-app-text opacity-40">${s.status}</span>
+                    <span class="text-app-text opacity-80">\${s.step_order}. \${escapeHtml(s.title)}</span>
+                    <span class="text-[10px] font-mono text-app-text opacity-40">\${s.status}</span>
                   </div>
                 \`).join('')}
               </div>
@@ -1921,10 +1921,10 @@ export function renderUserDashboardHtml(): string {
           card.className = 'glass-panel rounded-2xl p-4 space-y-2';
           card.innerHTML = \`
             <div class="flex items-center justify-between text-xs">
-              <span class="px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-600 dark:text-purple-300 font-bold uppercase text-[10px]">${escapeHtml(mem.category || 'general')}</span>
-              <button onclick="deleteMemory('${encodeURIComponent(mem.key)}')" class="text-app-text opacity-40 hover:opacity-100 hover:text-red-500 transition text-[11px]">Delete</button>
+              <span class="px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-600 dark:text-purple-300 font-bold uppercase text-[10px]">\${escapeHtml(mem.category || 'general')}</span>
+              <button onclick="deleteMemory('\${encodeURIComponent(mem.key)}')" class="text-app-text opacity-40 hover:opacity-100 hover:text-red-500 transition text-[11px]">Delete</button>
             </div>
-            <div class="font-bold text-app-text text-xs font-mono">${escapeHtml(mem.key)}</div>
+            <div class="font-bold text-app-text text-xs font-mono">\${escapeHtml(mem.key)}</div>
             <p class="text-xs text-app-text opacity-70 leading-relaxed">\${escapeHtml(mem.content)}</p>
           \`;
           list.appendChild(card);
@@ -1969,12 +1969,12 @@ export function renderUserDashboardHtml(): string {
           card.className = 'glass-panel rounded-2xl p-4 flex items-center justify-between';
           card.innerHTML = \`
             <div class="space-y-1">
-              <div class="text-xs font-bold text-app-text">${escapeHtml(rem.prompt)}</div>
-              <div class="text-[11px] text-app-text opacity-50 font-mono">Due: ${new Date(rem.due_at).toLocaleString()}</div>
+              <div class="text-xs font-bold text-app-text">\${escapeHtml(rem.prompt)}</div>
+              <div class="text-[11px] text-app-text opacity-50 font-mono">Due: \${new Date(rem.due_at).toLocaleString()}</div>
             </div>
             <div class="flex items-center gap-2">
-              <button onclick="snoozeReminder('${rem.id}', 60)" class="px-2.5 py-1 rounded-lg bg-app-highlight hover:bg-app-highlight/80 text-xs text-app-text opacity-80">+1h</button>
-              <button onclick="completeReminder('${rem.id}')" class="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white">Done</button>
+              <button onclick="snoozeReminder('\${rem.id}', 60)" class="px-2.5 py-1 rounded-lg bg-app-highlight hover:bg-app-highlight/80 text-xs text-app-text opacity-80">+1h</button>
+              <button onclick="completeReminder('\${rem.id}')" class="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white">Done</button>
             </div>
           \`;
           list.appendChild(card);
@@ -2210,8 +2210,8 @@ export function renderUserDashboardHtml(): string {
             tasksList.innerHTML = rows.map(t => \`
               <div class="p-3 rounded-xl bg-app-highlight border border-app-border flex items-center justify-between gap-3">
                 <div class="min-w-0 flex-1">
-                  <div class="font-bold text-app-text text-xs truncate">${escapeHtml(t.title)}</div>
-                  <div class="text-[11px] text-app-text opacity-50 truncate mt-0.5">${escapeHtml(t.goal)}</div>
+                  <div class="font-bold text-app-text text-xs truncate">\${escapeHtml(t.title)}</div>
+                  <div class="text-[11px] text-app-text opacity-50 truncate mt-0.5">\${escapeHtml(t.goal)}</div>
                 </div>
                 <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase shrink-0 \${t.status === 'active' ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400' : 'bg-app-highlight text-app-text opacity-50'}">\${escapeHtml(t.status)}</span>
               </div>
@@ -2229,8 +2229,8 @@ export function renderUserDashboardHtml(): string {
             memList.innerHTML = rows.map(m => \`
               <div class="p-3 rounded-xl bg-app-highlight border border-app-border flex items-center justify-between gap-3">
                 <div class="min-w-0 flex-1">
-                  <div class="font-bold text-app-text text-xs truncate">${escapeHtml(m.key)}</div>
-                  <div class="text-[11px] text-app-text opacity-50 truncate mt-0.5">${escapeHtml(m.content)}</div>
+                  <div class="font-bold text-app-text text-xs truncate">\${escapeHtml(m.key)}</div>
+                  <div class="text-[11px] text-app-text opacity-50 truncate mt-0.5">\${escapeHtml(m.content)}</div>
                 </div>
                 <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/20 text-purple-600 dark:text-purple-300 uppercase shrink-0">\${escapeHtml(m.category || 'general')}</span>
               </div>
