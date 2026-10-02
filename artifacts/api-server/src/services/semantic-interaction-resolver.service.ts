@@ -266,8 +266,32 @@ export class SemanticInteractionResolverService {
     const cached = semanticInteractionCache.get(params.text, params.persistentMode, history);
     if (cached) return cached;
 
-    const profile = MODES[params.persistentMode] || MODES.general;
     const trimmed = params.text.trim();
+
+    // Fast-path: Greetings under 30 characters do not require an upstream LLM classifier call
+    if (/^(hi|hello|hey|greetings|good\s*(morning|afternoon|evening)|howdy)\b/i.test(trimmed) && trimmed.length < 35) {
+      const quickGreeting: SemanticInteractionDecision = {
+        intent: "greeting",
+        promptTypes: ["CONVERSATIONAL"],
+        primaryPromptType: "CONVERSATIONAL",
+        executionProfile: "conversational",
+        effectiveMode: params.persistentMode,
+        requiredCapabilities: [],
+        enableSearch: false,
+        isGreeting: true,
+        complexity: "simple",
+        confidence: 0.99,
+        taskIntent: "NO_TASK",
+        durabilityEvidence: [],
+        isMediaVariation: false,
+        isMediaRegeneration: false,
+      };
+      semanticInteractionCache.set(params.text, params.persistentMode, history, quickGreeting);
+      logger.info({ intent: "greeting", text: trimmed }, "PROMPT_INTENT_RESOLVED_FASTPATH");
+      return quickGreeting;
+    }
+
+    const profile = MODES[params.persistentMode] || MODES.general;
     const promptForLLM = jsonOnlyPrompt(params.text, params.persistentMode, history);
 
     // 1. Try Gemini Service (Native/Primary)

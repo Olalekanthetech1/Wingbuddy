@@ -136,17 +136,22 @@ export async function ensureDatabaseSchema(pgPool?: pg.Pool): Promise<void> {
       content TEXT NOT NULL,
       token_count INTEGER,
       external_id TEXT,
+      embedding_json TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
-    CREATE INDEX IF NOT EXISTS messages_conversation_created_idx ON messages(conversation_id, created_at);
-    CREATE INDEX IF NOT EXISTS messages_external_id_idx ON messages(external_id);
 
-    -- Ensure media and source columns exist on messages
+    -- Ensure all columns exist on messages before creating indexes
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_type TEXT NOT NULL DEFAULT 'text';
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'web';
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS audio_url TEXT;
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS external_id TEXT;
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS embedding_json TEXT;
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS asset_id INTEGER;
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS job_id TEXT;
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS metadata_json TEXT;
+
+    CREATE INDEX IF NOT EXISTS messages_conversation_created_idx ON messages(conversation_id, created_at);
+    CREATE INDEX IF NOT EXISTS messages_external_id_idx ON messages(external_id);
 
     -- Web Users Table for Google Sign-In & Dashboard Accounts
     CREATE TABLE IF NOT EXISTS web_users (

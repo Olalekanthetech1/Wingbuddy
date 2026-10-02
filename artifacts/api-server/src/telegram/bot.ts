@@ -87,6 +87,7 @@ import { onboardingService } from "../services/onboarding.service";
 import { timezoneService } from "../services/timezone.service";
 import { registerOnboardingHandlers, startOnboarding } from "./onboarding";
 import { scheduledTaskFlowService } from "../services/scheduled-task-flow.service";
+import { categorizeAndLogError } from "../utils/error-taxonomy";
 import { PrismaClient } from "@prisma/client";
 import cronParser from "cron-parser";
 const { parseExpression } = cronParser;
@@ -1896,7 +1897,16 @@ export function createTelegramBot(): TelegramBotRuntime {
         if (request) requestRegistryService.markFailed(request.requestId, { error: safeErrorMetadata(error) });
       }
       logger.error({ stage: "telegram_message_handling", telegramUserId: ctx.from.id, chatId: ctx.chat.id, error: safeErrorMetadata(error) }, "Telegram message handling failed");
-      await ctx.reply(GENERIC_ERROR_MESSAGE).catch(() => {});
+
+      const taxonomical = categorizeAndLogError(error);
+      const errStr = (error instanceof Error ? error.message : String(error)).toLowerCase();
+      const isRateLimit = taxonomical.category === "RATE_LIMIT_EXCEEDED" || errStr.includes("429") || errStr.includes("quota") || errStr.includes("resource_exhausted");
+
+      if (isRateLimit) {
+        await ctx.reply("⏳ <b>Google Gemini quota or rate limit temporarily reached (429).</b>\n\nPlease wait about 30 seconds before sending another message. You can also connect additional Gemini API keys in your Web Dashboard.", { parse_mode: "HTML" }).catch(() => {});
+      } else {
+        await ctx.reply(`⚠️ ${escapeHtml(taxonomical.userMessage)}\n\n<i>(Reference ID: <code>${taxonomical.referenceId}</code>)</i>`, { parse_mode: "HTML" }).catch(() => {});
+      }
     } finally {
       stopTyping();
       try {
