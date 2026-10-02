@@ -103,61 +103,6 @@ router.get("/me", requireAuth, async (req: Request, res: Response) => {
 });
 
 /**
- * GET /api/auth/events
- * Server-Sent Events (SSE) connection for real-time bi-directional messaging
- */
-router.get("/events", async (req: Request, res: Response) => {
-  try {
-    const token = (req.query.token as string) || (req.cookies?.session_token as string);
-    if (!token) {
-      res.status(401).json({ error: "Unauthorized: Missing token for real-time events" });
-      return;
-    }
-
-    const user = await authService.validateSession(token);
-    if (!user) {
-      res.status(401).json({ error: "Unauthorized: Invalid token for real-time events" });
-      return;
-    }
-
-    // Set SSE headers
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache, no-transform",
-      "Connection": "keep-alive",
-      "X-Accel-Buffering": "no", // Disable buffering in Nginx proxies
-    });
-
-    // Write initial padding/ping
-    res.write(":\n\n");
-
-    // Register clients for both user-based key and Telegram user key if linked
-    const cleanupFn1 = eventBusService.registerClient(`user:${user.id}`, res);
-    let cleanupFn2: (() => void) | null = null;
-    if (user.telegramUserId) {
-      cleanupFn2 = eventBusService.registerClient(`tg:${user.telegramUserId}`, res);
-    }
-
-    const heartbeatInterval = setInterval(() => {
-      if (!res.writableEnded) {
-        res.write(":\n\n"); // SSE ping comment
-      }
-    }, 30000);
-
-    req.on("close", () => {
-      clearInterval(heartbeatInterval);
-      cleanupFn1();
-      if (cleanupFn2) cleanupFn2();
-    });
-  } catch (err: any) {
-    logger.error({ error: err }, "Error in SSE auth/events route");
-    if (!res.headersSent) {
-      res.status(500).json({ error: err.message || "Failed starting event stream" });
-    }
-  }
-});
-
-/**
  * POST /api/auth/telegram/generate-link
  * Generates a 1-click single-use Telegram pairing link with live bot handle.
  */
@@ -303,9 +248,9 @@ router.post("/revoke-all-sessions", requireAuth, async (req: Request, res: Respo
 });
 
 /**
- * POST & PUT /api/auth/preferences
+ * POST /api/auth/preferences
  */
-const handlePreferences = async (req: Request, res: Response) => {
+router.post("/preferences", requireAuth, async (req: Request, res: Response) => {
   try {
     const userId = req.user!.id;
     const { notificationPreference, contextSyncMode } = req.body;
@@ -318,10 +263,37 @@ const handlePreferences = async (req: Request, res: Response) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message || "Failed updating preferences" });
   }
-};
+});
 
-router.post("/preferences", requireAuth, handlePreferences);
-router.put("/preferences", requireAuth, handlePreferences);
+/**
+ * GET /api/auth/events
+ * Real-time SSE event stream for continuous bi-directional sync and notifications.
+ */
+router.get("/events", requireAuth, (req: Request, res: Response) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+
+  const user = req.user!;
+  const userKey = `user:${user.id}`;
+
+  const cleanup = eventBusService.registerClient(userKey, res);
+
+  const heartbeatInterval = setInterval(() => {
+    if (!res.writableEnded) {
+      res.write(`: heartbeat\n\n`);
+      if (typeof (res as any).flush === "function") {
+        (res as any).flush();
+      }
+    }
+  }, 15000);
+
+  req.on("close", () => {
+    clearInterval(heartbeatInterval);
+    cleanup();
+  });
+});
 
 /**
  * POST /api/auth/logout

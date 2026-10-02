@@ -6,6 +6,8 @@ import { apiKeyPoolService, type ApiKeyPoolService, type ManagedKey } from "../s
 import { AdaptiveEngineService } from "../services/adaptive-engine.service";
 import { geminiModelPoolService } from "../services/gemini-model-pool.service";
 import { adaptiveAIRouterService } from "../services/adaptive-ai-router.service";
+import { OutputGuardService } from "../services/output-guard.service";
+import { categorizeAndLogError } from "../utils/error-taxonomy";
 import type { AIChatRequest } from "../services/ai-provider.types";
 
 export interface GeminiMessage { role: "user" | "model"; content: string; }
@@ -169,8 +171,18 @@ export class GeminiService {
       for (const model of this.modelCandidates(context)) {
         try {
           const response = await this.callWithTimeout(client, model, contents, config, this.timeout(context));
-          const text = this.withGroundingSources(response.text?.trim(), response);
+          let text = this.withGroundingSources(response.text?.trim(), response);
           if (!text) throw new GeminiMalformedResponseError();
+
+          // Context-aware Output Guard for native direct completions
+          const systemPrompt = typeof config.systemInstruction === "string" ? config.systemInstruction : "";
+          const leakCheck = OutputGuardService.detectLeak({ response: text, systemPrompt, userQuery: message });
+          if (leakCheck.isLeak) {
+            logger.warn({ reason: leakCheck.reason, model }, "Prompt leak detected in direct Gemini completion. Blocking response.");
+            const taxonomical = categorizeAndLogError(new Error("Secure policy violation: Direct prompt leak detected."));
+            text = `⚠️ I am Wingbuddy, your dedicated assistant. I cannot share technical configuration details. (Reference ID: ${taxonomical.referenceId})`;
+          }
+
           if (keyInfo) this.pool.recordSuccess(keyInfo.id, Date.now() - started);
           logger.debug({ model, keyId: keyInfo?.id, enableSearch: context.enableSearch }, "Gemini model attempt succeeded");
           return text;
@@ -244,7 +256,7 @@ export class GeminiService {
       const client = this.getClient(keyInfo);
       for (const model of this.modelCandidates(context)) {
         try {
-          const result = await this.streamWithTimeout(client, model, contents, config, this.timeout(context), onChunk);
+          const result = await this.streamWithTimeout(client, model, contents, config, this.timeout(context), message, onChunk);
           if (result.text) return result.text;
         } catch (error) {
           lastError = error;
@@ -289,7 +301,7 @@ export class GeminiService {
     return Promise.race([client.models.generateContent({ model, contents, config }), new Promise<never>((_, reject) => setTimeout(() => reject(new GeminiTimeoutError()), timeoutMs))]);
   }
 
-  private async streamWithTimeout(client: GeminiClient, model: string, contents: Content[], config: Record<string, unknown>, timeoutMs: number, onChunk?: (accumulatedText: string) => Promise<void> | void): Promise<{ text: string }> {
+  private async streamWithTimeout(client: GeminiClient, model: string, contents: Content[], config: Record<string, unknown>, timeoutMs: number, userQuery: string, onChunk?: (accumulatedText: string) => Promise<void> | void): Promise<{ text: string }> {
     if (typeof client.models.generateContentStream !== "function") {
       const response = await this.callWithTimeout(client, model, contents, config, timeoutMs);
       const text = this.withGroundingSources(response.text?.trim(), response) || "";
@@ -302,7 +314,27 @@ export class GeminiService {
     const sources: Array<{ uri: string; title?: string }> = [];
     try {
       for await (const chunk of stream) {
-        if (chunk.text) { accumulated += chunk.text; if (onChunk) await onChunk(accumulated); }
+        if (chunk.text) {
+          accumulated += chunk.text;
+
+          // Apply Output Guard check
+          const systemPrompt = typeof config.systemInstruction === "string" ? config.systemInstruction : "";
+          const leakCheck = OutputGuardService.detectLeak({
+            response: accumulated,
+            systemPrompt,
+            userQuery,
+          });
+
+          if (leakCheck.isLeak) {
+            logger.warn({ reason: leakCheck.reason, model }, "Prompt leak detected in Gemini stream chunk. Aborting stream.");
+            const taxonomical = categorizeAndLogError(new Error("Secure policy violation: Streamed prompt leak detected."));
+            accumulated = `⚠️ I am Wingbuddy, your dedicated assistant. I cannot share technical configuration details. (Reference ID: ${taxonomical.referenceId})`;
+            if (onChunk) await onChunk(accumulated);
+            return { text: accumulated };
+          }
+
+          if (onChunk) await onChunk(accumulated);
+        }
         for (const c of chunk.candidates?.[0]?.groundingMetadata?.groundingChunks || []) if (c.web?.uri && !sources.some((s) => s.uri === c.web?.uri)) sources.push({ uri: c.web.uri, title: c.web.title });
       }
     } catch (error) {

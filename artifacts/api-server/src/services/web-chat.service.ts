@@ -1,4 +1,5 @@
 import { getPool } from "@workspace/db";
+import type { Request, Response } from "express";
 import { ConversationService } from "./conversation.service";
 import { adaptiveAIRouterService } from "./adaptive-ai-router.service";
 import { eventBusService } from "./event-bus.service";
@@ -10,8 +11,13 @@ import { userTierService } from "./user-tier.service";
 import { unifiedModelRegistryService } from "./unified-model-registry.service";
 import type { AuthenticatedUser } from "./auth.service";
 import { buildUserPromptIdentityBlock, userIdentityResolverService } from "./user-identity-resolver.service";
+import { PromptBuilderService } from "./prompt-builder.service";
+import { PERSONALITIES, type PersonalityKey } from "../config/personality";
+import { MODES } from "../config/mode";
+import { categorizeAndLogError } from "../utils/error-taxonomy";
 import { mediaJobOrchestratorService } from "./media/media-job-orchestrator.service";
 import { semanticInteractionResolverService } from "./semantic-interaction-resolver.service";
+import { OutputGuardService } from "./output-guard.service";
 
 const conversationService = new ConversationService();
 
@@ -613,18 +619,26 @@ export class WebChatService {
       logger.warn({ mediaContextErr }, "Failed fetching media context for prompt");
     }
 
-    const systemPrompt = [
-      "You are the Wingbuddy AI Assistant operating inside the unified Web Workspace & Telegram ecosystem.",
-      identityBlock,
-      activeAdminConfigInfo ? `[Authoritative System Configuration]:\n${activeAdminConfigInfo}` : "",
-      persona?.systemPrompt ? `Active Persona (${persona.name}): ${persona.systemPrompt}` : "",
+    const manifest = await PromptBuilderService.buildLiveManifest({
+      userId: Number(partitionId),
+      telegramUserId: user.telegramUserId,
+    });
+
+    const memoryInstruction = [
       contextualMemories ? `[User Memory & Preferences Vault]:\n${contextualMemories}` : "",
       mediaArtifactsContext,
-      "Strict Zero-Fallback Policy: Answer authoritatively with real, accurate information. If asked about your model or system configuration, cite the authoritative Admin Configured Primary Model above. If live web research or search results are needed, be precise and cite facts with Markdown links. Never use mock data, hardcoded placeholder values, static fallbacks, or simulated responses. All outputs and features must rely exclusively on live, dynamic, adaptive data and verified system capabilities.",
-      "Format code snippets with full syntax highlighting markdown.",
-    ]
-      .filter(Boolean)
-      .join("\n\n");
+    ].filter(Boolean).join("\n\n");
+
+    const systemPrompt = PromptBuilderService.buildSystemPrompt({
+      userName: liveUserRow?.preferred_name || liveUserRow?.first_name || liveUserRow?.given_name || undefined,
+      personalityInstruction: userRecord?.personality ? PERSONALITIES[userRecord.personality as PersonalityKey]?.instruction : PERSONALITIES.playful.instruction,
+      modeInstruction: MODES[options?.mode || userRecord?.mode || "general"]?.instruction || MODES.general.instruction,
+      memoryInstruction,
+      manifest,
+      personaInstruction: persona?.systemPrompt,
+      personaName: persona?.name,
+      personaEmoji: persona?.emoji,
+    });
 
     const routerMessages: Array<{ role: "user" | "assistant" | "system"; content: string }> = [
       { role: "system", content: systemPrompt },
@@ -651,8 +665,8 @@ export class WebChatService {
       );
       assistantReplyText = routeResult.response.text || "I have processed your request.";
     } catch (aiErr: any) {
-      logger.error({ error: aiErr }, "Web chat AI routing failure");
-      assistantReplyText = `Execution error: ${aiErr?.message || "Failed to generate response across configured AI models."}`;
+      const sanitized = categorizeAndLogError(aiErr);
+      assistantReplyText = sanitized.userMessage;
     }
 
     // 7. Save assistant message
@@ -699,6 +713,544 @@ export class WebChatService {
     }
 
     return { userMessage, assistantMessage, conversationId, conversationTitle: updatedTitle };
+  }
+
+  private static activeStreams = new Map<number, { abort: () => void }>();
+
+  public stopStream(conversationId: number): boolean {
+    const stream = WebChatService.activeStreams.get(conversationId);
+    if (stream) {
+      stream.abort();
+      WebChatService.activeStreams.delete(conversationId);
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Streams a new user prompt from the Web Workspace via Server-Sent Events.
+   */
+  public async streamMessage(
+    user: AuthenticatedUser,
+    content: string,
+    res: Response,
+    req: Request,
+    options?: { mode?: string; modelOverride?: string; searchEnabled?: boolean; clientMsgId?: string; conversationId?: number }
+  ): Promise<void> {
+    const partitionId = await this.ensurePartitionUser(user);
+    const pool = getPool();
+
+    // 1. Resolve Target Conversation ID
+    let conversationId = options?.conversationId;
+    if (!conversationId) {
+      const latestConvRes = await pool.query(
+        `SELECT id, title FROM conversations WHERE telegram_user_id = $1 ORDER BY updated_at DESC LIMIT 1;`,
+        [partitionId]
+      );
+      if (latestConvRes.rows.length > 0) {
+        conversationId = latestConvRes.rows[0].id;
+      } else {
+        const created = await this.createConversation(user, "New Chat");
+        conversationId = created.id;
+      }
+    } else {
+      // Verify ownership
+      const checkRes = await pool.query(
+        `SELECT id FROM conversations WHERE id = $1 AND telegram_user_id = $2;`,
+        [conversationId, partitionId]
+      );
+      if (checkRes.rows.length === 0) {
+        const created = await this.createConversation(user, "New Chat");
+        conversationId = created.id;
+      }
+    }
+
+    // 2. Enforce one active stream per conversation
+    if (WebChatService.activeStreams.has(conversationId)) {
+      res.status(409).json({ error: "Another streaming session is active for this conversation thread." });
+      return;
+    }
+
+    let isAborted = false;
+    let isFinished = false;
+
+    WebChatService.activeStreams.set(conversationId, {
+      abort: () => {
+        isAborted = true;
+      }
+    });
+
+    // 3. Fetch authoritative user preferences and admin overrides
+    const [userRecord, userTier] = await Promise.all([
+      userTierService.getUser(partitionId).catch(() => null),
+      userTierService.getUserTier(partitionId).catch(() => "free" as const),
+    ]);
+
+    // 4. Insert user message
+    const insertUserMsgQuery = `
+      INSERT INTO messages (conversation_id, role, content, media_type, source, created_at)
+      VALUES ($1, 'user', $2, 'text', 'web', NOW())
+      RETURNING id, role, content, media_type, source, created_at, conversation_id;
+    `;
+    const userMsgRes = await pool.query(insertUserMsgQuery, [conversationId, content]);
+    const userMessage = {
+      id: userMsgRes.rows[0].id,
+      conversationId: userMsgRes.rows[0].conversation_id,
+      clientMsgId: options?.clientMsgId,
+      role: "user",
+      content: userMsgRes.rows[0].content,
+      mediaType: userMsgRes.rows[0].media_type,
+      source: "web",
+      createdAt: userMsgRes.rows[0].created_at,
+    };
+
+    // Auto-generate conversation title if currently "New Chat"
+    let updatedTitle: string | undefined;
+    const titleCheck = await pool.query(`SELECT title FROM conversations WHERE id = $1;`, [conversationId]);
+    if (titleCheck.rows[0]?.title === "New Chat" || !titleCheck.rows[0]?.title) {
+      const generatedTitle = content.trim().replace(/\s+/g, " ").slice(0, 40);
+      updatedTitle = generatedTitle.length > 37 ? generatedTitle + "..." : generatedTitle;
+      await pool.query(
+        `UPDATE conversations SET title = $1, updated_at = NOW() WHERE id = $2;`,
+        [updatedTitle, conversationId]
+      );
+    } else {
+      await pool.query(`UPDATE conversations SET updated_at = NOW() WHERE id = $1;`, [conversationId]);
+    }
+
+    // Emit user message to SSE (includes clientMsgId for frontend deduplication/reconciliation)
+    eventBusService.emitUserEvent({
+      type: "chat_message",
+      userId: user.id,
+      telegramUserId: user.telegramUserId,
+      data: { ...userMessage, conversationTitle: updatedTitle },
+    });
+
+    // Set headers for EventStream
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+
+    const sendEvent = (event: string, data: any) => {
+      if (!res.writableEnded) {
+        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        if (typeof (res as any).flush === "function") {
+          (res as any).flush();
+        }
+      }
+    };
+
+    // Check for in-chat name update phrases
+    const inChatNameCheck = await userIdentityResolverService.checkAndHandleInChatNameUpdate(partitionId, content, false);
+    if (inChatNameCheck.handled && inChatNameCheck.replyText) {
+      const nameReplyRes = await pool.query(
+        `INSERT INTO messages (conversation_id, role, content, media_type, source, created_at)
+         VALUES ($1, 'model', $2, 'text', 'web', NOW())
+         RETURNING id, created_at;`,
+        [conversationId, inChatNameCheck.replyText]
+      );
+      const assistantMessage = {
+        id: nameReplyRes.rows[0].id,
+        conversationId,
+        role: "assistant" as const,
+        content: inChatNameCheck.replyText,
+        mediaType: "text",
+        source: "web",
+        createdAt: nameReplyRes.rows[0].created_at,
+      };
+
+      sendEvent("start", { messageId: nameReplyRes.rows[0].id, conversationId, conversationTitle: updatedTitle });
+      sendEvent("delta", { delta: inChatNameCheck.replyText });
+      sendEvent("done", { text: inChatNameCheck.replyText, conversationId });
+
+      eventBusService.emitUserEvent({
+        type: "chat_message",
+        userId: user.id,
+        telegramUserId: user.telegramUserId,
+        data: assistantMessage,
+      });
+
+      WebChatService.activeStreams.delete(conversationId);
+      isFinished = true;
+      res.end();
+      return;
+    }
+
+    // Check for explicit media shortcuts (/image, /video, etc.)
+    const trimmedInput = content.trim();
+    const isImageCmd = /^\/(image|img|draw|paint)\b/i.test(trimmedInput);
+    const isVideoCmd = /^\/(video|vid|clip)\b/i.test(trimmedInput);
+
+    let mediaModality: "image" | "video" | null = null;
+    let mediaPrompt = "";
+
+    if (isImageCmd) {
+      mediaModality = "image";
+      mediaPrompt = trimmedInput.replace(/^\/(image|img|draw|paint)\s*/i, "").trim();
+    } else if (isVideoCmd) {
+      mediaModality = "video";
+      mediaPrompt = trimmedInput.replace(/^\/(video|vid|clip)\s*/i, "").trim();
+    } else {
+      try {
+        const histQuick = await pool.query(
+          `SELECT role, content FROM messages WHERE conversation_id = $1 AND id != $2 ORDER BY created_at DESC LIMIT 6;`,
+          [conversationId, userMessage.id]
+        );
+        const histPayload = histQuick.rows.reverse().map((m) => ({
+          role: (m.role === "model" ? "assistant" : "user") as "assistant" | "user",
+          content: m.content,
+        }));
+
+        const semanticDecision = await semanticInteractionResolverService.resolve({
+          text: content,
+          persistentMode: userRecord?.mode || "general",
+          history: histPayload,
+        });
+
+        if (semanticDecision.intent === "image_generation") {
+          mediaModality = "image";
+          mediaPrompt = semanticDecision.cleanedPrompt || content;
+        } else if (semanticDecision.intent === "video_generation") {
+          mediaModality = "video";
+          mediaPrompt = semanticDecision.cleanedPrompt || content;
+        }
+      } catch (intentErr) {
+        logger.warn({ intentErr }, "Failed evaluating semantic intent for media");
+      }
+    }
+
+    if (mediaModality && mediaPrompt) {
+      const { job, messageId: placeholderMsgId } = await mediaJobOrchestratorService.enqueueJob({
+        ownerUserId: partitionId,
+        conversationId,
+        modality: mediaModality,
+        prompt: mediaPrompt,
+        sourceInterface: "web",
+        clientMsgId: options?.clientMsgId,
+      });
+
+      const initialPlaceholderText = mediaModality === "video"
+        ? `🎬 Generating video for: "${mediaPrompt}"`
+        : `🎨 Generating image for: "${mediaPrompt}"`;
+
+      const assistantMessage = {
+        id: placeholderMsgId,
+        conversationId,
+        role: "model",
+        content: initialPlaceholderText,
+        mediaType: mediaModality,
+        source: "web",
+        jobId: job.jobId,
+        job,
+        createdAt: job.createdAt,
+      };
+
+      sendEvent("start", { messageId: placeholderMsgId, conversationId, conversationTitle: updatedTitle });
+      sendEvent("delta", { delta: initialPlaceholderText });
+      sendEvent("done", { text: initialPlaceholderText, conversationId });
+
+      eventBusService.emitUserEvent({
+        type: "chat_message",
+        userId: user.id,
+        telegramUserId: user.telegramUserId,
+        data: assistantMessage,
+      });
+
+      WebChatService.activeStreams.delete(conversationId);
+      isFinished = true;
+      res.end();
+      return;
+    }
+
+    // Context memories & history
+    let contextualMemories = "";
+    try {
+      const memories = await memoryService.getUserMemories(partitionId);
+      if (memories && memories.length > 0) {
+        contextualMemories = memoryService.formatMemoriesForPrompt(memories);
+      }
+    } catch (memErr) {
+      logger.warn({ error: memErr }, "Failed fetching user memories for web chat context");
+    }
+
+    const historyRes = await pool.query(
+      `SELECT id, role, content FROM messages WHERE conversation_id = $1 AND id != $2 ORDER BY created_at DESC LIMIT 12;`,
+      [conversationId, userMessage.id]
+    );
+    const historyPayload = historyRes.rows.reverse().map((m) => ({
+      role: (m.role === "model" ? "assistant" : "user") as "assistant" | "user",
+      content: m.content,
+    }));
+
+    const personaResult = await personaService.getPersona(partitionId).catch(() => null);
+    const persona = personaResult?.persona;
+
+    const liveUserIdentityRes = await pool.query(
+      `SELECT u.preferred_name, u.name_source, u.first_name, w.given_name, w.name, tz.content as user_tz
+       FROM users u
+       LEFT JOIN web_users w ON w.telegram_user_id = u.telegram_user_id
+       LEFT JOIN user_memories tz ON tz.telegram_user_id = u.telegram_user_id AND tz.key = 'user_timezone' AND tz.status != 'deleted'
+       WHERE u.telegram_user_id = $1 LIMIT 1;`,
+      [partitionId]
+    );
+    const liveUserRow = liveUserIdentityRes.rows[0];
+
+    let mediaArtifactsContext = "";
+    try {
+      const recentMediaRes = await pool.query(
+        `SELECT id, type, prompt, engine, url FROM media_assets WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 3;`,
+        [conversationId]
+      );
+      if (recentMediaRes.rows.length > 0) {
+        mediaArtifactsContext = [
+          "[Recent Generated Media Artifacts in this Conversation Thread]:",
+          ...recentMediaRes.rows.map(
+            (r) => `- ${r.type.toUpperCase()} #${r.id} (Engine: ${r.engine}): Prompt "${r.prompt}". URL: ${r.url}`
+          ),
+          "If the user asks follow-up changes (e.g. 'make it darker', 'vary that image', 'turn that into a video'), refer to the most recent artifact above."
+        ].join("\n");
+      }
+    } catch (mediaContextErr) {
+      logger.warn({ mediaContextErr }, "Failed fetching media context for prompt");
+    }
+
+    const manifest = await PromptBuilderService.buildLiveManifest({
+      userId: Number(partitionId),
+      telegramUserId: user.telegramUserId,
+    });
+
+    const memoryInstruction = [
+      contextualMemories ? `[User Memory & Preferences Vault]:\n${contextualMemories}` : "",
+      mediaArtifactsContext,
+    ].filter(Boolean).join("\n\n");
+
+    const systemPrompt = PromptBuilderService.buildSystemPrompt({
+      userName: liveUserRow?.preferred_name || liveUserRow?.first_name || liveUserRow?.given_name || undefined,
+      personalityInstruction: userRecord?.personality ? PERSONALITIES[userRecord.personality as PersonalityKey]?.instruction : PERSONALITIES.playful.instruction,
+      modeInstruction: MODES[options?.mode || userRecord?.mode || "general"]?.instruction || MODES.general.instruction,
+      memoryInstruction,
+      manifest,
+      personaInstruction: persona?.systemPrompt,
+      personaName: persona?.name,
+      personaEmoji: persona?.emoji,
+    });
+
+    const routerMessages: Array<{ role: "user" | "assistant" | "system"; content: string }> = [
+      { role: "system", content: systemPrompt },
+      ...historyPayload,
+      { role: "user", content },
+    ];
+
+    // Create assistant streaming placeholder message in database
+    const insertAssistantMsgQuery = `
+      INSERT INTO messages (conversation_id, role, content, media_type, source, metadata_json, created_at)
+      VALUES ($1, 'model', '', 'text', 'web', $2, NOW())
+      RETURNING id, role, content, media_type, source, created_at, conversation_id;
+    `;
+    const asstRes = await pool.query(insertAssistantMsgQuery, [conversationId, JSON.stringify({ status: "streaming", text: "" })]);
+    const assistantMessageId = asstRes.rows[0].id;
+
+    // Send the start event
+    sendEvent("start", { messageId: assistantMessageId, conversationId, conversationTitle: updatedTitle });
+
+    // Handle Client Abort
+    req.on("close", async () => {
+      if (!isFinished) {
+        isAborted = true;
+        logger.info({ conversationId }, "SSE client closed connection or aborted streaming. Finalizing state as stopped.");
+        WebChatService.activeStreams.delete(conversationId);
+      }
+    });
+
+    let fullText = "";
+    let releasedText = "";
+    let lastDbUpdate = Date.now();
+    let isLeaking = false;
+
+    try {
+      const stream = adaptiveAIRouterService.routeStream(
+        {
+          messages: routerMessages,
+          systemInstruction: systemPrompt,
+        },
+        {
+          mode: options?.mode || userRecord?.mode || "general",
+          isDeepReasoning: content.length > 150 || content.toLowerCase().includes("plan") || content.toLowerCase().includes("research"),
+          enableSearch: options?.searchEnabled ?? true,
+          userTier,
+          userCustomModelOverride: options?.modelOverride || userRecord?.customModelOverride,
+          personaPreferredModel: persona?.preferredModel,
+        }
+      );
+
+      const HOLD_BACK_CHAR_COUNT = 150;
+
+      for await (const chunk of stream) {
+        if (isAborted) {
+          logger.info("Aborting generator stream processing per client abort flag.");
+          break;
+        }
+
+        if (chunk.delta) {
+          fullText += chunk.delta;
+
+          // Run output guard check on the rolling hold-back buffer
+          const leakCheck = OutputGuardService.detectLeak({
+            response: fullText,
+            systemPrompt,
+            userQuery: content,
+          });
+
+          if (leakCheck.isLeak) {
+            logger.warn({ reason: leakCheck.reason }, "Prompt leak detected in streaming rolling buffer. Stopping stream.");
+            isLeaking = true;
+            break;
+          }
+
+          // Release safe text
+          if (fullText.length > HOLD_BACK_CHAR_COUNT) {
+            const safeLen = fullText.length - HOLD_BACK_CHAR_COUNT;
+            if (safeLen > releasedText.length) {
+              const delta = fullText.slice(releasedText.length, safeLen);
+              releasedText += delta;
+              sendEvent("delta", { delta });
+            }
+          }
+        }
+
+        // Throttled database update (once every 1 second)
+        if (Date.now() - lastDbUpdate > 1000) {
+          await pool.query(
+            `UPDATE messages SET content = $1, metadata_json = $2 WHERE id = $3;`,
+            [releasedText, JSON.stringify({ status: "streaming", text: releasedText }), assistantMessageId]
+          );
+
+          eventBusService.emitUserEvent({
+            type: "chat_message",
+            userId: user.id,
+            telegramUserId: user.telegramUserId,
+            data: {
+              id: assistantMessageId,
+              conversationId,
+              role: "model",
+              content: releasedText,
+              mediaType: "text",
+              source: "web",
+              createdAt: asstRes.rows[0].created_at,
+            },
+          });
+
+          lastDbUpdate = Date.now();
+        }
+      }
+
+      if (isAborted) {
+        // Finalize DB row as stopped
+        await pool.query(
+          `UPDATE messages SET content = $1, metadata_json = $2 WHERE id = $3;`,
+          [releasedText, JSON.stringify({ status: "stopped", text: releasedText }), assistantMessageId]
+        );
+        isFinished = true;
+        res.end();
+        return;
+      }
+
+      if (isLeaking) {
+        const sanitized = categorizeAndLogError(new Error("Secure policy violation: Prompt leak detected."));
+        const fallbackText = `\n\n⚠️ I am Wingbuddy, your dedicated assistant. I cannot share technical configuration details. (Reference ID: ${sanitized.referenceId})`;
+        releasedText += fallbackText;
+        sendEvent("delta", { delta: fallbackText });
+
+        await pool.query(
+          `UPDATE messages SET content = $1, metadata_json = $2 WHERE id = $3;`,
+          [releasedText, JSON.stringify({ status: "interrupted", reason: "policy_violation", referenceId: sanitized.referenceId }), assistantMessageId]
+        );
+
+        eventBusService.emitUserEvent({
+          type: "chat_message",
+          userId: user.id,
+          telegramUserId: user.telegramUserId,
+          data: {
+            id: assistantMessageId,
+            conversationId,
+            role: "model",
+            content: releasedText,
+            mediaType: "text",
+            source: "web",
+            createdAt: asstRes.rows[0].created_at,
+          },
+        });
+
+        sendEvent("done", { text: releasedText, conversationId });
+        isFinished = true;
+        res.end();
+        return;
+      }
+
+      // Stream completed successfully - release remaining text
+      if (fullText.length > releasedText.length) {
+        const remaining = fullText.slice(releasedText.length);
+        releasedText += remaining;
+        sendEvent("delta", { delta: remaining });
+      }
+
+      // Save complete message to database
+      await pool.query(
+        `UPDATE messages SET content = $1, metadata_json = $2 WHERE id = $3;`,
+        [releasedText, JSON.stringify({ status: "complete", text: releasedText }), assistantMessageId]
+      );
+      await pool.query(`UPDATE conversations SET updated_at = NOW() WHERE id = $1;`, [conversationId]);
+
+      eventBusService.emitUserEvent({
+        type: "chat_message",
+        userId: user.id,
+        telegramUserId: user.telegramUserId,
+        data: {
+          id: assistantMessageId,
+          conversationId,
+          role: "model",
+          content: releasedText,
+          mediaType: "text",
+          source: "web",
+          createdAt: asstRes.rows[0].created_at,
+        },
+      });
+
+      sendEvent("done", { text: releasedText, conversationId });
+
+      // Trigger memory extraction in background
+      memoryService.extractAndSaveMemories(partitionId, content, releasedText).catch((err) => {
+        logger.warn({ error: err }, "Background memory extraction note");
+      });
+
+      // Cross-sync to Telegram if preference is set
+      if (user.telegramUserId && user.notificationPreference === "full" && telegramRuntime.bot) {
+        try {
+          const tgMessage = `💬 <b>Web Workspace Activity</b>\n\n<i>${escapeHtml(content.slice(0, 100))}${content.length > 100 ? "..." : ""}</i>\n\n${releasedText.slice(0, 1200)}${releasedText.length > 1200 ? "\n\n<i>[Truncated on Telegram. View full conversation in Web Dashboard]</i>" : ""}`;
+          await telegramRuntime.bot.api.sendMessage(user.telegramUserId, tgMessage, { parse_mode: "HTML" }).catch(() => {});
+        } catch (tgSyncErr) {
+          logger.warn({ error: tgSyncErr }, "Failed sending cross-sync ping to Telegram");
+        }
+      }
+
+    } catch (aiErr: any) {
+      const sanitized = categorizeAndLogError(aiErr);
+      sendEvent("error", {
+        error: sanitized.category,
+        referenceId: sanitized.referenceId,
+        message: sanitized.userMessage,
+      });
+
+      await pool.query(
+        `UPDATE messages SET content = $1, metadata_json = $2 WHERE id = $3;`,
+        [sanitized.userMessage, JSON.stringify({ status: "failed", error: sanitized.category, referenceId: sanitized.referenceId }), assistantMessageId]
+      );
+    } finally {
+      WebChatService.activeStreams.delete(conversationId);
+      isFinished = true;
+      res.end();
+    }
   }
 }
 

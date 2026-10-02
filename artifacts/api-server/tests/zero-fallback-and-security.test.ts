@@ -73,7 +73,7 @@ describe("Zero-Fallback & Security Enforcement Suite", () => {
     // First consumption: success
     const authResult = await authService.consumeMagicLoginToken(magic.token);
     expect(authResult).not.toBeNull();
-    expect(authResult!.user.telegramUserId).toBe(99887766);
+    expect(Number(authResult!.user.telegramUserId)).toBe(99887766);
     expect(typeof authResult!.sessionToken).toBe("string");
 
     // Second consumption: fails (single-use)

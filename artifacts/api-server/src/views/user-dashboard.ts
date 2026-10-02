@@ -506,16 +506,23 @@ export function renderUserDashboardHtml(): string {
           </div>
         </div>
 
-        <!-- Message Thread -->
-        <div id="chat-thread" class="flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6 space-y-4 max-w-4xl w-full mx-auto">
-          <!-- Chat messages dynamically rendered here -->
-          <div class="text-center py-12 text-app-text opacity-50 text-xs">
-            <div class="w-12 h-12 rounded-2xl bg-brand-500/10 border border-brand-500/20 text-brand-400 flex items-center justify-center text-xl mx-auto mb-3">
-              ⚡
+        <!-- Message Thread Container -->
+        <div class="relative flex-1 flex flex-col overflow-hidden">
+          <!-- Message Thread -->
+          <div id="chat-thread" class="flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6 space-y-4 max-w-4xl w-full mx-auto">
+            <!-- Chat messages dynamically rendered here -->
+            <div class="text-center py-12 text-app-text opacity-50 text-xs">
+              <div class="w-12 h-12 rounded-2xl bg-brand-500/10 border border-brand-500/20 text-brand-400 flex items-center justify-center text-xl mx-auto mb-3">
+                ⚡
+              </div>
+              <div class="font-bold text-app-text text-sm mb-1">Wingbuddy Workspace Ready</div>
+              <p>Messages, tasks, and memory items synchronize bi-directionally between Web and Telegram.</p>
             </div>
-            <div class="font-bold text-app-text text-sm mb-1">Wingbuddy Workspace Ready</div>
-            <p>Messages, tasks, and memory items synchronize bi-directionally between Web and Telegram.</p>
           </div>
+          <!-- Floating jump to latest button -->
+          <button id="jump-to-latest-btn" onclick="scrollToLatestMessage()" class="hidden absolute bottom-4 right-4 sm:right-8 z-20 px-3.5 py-2 bg-brand-600 text-white rounded-full shadow-lg text-[11px] font-bold hover:bg-brand-500 transition active:scale-95 flex items-center gap-1">
+            <span>↓ Jump to latest</span>
+          </button>
         </div>
 
         <!-- Chat Input Form -->
@@ -526,6 +533,9 @@ export function renderUserDashboardHtml(): string {
                         class="w-full rounded-xl bg-app-highlight border border-app-border focus:border-brand-500 px-4 py-3.5 text-sm text-app-text placeholder:text-app-text placeholder:opacity-40 focus:outline-none resize-none min-h-[50px] max-h-[160px] leading-relaxed transition-[height] duration-75"></textarea>
               <button id="chat-send-btn" type="submit" class="h-12 px-5 rounded-xl bg-brand-600 hover:bg-brand-500 text-white font-bold text-sm flex items-center justify-center transition shadow-lg shadow-brand-600/20 shrink-0 active:scale-95">
                 <span>Send</span>
+              </button>
+              <button id="chat-stop-btn" type="button" onclick="handleChatAbort()" class="hidden h-12 px-5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-sm flex items-center justify-center transition shadow-lg shadow-red-600/20 shrink-0 active:scale-95">
+                <span>Stop</span>
               </button>
             </form>
           </div>
@@ -1274,7 +1284,7 @@ export function renderUserDashboardHtml(): string {
       if (emailEl) emailEl.innerText = user.email || '';
       if (avatarEl) {
         if (user.picture) {
-          avatarEl.innerHTML = '<img src="' + escapeHtml(user.picture) + '" alt="' + escapeHtml(name) + '" referrerpolicy="no-referrer" class="w-full h-full rounded-full object-cover" onerror="this.onerror=null; this.parentElement.innerText=\\'' + initial + '\\';" />';
+          avatarEl.innerHTML = '<img src="' + escapeHtml(user.picture) + '" alt="' + escapeHtml(name) + '" referrerpolicy="no-referrer" class="w-full h-full rounded-full object-cover" onerror="this.onerror=null; this.parentElement.textContent=' + escapeHtml(JSON.stringify(initial)) + ';" />';
         } else {
           avatarEl.innerText = initial;
         }
@@ -2270,6 +2280,66 @@ export function renderUserDashboardHtml(): string {
       if (shouldScroll) thread.scrollTop = thread.scrollHeight;
     }
 
+    let currentAbortController = null;
+
+    function showStopButton() {
+      const sendBtn = document.getElementById('chat-send-btn');
+      const stopBtn = document.getElementById('chat-stop-btn');
+      if (sendBtn) sendBtn.classList.add('hidden');
+      if (stopBtn) stopBtn.classList.remove('hidden');
+    }
+
+    function hideStopButton() {
+      const sendBtn = document.getElementById('chat-send-btn');
+      const stopBtn = document.getElementById('chat-stop-btn');
+      if (stopBtn) stopBtn.classList.add('hidden');
+      if (sendBtn) sendBtn.classList.remove('hidden');
+    }
+
+    async function handleChatAbort() {
+      if (currentAbortController) {
+        currentAbortController.abort();
+        currentAbortController = null;
+      }
+      if (currentConversationId) {
+        const token = localStorage.getItem('wb_session_token');
+        if (token) {
+          fetch('/api/user/chat/stop', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer ' + token
+            },
+            body: JSON.stringify({ conversationId: currentConversationId })
+          }).catch(() => {});
+        }
+      }
+      hideStopButton();
+    }
+
+    function updateStreamingMessageContent(msgId, text) {
+      if (!msgId) return;
+      const thread = document.getElementById('chat-thread');
+      if (!thread) return;
+
+      let bubble = thread.querySelector('[data-msg-id="' + msgId + '"]');
+      if (bubble) {
+        bubble.dataset.content = text;
+        const body = bubble.querySelector('.chat-content-body');
+        if (body) {
+          body.innerHTML = typeof marked !== 'undefined' ? marked.parse(text || '') : escapeHtml(text || '');
+        }
+      } else {
+        appendMessageToThread({
+          id: msgId,
+          role: 'model',
+          content: text,
+          createdAt: new Date()
+        }, true);
+      }
+      thread.scrollTop = thread.scrollHeight;
+    }
+
     let isSubmittingChat = false;
 
     async function handleChatSubmit(e) {
@@ -2299,73 +2369,125 @@ export function renderUserDashboardHtml(): string {
         createdAt: new Date()
       }, true);
 
-      // Show thinking bubble & disable send button during inference
+      // Show thinking bubble during initial server connection
       showThinkingIndicator();
-      if (sendBtn) {
-        sendBtn.disabled = true;
-        sendBtn.classList.add('opacity-50', 'cursor-not-allowed');
-        sendBtn.innerHTML = '<span>Thinking...</span>';
-      }
 
-      let token = localStorage.getItem('wb_session_token');
+      const token = localStorage.getItem('wb_session_token');
       if (!token) {
         window.location.replace('/');
         return;
       }
 
+      // Initialize AbortController for Stop functionality
+      const abortController = new AbortController();
+      currentAbortController = abortController;
+      showStopButton();
+
       try {
-        let res = await fetch('/api/user/chat/send', {
+        const response = await fetch('/api/user/chat/stream', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': 'Bearer ' + token
           },
-          body: JSON.stringify({ content, clientMsgId, conversationId: currentConversationId })
+          body: JSON.stringify({ content, clientMsgId, conversationId: currentConversationId }),
+          signal: abortController.signal
         });
 
-        if (res.status === 401) {
+        if (response.status === 401) {
           localStorage.removeItem('wb_session_token');
           window.location.replace('/');
           return;
         }
 
-        const data = await res.json();
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({}));
+          throw new Error(errData.error || 'Server error ' + response.status);
+        }
+
+        // We have a readable stream response!
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let assistantBubbleId = null;
+        let assistantText = '';
+
         removeThinkingIndicator();
 
-        if (res.ok && data.assistantMessage) {
-          appendMessageToThread(data.assistantMessage, true);
-          if (data.conversationId) currentConversationId = data.conversationId;
-          if (data.conversationTitle) {
-            const activeTitleEl = document.getElementById('active-chat-title');
-            if (activeTitleEl) activeTitleEl.textContent = data.conversationTitle;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split(String.fromCharCode(10, 10));
+          buffer = parts.pop(); // keep last incomplete chunk in buffer
+
+          for (const part of parts) {
+            const line = part.trim();
+            if (!line) continue;
+
+            const eventMatch = line.match(/^event:\\s*(.*)$/m);
+            const dataMatch = part.match(/^data:\\s*(.*)$/m);
+
+            if (eventMatch && dataMatch) {
+              const event = eventMatch[1].trim();
+              const dataStr = dataMatch[1].trim();
+              try {
+                const payload = JSON.parse(dataStr);
+                if (event === 'start') {
+                  assistantBubbleId = payload.messageId;
+                  if (payload.conversationId) currentConversationId = payload.conversationId;
+                  if (payload.conversationTitle) {
+                    const activeTitleEl = document.getElementById('active-chat-title');
+                    if (activeTitleEl) activeTitleEl.textContent = payload.conversationTitle;
+                  }
+                  
+                  // Insert empty assistant message box with status streaming
+                  appendMessageToThread({
+                    id: assistantBubbleId,
+                    role: 'model',
+                    content: '',
+                    createdAt: new Date()
+                  }, true);
+                } else if (event === 'delta') {
+                  assistantText += payload.delta;
+                  updateStreamingMessageContent(assistantBubbleId, assistantText);
+                } else if (event === 'done') {
+                  updateStreamingMessageContent(assistantBubbleId, payload.text);
+                  loadConversations();
+                } else if (event === 'error') {
+                  appendMessageToThread({
+                    id: 'err-' + Date.now(),
+                    role: 'model',
+                    content: '⚠️ **Error:** ' + payload.message,
+                    source: 'web',
+                    createdAt: new Date()
+                  }, true);
+                }
+              } catch (parseErr) {
+                console.warn('Failed parsing SSE payload', parseErr);
+              }
+            }
           }
-          loadConversations();
-        } else if (!res.ok || data.error) {
+        }
+      } catch (err) {
+        if (err.name === 'AbortError') {
+          console.log('Stream request aborted by the user.');
+        } else {
+          console.error('Send failed:', err);
+          removeThinkingIndicator();
           appendMessageToThread({
             id: 'err-' + Date.now(),
             role: 'model',
-            content: '⚠️ **Error Processing Request:** ' + (data.error || 'The server encountered an unexpected error.'),
+            content: '⚠️ **Error:** ' + err.message,
             source: 'web',
             createdAt: new Date()
           }, true);
         }
-      } catch (err) {
-        console.error('Send failed:', err);
-        removeThinkingIndicator();
-        appendMessageToThread({
-          id: 'err-' + Date.now(),
-          role: 'model',
-          content: '⚠️ **Network connection error.** Please check your internet connection and retry.',
-          source: 'web',
-          createdAt: new Date()
-        }, true);
       } finally {
+        hideStopButton();
+        currentAbortController = null;
         isSubmittingChat = false;
-        if (sendBtn) {
-          sendBtn.disabled = false;
-          sendBtn.classList.remove('opacity-50', 'cursor-not-allowed');
-          sendBtn.innerHTML = '<span>Send</span>';
-        }
         if (input) input.focus();
       }
     }
@@ -3593,6 +3715,7 @@ export function renderUserDashboardHtml(): string {
     window.updateFileNameDisplay = updateFileNameDisplay;
     window.handleIndexConversation = handleIndexConversation;
     window.copyExtractionPrompt = copyExtractionPrompt;
+    window.handleChatAbort = handleChatAbort;
 
     function escapeHtml(str) {
       if (!str) return '';

@@ -20,6 +20,7 @@ import authRouter from "./auth";
 import userRouter from "./user";
 import reactionThemeRouter from "./reaction-theme";
 import mediaRouter from "./media";
+import { requireAdmin } from "../middlewares/auth.middleware";
 
 const router: IRouter = Router();
 
@@ -28,21 +29,23 @@ router.use("/auth", authRouter);
 router.use("/user", userRouter);
 router.use("/media", mediaRouter);
 router.use(reactionThemeRouter);
-router.use(keysRouter);
-router.use(providerKeysRouter);
 router.use(dashboardRouter);
-router.use(envRouter);
-router.use(executionRouter);
-router.use(modelsRouter);
-router.use(providersRouter);
-router.use(aiRoutingRouter);
 router.use(simulatorRouter);
-router.use(behaviorConfigRouter);
-router.use(proactiveAssistantRouter);
 router.use(mediaStorageRouter);
 router.use(knowledgeRouter);
-router.use(userAccessRouter);
 router.use(personasRouter);
-router.use(diagnosticsRouter);
+
+// Role-gated Administration & Diagnostics
+router.use(requireAdmin, keysRouter);
+router.use(requireAdmin, providerKeysRouter);
+router.use(requireAdmin, envRouter);
+router.use(requireAdmin, executionRouter);
+router.use(requireAdmin, modelsRouter);
+router.use(requireAdmin, providersRouter);
+router.use(requireAdmin, aiRoutingRouter);
+router.use(requireAdmin, behaviorConfigRouter);
+router.use(requireAdmin, proactiveAssistantRouter);
+router.use(requireAdmin, userAccessRouter);
+router.use(requireAdmin, diagnosticsRouter);
 
 export default router;

@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { getPool, chatDatabaseService } from "@workspace/db";
 import { getConfig, AI_SYSTEM_INSTRUCTION } from "../config/env";
-import { MODE_KEYS, type ModeKey } from "../config/mode";
+import { MODE_KEYS, type ModeKey, MODES } from "../config/mode";
+import { PromptBuilderService } from "./prompt-builder.service";
 import { PERSONALITIES, type PersonalityKey } from "../config/personality";
 import { ConversationService } from "./conversation.service";
 import { ModeService } from "./mode.service";
@@ -442,13 +443,23 @@ class BotSimulatorService {
     });
 
     const guidanceObj = this.guidance(activePersonality, plan, context.memories);
-    const systemInstruction = [
-      AI_SYSTEM_INSTRUCTION,
-      guidanceObj.personalityInstruction,
-      guidanceObj.modeInstruction,
+
+    const manifest = await PromptBuilderService.buildLiveManifest({
+      userId: request.telegramUserId || 1,
+      telegramUserId: request.telegramUserId,
+    });
+
+    const memoryInstruction = [
       guidanceObj.memoryInstruction,
       retrievedKnowledge.length ? `Retrieved Vault Context:\n${retrievedKnowledge.map((k) => `• ${k.title}: ${k.snippet}`).join("\n")}` : undefined,
     ].filter(Boolean).join("\n\n");
+
+    const systemInstruction = PromptBuilderService.buildSystemPrompt({
+      personalityInstruction: guidanceObj.personalityInstruction || "",
+      modeInstruction: guidanceObj.modeInstruction || MODES[plan.effectiveMode]?.instruction || MODES.general.instruction,
+      memoryInstruction,
+      manifest,
+    });
 
     const promptText = systemInstruction + " " + activeHistory.map((h) => h.content).join(" ") + " " + message;
     const estPromptTokens = Math.ceil(promptText.length / 3.8);

@@ -1827,6 +1827,13 @@ export function createTelegramBot(): TelegramBotRuntime {
         },
       });
       await streamingResponder.init();
+
+      // Emit AI generation state: generating
+      eventBusService.emitUserEvent({
+        type: "system_status",
+        telegramUserId: ctx.from.id,
+        data: { state: "generating", source: "telegram", conversationId: globalContextData.conversationId },
+      });
       const normalizedHistory: GeminiMessage[] = assembledContext.history
         .filter((m) => m.role === "user" || m.role === "model" || m.role === "assistant")
         .map((m) => ({
@@ -1890,7 +1897,18 @@ export function createTelegramBot(): TelegramBotRuntime {
       }
       logger.error({ stage: "telegram_message_handling", telegramUserId: ctx.from.id, chatId: ctx.chat.id, error: safeErrorMetadata(error) }, "Telegram message handling failed");
       await ctx.reply(GENERIC_ERROR_MESSAGE).catch(() => {});
-    } finally { stopTyping(); }
+    } finally {
+      stopTyping();
+      try {
+        eventBusService.emitUserEvent({
+          type: "system_status",
+          telegramUserId: ctx.from.id,
+          data: { state: "idle", source: "telegram", conversationId: globalContextData.conversationId },
+        });
+      } catch (err) {
+        logger.warn({ error: err }, "Failed to emit Telegram idle status to SSE");
+      }
+    }
   }
 
   bot.on("message:text", async (ctx) => { await handleIncomingTelegramMessage(ctx, { rawText: ctx.message.text }); });

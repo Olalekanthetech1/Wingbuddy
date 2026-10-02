@@ -358,6 +358,52 @@ router.post("/chat/send", async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/user/chat/stream
+ */
+router.post("/chat/stream", async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const { content, mode, model, clientMsgId, conversationId } = req.body;
+    if (!content || typeof content !== "string" || !content.trim()) {
+      res.status(400).json({ error: "Content is required" });
+      return;
+    }
+
+    const parsedConvId = conversationId ? parseInt(String(conversationId), 10) : undefined;
+
+    await webChatService.streamMessage(user, content.trim(), res, req, {
+      mode,
+      modelOverride: model,
+      clientMsgId: typeof clientMsgId === "string" ? clientMsgId : undefined,
+      conversationId: parsedConvId,
+    });
+  } catch (err: any) {
+    logger.error({ error: err }, "Error in user chat stream route");
+    if (!res.headersSent) {
+      res.status(500).json({ error: err.message || "Failed starting stream" });
+    }
+  }
+});
+
+/**
+ * POST /api/user/chat/stop
+ */
+router.post("/chat/stop", async (req: Request, res: Response) => {
+  try {
+    const { conversationId } = req.body;
+    const parsedConvId = conversationId ? parseInt(String(conversationId), 10) : undefined;
+    if (!parsedConvId) {
+      res.status(400).json({ error: "conversationId is required" });
+      return;
+    }
+    const stopped = webChatService.stopStream(parsedConvId);
+    res.json({ success: stopped });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed stopping stream" });
+  }
+});
+
+/**
  * DELETE /api/user/chat/clear
  */
 router.delete("/chat/clear", async (req: Request, res: Response) => {
