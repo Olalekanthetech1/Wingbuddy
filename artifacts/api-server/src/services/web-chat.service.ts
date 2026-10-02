@@ -31,8 +31,8 @@ export class WebChatService {
   /**
    * Resolves the primary ID used for partitioning database tables.
    */
-  public getPartitionUserId(user: AuthenticatedUser): number {
-    return user.telegramUserId || 9000000000 + user.id;
+  public getPartitionUserId(user: AuthenticatedUser): number | bigint {
+    return user.telegramUserId || BigInt(9000000000 + user.id);
   }
 
   /**

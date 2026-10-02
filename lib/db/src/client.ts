@@ -513,8 +513,8 @@ export async function ensureDatabaseSchema(pgPool?: pg.Pool): Promise<void> {
         json_build_object(
           'action', TG_OP,
           'id', COALESCE(NEW.id, OLD.id),
-          'telegramUserId', COALESCE(NEW.telegram_user_id, OLD.telegram_user_id),
-          'chatId', COALESCE(NEW.chat_id, OLD.chat_id),
+          'telegramUserId', COALESCE(NEW.telegram_user_id, OLD.telegram_user_id)::text,
+          'chatId', COALESCE(NEW.chat_id, OLD.chat_id)::text,
           'isCompleted', COALESCE(NEW.is_completed, OLD.is_completed),
           'dueAt', COALESCE(NEW.due_at, OLD.due_at),
           'prompt', COALESCE(NEW.prompt, OLD.prompt)
@@ -537,7 +537,7 @@ export async function ensureDatabaseSchema(pgPool?: pg.Pool): Promise<void> {
         json_build_object(
           'action', TG_OP,
           'id', COALESCE(NEW.id, OLD.id),
-          'telegramUserId', COALESCE(NEW.telegram_user_id, OLD.telegram_user_id),
+          'telegramUserId', COALESCE(NEW.telegram_user_id, OLD.telegram_user_id)::text,
           'personality', COALESCE(NEW.personality, OLD.personality),
           'mode', COALESCE(NEW.mode, OLD.mode)
         )::text

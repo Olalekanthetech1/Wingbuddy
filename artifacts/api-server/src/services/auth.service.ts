@@ -17,7 +17,7 @@ export interface AuthenticatedUser {
   givenName?: string;
   familyName?: string;
   role: "admin" | "user";
-  telegramUserId?: number;
+  telegramUserId?: bigint;
   telegramUsername?: string;
   notificationPreference: "full" | "digest_only" | "silent";
   contextSyncMode: "compact" | "full";
@@ -150,7 +150,7 @@ class AuthService {
       nameSource: row.name_source || undefined,
       picture: row.picture || undefined,
       role: row.role as "admin" | "user",
-      telegramUserId: row.telegram_user_id ? Number(row.telegram_user_id) : undefined,
+      telegramUserId: row.telegram_user_id ? BigInt(row.telegram_user_id) : undefined,
       telegramUsername: row.telegram_username || undefined,
       notificationPreference: (row.notification_preference as any) || "full",
       contextSyncMode: (row.context_sync_mode as any) || "compact",
@@ -217,7 +217,7 @@ class AuthService {
       fullName: row.full_name || undefined,
       picture: row.picture || undefined,
       role: row.role as "admin" | "user",
-      telegramUserId: row.telegram_user_id ? Number(row.telegram_user_id) : undefined,
+      telegramUserId: row.telegram_user_id ? BigInt(row.telegram_user_id) : undefined,
       telegramUsername: row.telegram_username || undefined,
       notificationPreference: (row.notification_preference as any) || "full",
       contextSyncMode: (row.context_sync_mode as any) || "compact",
@@ -387,7 +387,7 @@ class AuthService {
       name: webUser.name,
       picture: webUser.picture,
       role: webUser.role as "admin" | "user",
-      telegramUserId: webUser.telegram_user_id ? Number(webUser.telegram_user_id) : undefined,
+      telegramUserId: webUser.telegram_user_id ? BigInt(webUser.telegram_user_id) : undefined,
       telegramUsername: webUser.telegram_username || undefined,
       notificationPreference: (webUser.notification_preference as any) || "full",
       contextSyncMode: (webUser.context_sync_mode as any) || "compact",
@@ -498,7 +498,7 @@ class AuthService {
       name: row.name || undefined,
       picture: row.picture || undefined,
       role: row.role as "admin" | "user",
-      telegramUserId: row.telegram_user_id ? Number(row.telegram_user_id) : undefined,
+      telegramUserId: row.telegram_user_id ? BigInt(row.telegram_user_id) : undefined,
       telegramUsername: row.telegram_username || undefined,
       notificationPreference: row.notification_preference,
       contextSyncMode: row.context_sync_mode,
