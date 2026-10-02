@@ -45,11 +45,8 @@ export class MemoryService {
     const key = options.key.trim().toLowerCase().replace(/[^a-z0-9_]/g, "_");
     const confidence = options.confidence ?? "high";
 
-    // Sanitize content: strip control characters and cap length
+    // Sanitize content: strip control characters
     let content = options.content.replace(/[\x00-\x1F\x7F-\x9F]/g, "").trim();
-    if (content.length > 2048) {
-      content = content.substring(0, 2045) + "...";
-    }
 
     // Ignore low confidence extractions to prevent noise
     if (confidence === "low") {
@@ -305,7 +302,7 @@ export class MemoryService {
     const prefMatch = trimmed.match(/\b(?:i\s+prefer|i\s+like|i\s+love|i\s+always\s+use)\s+([^.,!?]+)/i);
     if (prefMatch && prefMatch[1]) {
       const prefText = prefMatch[1].trim();
-      if (prefText.length > 3 && prefText.length < 100) {
+      if (prefText.length > 0) {
         items.push({
           key: `pref_${prefText.slice(0, 20).toLowerCase().replace(/[^a-z0-9]/g, "_")}`,
           content: `User prefers: ${prefText}`,
@@ -342,21 +339,58 @@ export class MemoryService {
     const { getDefaultGeminiService } = await import("../gemini/gemini.service");
     const gemini = getDefaultGeminiService();
 
+    // Direct JSON parsing attempt if the text looks like a JSON array
+    if (pastedText.trim().startsWith("[") && pastedText.trim().endsWith("]")) {
+      try {
+        const directParsed = JSON.parse(pastedText.trim());
+        if (Array.isArray(directParsed) && directParsed.length > 0) {
+          logger.info({ count: directParsed.length }, "IMPORT_DIRECT_JSON_PARSING_SUCCESS");
+          
+          const existing = await this.getMemories(telegramUserId);
+          return directParsed.map(item => {
+            const isDuplicate = existing.some(e =>
+              e.key === item.key ||
+              e.content.toLowerCase().includes(item.content.toLowerCase()) ||
+              item.content.toLowerCase().includes(e.content.toLowerCase())
+            );
+
+            return {
+              key: item.key || `fact_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+              content: item.content || String(item),
+              type: item.type || item.category || "user_fact",
+              category: item.category || item.type || "user_fact",
+              confidence: item.confidence || "high",
+              importance: item.importance || "medium",
+              isDuplicate
+            } as ExtractedMemoryItem;
+          });
+        }
+      } catch (e) {
+        // Fallback to AI extraction if JSON parse fails
+        logger.debug("Import direct JSON parse failed, falling back to AI extraction");
+      }
+    }
+
     const prompt = `You are a memory extraction expert. Analyze the provided text which is a summary of a user's memories, habits, and preferences from another AI tool.
 Extract individual, atomic memory items.
+
 Rules:
 1. Each item must be discrete (one fact per item).
 2. Assign a 'type' from: user_preference, user_fact, workflow_preference, project_context, learning_context, interaction_preference, important_context.
 3. Assign a short snake_case 'key' for each.
 4. Estimate confidence and importance (low, medium, high).
 5. Strip any metadata or conversational filler.
-6. Return ONLY a valid JSON array of objects with schema: [{"key": string, "content": string, "type": string, "category": string, "confidence": string, "importance": string}]
+6. COMPLETERNESS: You MUST extract EVERY SINGLE FACT or preference mentioned. Do not summarize multiple items into one. If the input has 50 points, return 50 items.
+7. Return ONLY a valid JSON array of objects with schema: [{"key": string, "content": string, "type": string, "category": string, "confidence": string, "importance": string}]
 
 Input Text:
 ${pastedText}`;
 
     try {
-      const response = await gemini.generateReply([], prompt, "Return valid JSON only.", { isExtraction: true });
+      const response = await gemini.generateReply([], prompt, "Return valid JSON only.", { 
+        isExtraction: true,
+        temperature: 0.1 // Lower temperature for more stable extraction
+      });
       const cleaned = response.replace(/^```json/i, "").replace(/^```/i, "").replace(/```$/i, "").trim();
       const parsed = JSON.parse(cleaned);
 

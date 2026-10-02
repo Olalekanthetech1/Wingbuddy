@@ -408,7 +408,7 @@ export class ChatDatabaseService {
    */
   async getRecentSessionSummaries(
     telegramUserId: number | bigint,
-    limit = 3,
+    limit = 10,
   ): Promise<Array<{ id: number; summary: string; updatedAt: Date }>> {
     const uid = BigInt(telegramUserId);
     const sessions = await this.prisma.conversation.findMany({
@@ -443,7 +443,7 @@ export class ChatDatabaseService {
     options?: { queryVector?: number[]; excludeConversationId?: number; limit?: number },
   ): Promise<ChatMessageRecord[]> {
     const uid = BigInt(telegramUserId);
-    const limit = options?.limit ?? 6;
+    const limit = options?.limit ?? 15;
     const queryVector = options?.queryVector;
 
     // 1. Semantic Search if vector is provided
@@ -566,7 +566,7 @@ export class ChatDatabaseService {
   async fetchRecentMessages(
     options: FetchRecentMessagesOptions,
   ): Promise<ChatMessageRecord[]> {
-    const limit = Math.max(1, Math.min(options.limit ?? 20, 100));
+    const limit = Math.max(1, Math.min(options.limit ?? 50, 500));
 
     const messages = await this.prisma.message.findMany({
       where: { conversationId: options.conversationId },
@@ -736,9 +736,9 @@ export class ChatDatabaseService {
    * Dynamically computes adaptive search result count limit based on user memory corpus size.
    */
   public computeAdaptiveSearchLimit(totalMemories = 0): number {
-    if (totalMemories <= 0) return 5;
-    // Scale limit adaptively between 3 and 12 depending on corpus size
-    return Math.max(3, Math.min(12, Math.ceil(Math.log2(totalMemories + 1) * 2)));
+    if (totalMemories <= 0) return 10;
+    // Scale limit adaptively between 5 and 30 depending on corpus size
+    return Math.max(5, Math.min(30, Math.ceil(Math.log2(totalMemories + 1) * 3)));
   }
 
   /**

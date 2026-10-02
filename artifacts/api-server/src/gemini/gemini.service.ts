@@ -32,6 +32,7 @@ export interface GenerateReplyOptions {
   userCustomModelOverride?: string | null;
   personaPreferredModel?: string | null;
   temperature?: number;
+  maxOutputTokens?: number;
 }
 export interface ExtractedFact { key: string; content: string; category: "preference" | "fact" | "instruction"; }
 
@@ -108,6 +109,8 @@ export class GeminiService {
     const config: Record<string, unknown> = { systemInstruction: buildSystemInstruction(this.systemInstruction, guidance) };
     if (options?.enableSearch) config.tools = [{ googleSearch: {} }];
     if (options?.thinkingLevel) config.thinkingConfig = { thinkingLevel: options.thinkingLevel };
+    if (options?.maxOutputTokens) config.maxOutputTokens = options.maxOutputTokens;
+    if (options?.temperature !== undefined) config.temperature = options.temperature;
     return config;
   }
 
@@ -136,7 +139,7 @@ export class GeminiService {
         { role: "user", content: cleanMsg || "..." },
       ],
       temperature: options?.temperature,
-      maxOutputTokens: undefined,
+      maxOutputTokens: options?.maxOutputTokens,
       topP: undefined,
       thinkingLevel: options?.thinkingLevel,
     };
