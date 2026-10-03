@@ -340,27 +340,38 @@ export class MemoryService {
     const { getDefaultGeminiService } = await import("../gemini/gemini.service");
     const gemini = getDefaultGeminiService();
 
-    // Direct JSON parsing attempt if the text looks like a JSON array
-    if (pastedText.trim().startsWith("[") && pastedText.trim().endsWith("]")) {
+    // Direct JSON parsing attempt if the text looks like a JSON array (or markdown code block)
+    let cleanedJsonText = pastedText.trim();
+    if (cleanedJsonText.startsWith("```")) {
+      cleanedJsonText = cleanedJsonText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+    }
+    const jsonArrayMatch = cleanedJsonText.match(/\[\s*\{[\s\S]*\}\s*\]/);
+    if (jsonArrayMatch) {
+      cleanedJsonText = jsonArrayMatch[0].trim();
+    }
+
+    if (cleanedJsonText.startsWith("[") && cleanedJsonText.endsWith("]")) {
       try {
-        const directParsed = JSON.parse(pastedText.trim());
+        const directParsed = JSON.parse(cleanedJsonText);
         if (Array.isArray(directParsed) && directParsed.length > 0) {
           logger.info({ count: directParsed.length }, "IMPORT_DIRECT_JSON_PARSING_SUCCESS");
           
           const existing = await this.getMemories(telegramUserId);
           return directParsed.map(item => {
+            const rawContent = item.statement || item.content || (typeof item === "string" ? item : JSON.stringify(item));
+            const category = item.category || item.type || "user_fact";
             const isDuplicate = existing.some(e =>
-              e.key === item.key ||
-              e.content.toLowerCase().includes(item.content.toLowerCase()) ||
-              item.content.toLowerCase().includes(e.content.toLowerCase())
+              (item.key && e.key === item.key) ||
+              e.content.toLowerCase().includes(rawContent.toLowerCase()) ||
+              rawContent.toLowerCase().includes(e.content.toLowerCase())
             );
 
             return {
               key: item.key || `fact_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
-              content: item.content || String(item),
-              type: item.type || item.category || "user_fact",
-              category: item.category || item.type || "user_fact",
-              confidence: item.confidence || "high",
+              content: rawContent,
+              type: category,
+              category: category,
+              confidence: item.confidence || (item.evidence ? "high" : "medium"),
               importance: item.importance || "medium",
               isDuplicate
             } as ExtractedMemoryItem;

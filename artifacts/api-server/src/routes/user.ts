@@ -684,6 +684,73 @@ router.post("/memories", async (req: Request, res: Response) => {
 });
 
 /**
+ * DELETE /api/user/memories/clear-all
+ * Purges all user memories for the authenticated user
+ */
+router.delete("/memories/clear-all", async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const partitionId = webChatService.getPartitionUserId(user);
+    const pool = getPool();
+
+    const deleteRes = await pool.query(
+      `DELETE FROM user_memories WHERE telegram_user_id = $1 RETURNING id`,
+      [partitionId]
+    );
+
+    const clearedCount = deleteRes.rowCount || 0;
+    res.json({
+      success: true,
+      count: clearedCount,
+      message: `Permanently cleared ${clearedCount} memor${clearedCount === 1 ? "y" : "ies"}.`,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed clearing memories" });
+  }
+});
+
+/**
+ * POST /api/user/memories/batch-delete
+ * Deletes multiple selected memories by their keys or IDs
+ */
+router.post("/memories/batch-delete", async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const partitionId = webChatService.getPartitionUserId(user);
+    const { keys, ids } = req.body;
+    const pool = getPool();
+
+    if ((!keys || !Array.isArray(keys) || keys.length === 0) &&
+        (!ids || !Array.isArray(ids) || ids.length === 0)) {
+      res.status(400).json({ error: "No keys or IDs provided for batch deletion" });
+      return;
+    }
+
+    let deleteRes;
+    if (ids && ids.length > 0) {
+      deleteRes = await pool.query(
+        `DELETE FROM user_memories WHERE telegram_user_id = $1 AND id = ANY($2::int[]) RETURNING id`,
+        [partitionId, ids]
+      );
+    } else {
+      deleteRes = await pool.query(
+        `DELETE FROM user_memories WHERE telegram_user_id = $1 AND key = ANY($2::text[]) RETURNING id`,
+        [partitionId, keys]
+      );
+    }
+
+    const count = deleteRes.rowCount || 0;
+    res.json({
+      success: true,
+      count,
+      message: `Deleted ${count} memor${count === 1 ? "y" : "ies"}.`,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed deleting selected memories" });
+  }
+});
+
+/**
  * DELETE /api/user/memories/:key
  */
 router.delete("/memories/:key", async (req: Request, res: Response) => {

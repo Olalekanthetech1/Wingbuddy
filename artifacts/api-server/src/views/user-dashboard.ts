@@ -618,8 +618,24 @@ export function renderUserDashboardHtml(): string {
               <span>💬</span>
               <span>Import Chats</span>
             </button>
-            <button onclick="openCreateMemoryModal()" class="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition flex items-center gap-2">
+            <button onclick="openCreateMemoryModal()" class="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition flex items-center gap-2 cursor-pointer">
               <span>+ Add Memory</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Batch Actions Toolbar for Memories -->
+        <div id="memory-batch-toolbar" class="flex items-center justify-between gap-3 p-3 rounded-xl bg-app-highlight border border-app-border text-xs">
+          <label class="flex items-center gap-2 cursor-pointer font-semibold text-app-text select-none">
+            <input type="checkbox" id="memory-select-all-cb" onchange="toggleSelectAllMemories(this.checked)" class="rounded text-brand-500 cursor-pointer" />
+            <span id="memory-selection-label">Select All</span>
+          </label>
+          <div class="flex items-center gap-2">
+            <button id="btn-delete-selected-memories" onclick="deleteSelectedMemories()" class="hidden px-3 py-1.5 rounded-lg bg-red-500/15 hover:bg-red-500/25 text-red-500 dark:text-red-400 border border-red-500/30 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer">
+              <span>🗑️ Delete Selected (<span id="selected-memories-count">0</span>)</span>
+            </button>
+            <button onclick="clearAllMemories()" id="btn-clear-all-memories" class="px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-500 dark:text-red-400 border border-red-500/20 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer" title="Purge all memories permanently">
+              <span>🗑️ Clear All</span>
             </button>
           </div>
         </div>
@@ -980,9 +996,11 @@ export function renderUserDashboardHtml(): string {
             Step 1: Get your memory summary from ChatGPT or Claude
           </p>
           <div class="bg-app-surface/50 border border-app-border rounded-lg p-3 relative group">
-            <p id="extraction-prompt-text" class="text-[10px] text-app-text opacity-60 leading-normal italic">
-              "Perform a comprehensive data extraction of all stored memories, custom instructions, and user profile details you have recorded about me. Review our entire conversation history and output every fact, technical skill, workflow preference, active project, behavioral rule, personal goal, and background detail you have saved right now. Format your response strictly as a JSON array of objects without any conversational preamble or follow-up: [{"category": "tech"|"preference"|"project"|"rule"|"fact"|"personal"|"goal"|"style", "content": "Concise factual statement (max 280 chars)"}]. Rules: 1. Output ONLY the raw JSON array starting with '[' and ending with ']'. 2. Extract every discrete detail mentioned; do not summarize multiple distinct points into a single item. 3. Categorize accurately according to the provided schema. 4. If any additional notes are present in your memory vault, include them as well."
-            </p>
+            <p id="extraction-prompt-text" class="text-[10px] text-app-text opacity-70 leading-relaxed whitespace-pre-wrap select-all font-mono">Review the conversations and saved memories you have access to about me. List what you know about me as a JSON array. Use only what I explicitly stated or what is in your saved memory. Do not guess or infer. If you have no access to saved memory or past conversations, return [] and nothing else.
+
+Each item: {"category":"profile|preferences|relationships|projects|rules","statement":"one fact, written in third person as 'the user'","evidence":"my exact words, max 25 words","date":"YYYY-MM-DD or null","basis":"stated|saved_memory"}
+
+Exclude passwords, API keys, financial account details, government IDs, health, political or religious details, and private details about other people. One fact per item. If facts conflict, keep the most recent. Output strictly the JSON array in a code block without any conversational opening or closing remarks.</p>
             <button onclick="copyExtractionPrompt()" class="mt-2 w-full py-1.5 rounded-lg bg-app-highlight hover:bg-app-border text-[10px] font-bold text-brand-400 transition flex items-center justify-center gap-1.5 border border-brand-500/20">
               <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"/></svg>
               <span>Copy Prompt to Clipboard</span>
@@ -2862,6 +2880,9 @@ export function renderUserDashboardHtml(): string {
 
         const list = document.getElementById('memory-list');
         list.innerHTML = '';
+        const selectAllCb = document.getElementById('memory-select-all-cb');
+        if (selectAllCb) selectAllCb.checked = false;
+        updateSelectedMemoriesCount();
 
         if (!data.memories || data.memories.length === 0) {
           list.innerHTML = '<div class="glass-panel col-span-2 rounded-2xl p-8 text-center text-app-text opacity-50 text-xs">No memories recorded yet. Wingbuddy automatically learns facts as you chat or you can manually add facts.</div>';
@@ -2874,7 +2895,7 @@ export function renderUserDashboardHtml(): string {
           const readableTitle = formatMemoryReadableTitle(mem);
           card.innerHTML = \`
             <div class="flex items-center justify-between text-xs">
-              <span class="px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-600 dark:text-purple-300 font-bold uppercase text-[10px]">\${escapeHtml(mem.category || 'general')}</span>
+              <div class="flex items-center gap-2"><input type="checkbox" class="memory-select-cb rounded text-brand-500 cursor-pointer" data-key="\${escapeHtml(mem.key)}" data-id="\${mem.id}" onchange="updateSelectedMemoriesCount()" /><span class="px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-600 dark:text-purple-300 font-bold uppercase text-[10px]">\${escapeHtml(mem.category || 'general')}</span></div>
               <button onclick="deleteMemory('\${encodeURIComponent(mem.key)}')" class="text-app-text opacity-40 hover:opacity-100 hover:text-red-500 transition text-[11px] cursor-pointer">Delete</button>
             </div>
             <div class="font-bold text-app-text text-sm">\${escapeHtml(readableTitle)}</div>
@@ -2888,6 +2909,75 @@ export function renderUserDashboardHtml(): string {
         if (list) {
           list.innerHTML = \`<div class="glass-panel col-span-2 rounded-2xl p-8 text-center text-red-400/90 text-xs">⚠️ Failed loading memories: \${escapeHtml(err.message || err)}</div>\`;
         }
+      }
+    }
+
+    
+    function updateSelectedMemoriesCount() {
+      const cbs = document.querySelectorAll(".memory-select-cb:checked");
+      const count = cbs.length;
+      const countEl = document.getElementById("selected-memories-count");
+      const delBtn = document.getElementById("btn-delete-selected-memories");
+      const selectAllCb = document.getElementById("memory-select-all-cb");
+      const allCbs = document.querySelectorAll(".memory-select-cb");
+      
+      if (countEl) countEl.innerText = count;
+      if (delBtn) {
+        if (count > 0) delBtn.classList.remove("hidden");
+        else delBtn.classList.add("hidden");
+      }
+      if (selectAllCb && allCbs.length > 0) {
+        selectAllCb.checked = count === allCbs.length;
+      }
+    }
+
+    function toggleSelectAllMemories(checked) {
+      const cbs = document.querySelectorAll(".memory-select-cb");
+      cbs.forEach(cb => { cb.checked = checked; });
+      updateSelectedMemoriesCount();
+    }
+
+    async function deleteSelectedMemories() {
+      const cbs = Array.from(document.querySelectorAll(".memory-select-cb:checked"));
+      if (cbs.length === 0) return;
+      const count = cbs.length;
+      if (!confirm("Are you sure you want to permanently delete " + count + " selected memor" + (count === 1 ? "y" : "ies") + "?")) return;
+      
+      const keys = cbs.map(cb => cb.getAttribute("data-key")).filter(Boolean);
+      const token = localStorage.getItem("wb_session_token");
+      try {
+        const res = await fetch("/api/user/memories/batch-delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+          body: JSON.stringify({ keys })
+        });
+        const data = await res.json();
+        if (data.success) {
+          loadMemories();
+        } else {
+          alert("Failed deleting memories: " + (data.error || "Unknown error"));
+        }
+      } catch (err) {
+        alert("Network error deleting selected memories");
+      }
+    }
+
+    async function clearAllMemories() {
+      if (!confirm("⚠️ WARNING: This will permanently delete ALL long-term memories in your Memory Vault.\n\nThis action cannot be undone. Are you sure you want to proceed?")) return;
+      const token = localStorage.getItem("wb_session_token");
+      try {
+        const res = await fetch("/api/user/memories/clear-all", {
+          method: "DELETE",
+          headers: { "Authorization": "Bearer " + token }
+        });
+        const data = await res.json();
+        if (data.success) {
+          loadMemories();
+        } else {
+          alert("Failed clearing memories: " + (data.error || "Unknown error"));
+        }
+      } catch (err) {
+        alert("Network error clearing all memories");
       }
     }
 
@@ -3903,6 +3993,11 @@ export function renderUserDashboardHtml(): string {
     window.loadDailyDigestSettings = loadDailyDigestSettings;
     window.saveDailyDigestSettings = saveDailyDigestSettings;
     window.sendDailyDigestNow = sendDailyDigestNow;
+    window.updateSelectedMemoriesCount = updateSelectedMemoriesCount;
+    window.toggleSelectAllMemories = toggleSelectAllMemories;
+    window.deleteSelectedMemories = deleteSelectedMemories;
+    window.clearAllMemories = clearAllMemories;
+    window.deleteMemory = deleteMemory;
 
     function escapeHtml(str) {
       if (!str) return '';
