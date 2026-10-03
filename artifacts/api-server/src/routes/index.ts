@@ -20,6 +20,7 @@ import authRouter from "./auth";
 import userRouter from "./user";
 import reactionThemeRouter from "./reaction-theme";
 import mediaRouter from "./media";
+import digestRouter from "./digest";
 import { requireAdmin } from "../middlewares/auth.middleware";
 
 const router: IRouter = Router();
@@ -28,6 +29,7 @@ router.use(healthRouter);
 router.use("/auth", authRouter);
 router.use("/user", userRouter);
 router.use("/media", mediaRouter);
+router.use(digestRouter);
 router.use(reactionThemeRouter);
 router.use(dashboardRouter);
 router.use(simulatorRouter);

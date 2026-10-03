@@ -179,8 +179,8 @@ export function renderUserDashboardHtml(): string {
       <div class="hidden lg:flex items-center gap-1.5 px-3 py-1 rounded-lg bg-app-highlight border border-app-border text-xs">
         <span class="text-app-text opacity-60">TG Notify:</span>
         <select id="select-notify-pref" onchange="updateNotifyPreference(this.value)" class="bg-transparent text-brand-400 font-semibold focus:outline-none cursor-pointer">
+          <option value="digest_only" class="bg-app-bg text-app-text" selected>Tasks &amp; Alerts Only</option>
           <option value="full" class="bg-app-bg text-app-text">Full Replies</option>
-          <option value="digest_only" class="bg-app-bg text-app-text">Tasks &amp; Alerts Only</option>
           <option value="silent" class="bg-app-bg text-app-text">Silent History Sync</option>
         </select>
       </div>
@@ -750,17 +750,17 @@ export function renderUserDashboardHtml(): string {
           <h3 class="font-bold text-app-text text-sm">Granular Notification Mode</h3>
           <div class="space-y-2">
             <label class="flex items-start gap-3 p-3 rounded-xl bg-app-highlight border border-app-border cursor-pointer hover:border-brand-500/30 transition">
-              <input type="radio" name="radio-notify" value="full" onchange="updateNotifyPreference(this.value)" class="mt-1 text-brand-500" checked />
+              <input type="radio" name="radio-notify" value="digest_only" onchange="updateNotifyPreference(this.value)" class="mt-1 text-brand-500" checked />
               <div>
-                <div class="text-xs font-bold text-app-text">Full Cross-Interaction Mode</div>
-                <div class="text-[11px] text-app-text opacity-60">Receive Telegram copies of all answers generated in the web workspace.</div>
+                <div class="text-xs font-bold text-app-text">Digest &amp; Alerts Only (Recommended)</div>
+                <div class="text-[11px] text-app-text opacity-60">Only receive morning automated task digests (e.g. daily briefings, goals, and reminders) and alerts on Telegram.</div>
               </div>
             </label>
             <label class="flex items-start gap-3 p-3 rounded-xl bg-app-highlight border border-app-border cursor-pointer hover:border-brand-500/30 transition">
-              <input type="radio" name="radio-notify" value="digest_only" onchange="updateNotifyPreference(this.value)" class="mt-1 text-brand-500" />
+              <input type="radio" name="radio-notify" value="full" onchange="updateNotifyPreference(this.value)" class="mt-1 text-brand-500" />
               <div>
-                <div class="text-xs font-bold text-app-text">Digest &amp; Alerts Only (Recommended)</div>
-                <div class="text-[11px] text-app-text opacity-60">Only receive morning automated task digests (e.g. Remote Job alerts) and reminder alarms on Telegram.</div>
+                <div class="text-xs font-bold text-app-text">Full Cross-Interaction Mode</div>
+                <div class="text-[11px] text-app-text opacity-60">Receive Telegram copies of all answers generated in the web workspace.</div>
               </div>
             </label>
             <label class="flex items-start gap-3 p-3 rounded-xl bg-app-highlight border border-app-border cursor-pointer hover:border-brand-500/30 transition">
@@ -770,6 +770,79 @@ export function renderUserDashboardHtml(): string {
                 <div class="text-[11px] text-app-text opacity-60">Maintain database synchronization without triggering push notifications on Telegram.</div>
               </div>
             </label>
+          </div>
+        </div>
+
+        <!-- Telegram Daily Executive Digest -->
+        <div class="glass-panel rounded-2xl p-6 space-y-4">
+          <div class="flex items-center justify-between">
+            <div>
+              <h3 class="font-bold text-app-text text-sm flex items-center gap-2">
+                <span>🌅</span>
+                <span>Daily Executive Digest (Telegram)</span>
+              </h3>
+              <p class="text-[11px] text-app-text opacity-60 mt-0.5">Automated morning briefing built strictly from your live tasks, reminders, and active goals.</p>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer">
+              <input type="checkbox" id="digest-setting-enabled" onchange="saveDailyDigestSettings()" class="sr-only peer" checked />
+              <div class="w-9 h-5 bg-app-highlight peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-brand-500"></div>
+            </label>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+            <div class="p-3 rounded-xl bg-app-highlight border border-app-border space-y-1">
+              <label class="text-[11px] font-bold text-app-text opacity-70 block">Delivery Time</label>
+              <input type="time" id="digest-setting-time" value="08:00" class="w-full bg-transparent text-xs text-brand-400 font-semibold focus:outline-none cursor-pointer" />
+            </div>
+
+            <div class="p-3 rounded-xl bg-app-highlight border border-app-border space-y-1">
+              <label class="text-[11px] font-bold text-app-text opacity-70 block">Timezone (IANA)</label>
+              <select id="digest-setting-tz" class="w-full bg-transparent text-xs text-brand-400 font-semibold focus:outline-none cursor-pointer">
+                <option value="UTC" class="bg-app-bg text-app-text">UTC (Coordinated Universal Time)</option>
+                <option value="Europe/London" class="bg-app-bg text-app-text">Europe/London</option>
+                <option value="Africa/Lagos" class="bg-app-bg text-app-text">Africa/Lagos (West Africa Time)</option>
+                <option value="America/New_York" class="bg-app-bg text-app-text">America/New_York (Eastern Time)</option>
+                <option value="America/Los_Angeles" class="bg-app-bg text-app-text">America/Los_Angeles (Pacific Time)</option>
+              </select>
+            </div>
+
+            <div class="p-3 rounded-xl bg-app-highlight border border-app-border space-y-1">
+              <label class="text-[11px] font-bold text-app-text opacity-70 block">When Nothing Due</label>
+              <select id="digest-setting-empty" class="w-full bg-transparent text-xs text-brand-400 font-semibold focus:outline-none cursor-pointer">
+                <option value="skip" class="bg-app-bg text-app-text">Skip delivery (Silent)</option>
+                <option value="message" class="bg-app-bg text-app-text">Send &quot;Nothing scheduled&quot; alert</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="pt-2">
+            <label class="text-[11px] font-bold text-app-text opacity-70 block mb-2">Sections Included (Only sections with real data appear):</label>
+            <div class="flex flex-wrap gap-4 text-xs text-app-text">
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" id="digest-sec-tasks" class="rounded text-brand-500" checked />
+                <span>📌 Due &amp; Overdue Tasks</span>
+              </label>
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" id="digest-sec-reminders" class="rounded text-brand-500" checked />
+                <span>⏰ Today&#39;s Reminders</span>
+              </label>
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" id="digest-sec-goals" class="rounded text-brand-500" checked />
+                <span>🎯 Active Goals &amp; Milestones</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="pt-3 border-t border-app-border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div id="digest-last-sent-text" class="text-[11px] text-app-text opacity-50 font-mono">Last sent: Loading...</div>
+            <div class="flex items-center gap-2">
+              <button type="button" onclick="sendDailyDigestNow()" class="px-3 py-1.5 rounded-xl bg-brand-500/15 hover:bg-brand-500/25 text-brand-400 border border-brand-500/30 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer">
+                <span>⚡ Send Digest Now</span>
+              </button>
+              <button type="button" onclick="saveDailyDigestSettings()" class="px-3.5 py-1.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-xs font-bold transition cursor-pointer">
+                <span>Save Settings</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -831,17 +904,17 @@ export function renderUserDashboardHtml(): string {
       <form onsubmit="handleCreateTaskSubmit(event)" class="space-y-3">
         <div>
           <label class="block text-xs font-bold text-app-text opacity-70 mb-1">Task Title</label>
-          <input id="task-input-title" required placeholder="e.g., Remote AI Engineer Job Search" class="w-full bg-app-highlight border border-app-border rounded-xl px-3.5 py-2.5 text-xs text-app-text placeholder:text-app-text placeholder:opacity-40 focus:outline-none focus:border-brand-500" />
+          <input id="task-input-title" required placeholder="e.g., Daily Morning Briefing &amp; Priorities" class="w-full bg-app-highlight border border-app-border rounded-xl px-3.5 py-2.5 text-xs text-app-text placeholder:text-app-text placeholder:opacity-40 focus:outline-none focus:border-brand-500" />
         </div>
         <div>
           <label class="block text-xs font-bold text-app-text opacity-70 mb-1">Execution Goal &amp; Instructions</label>
-          <textarea id="task-input-goal" rows="3" required placeholder="e.g., Scan job platforms for remote senior roles paying $160k+ and compile links..." class="w-full bg-app-highlight border border-app-border rounded-xl px-3.5 py-2.5 text-xs text-app-text placeholder:text-app-text placeholder:opacity-40 focus:outline-none focus:border-brand-500 resize-none"></textarea>
+          <textarea id="task-input-goal" rows="3" required placeholder="e.g., Synthesize active project priorities, reminder checklist, and daily execution plan..." class="w-full bg-app-highlight border border-app-border rounded-xl px-3.5 py-2.5 text-xs text-app-text placeholder:text-app-text placeholder:opacity-40 focus:outline-none focus:border-brand-500 resize-none"></textarea>
         </div>
         <div>
           <label class="block text-xs font-bold text-app-text opacity-70 mb-1">Task Category</label>
           <select id="task-input-type" class="w-full bg-app-highlight border border-app-border rounded-xl px-3.5 py-2.5 text-xs text-app-text focus:outline-none focus:border-brand-500">
+            <option value="strategic_briefing">Strategic Daily Briefing</option>
             <option value="research">Web &amp; Intelligence Research</option>
-            <option value="job_search">Job &amp; Career Search</option>
             <option value="coding">Software &amp; Coding Analysis</option>
             <option value="general">General Autonomous Task</option>
           </select>
@@ -1301,13 +1374,17 @@ export function renderUserDashboardHtml(): string {
       const dot = document.getElementById('tg-status-dot');
       const text = document.getElementById('tg-status-text');
       const notifySelect = document.getElementById('select-notify-pref');
-      if (notifySelect) notifySelect.value = user.notificationPreference || 'full';
+      const pref = user.notificationPreference || 'digest_only';
+      if (notifySelect) notifySelect.value = pref;
+      const radio = document.querySelector('input[name="radio-notify"][value="' + pref + '"]');
+      if (radio) radio.checked = true;
 
       if (user.telegramUserId) {
         dot.className = 'w-2 h-2 rounded-full bg-emerald-400';
         text.innerText = user.telegramUsername ? '@' + user.telegramUsername : 'Synced (' + user.telegramUserId + ')';
         document.getElementById('settings-tg-desc').innerText = 'Connected as ' + (user.telegramUsername ? '@' + user.telegramUsername : user.telegramUserId);
         document.getElementById('settings-tg-action').innerHTML = '<span class="px-3 py-1.5 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-xs font-bold flex items-center gap-1.5">🟢 Connected</span>';
+        loadDailyDigestSettings();
       } else {
         dot.className = 'w-2 h-2 rounded-full bg-amber-400';
         text.innerText = 'Connect Telegram';
@@ -3670,6 +3747,10 @@ export function renderUserDashboardHtml(): string {
     }
 
     async function updateNotifyPreference(pref) {
+      const select = document.getElementById('select-notify-pref');
+      if (select && select.value !== pref) select.value = pref;
+      const radio = document.querySelector('input[name="radio-notify"][value="' + pref + '"]');
+      if (radio) radio.checked = true;
       const token = localStorage.getItem('wb_session_token');
       await fetch('/api/auth/preferences', {
         method: 'PUT',
@@ -3687,6 +3768,97 @@ export function renderUserDashboardHtml(): string {
       setTimeout(() => {
         btn.innerHTML = originalHtml;
       }, 2000);
+    }
+
+    async function loadDailyDigestSettings() {
+      const token = localStorage.getItem('wb_session_token');
+      if (!token) return;
+      try {
+        const res = await fetch('/api/user/digest/settings', {
+          headers: { 'Authorization': 'Bearer ' + token }
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.success && data.settings) {
+          const s = data.settings;
+          const enabledEl = document.getElementById('digest-setting-enabled');
+          const timeEl = document.getElementById('digest-setting-time');
+          const tzEl = document.getElementById('digest-setting-tz');
+          const emptyEl = document.getElementById('digest-setting-empty');
+          const lastEl = document.getElementById('digest-last-sent-text');
+          if (enabledEl) enabledEl.checked = Boolean(s.enabled);
+          if (timeEl && s.sendTime) timeEl.value = s.sendTime;
+          if (tzEl && s.timezone) tzEl.value = s.timezone;
+          if (emptyEl && s.whenEmpty) emptyEl.value = s.whenEmpty;
+          if (lastEl) {
+            lastEl.innerText = s.lastSentAt 
+              ? 'Last sent: ' + new Date(s.lastSentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' (' + (s.lastItemCount || 0) + ' items)'
+              : 'Last sent: Never yet';
+          }
+          const secTasks = document.getElementById('digest-sec-tasks');
+          const secRem = document.getElementById('digest-sec-reminders');
+          const secGoals = document.getElementById('digest-sec-goals');
+          if (secTasks) secTasks.checked = s.sections ? s.sections.includes('tasks') : true;
+          if (secRem) secRem.checked = s.sections ? s.sections.includes('reminders') : true;
+          if (secGoals) secGoals.checked = s.sections ? s.sections.includes('goals') : true;
+        }
+      } catch (e) {
+        console.warn('Failed loading digest settings:', e);
+      }
+    }
+
+    async function saveDailyDigestSettings() {
+      const token = localStorage.getItem('wb_session_token');
+      const enabled = document.getElementById('digest-setting-enabled')?.checked ?? true;
+      const sendTime = document.getElementById('digest-setting-time')?.value || '08:00';
+      const timezone = document.getElementById('digest-setting-tz')?.value || 'UTC';
+      const whenEmpty = document.getElementById('digest-setting-empty')?.value || 'skip';
+      const sections = [];
+      if (document.getElementById('digest-sec-tasks')?.checked) sections.push('tasks');
+      if (document.getElementById('digest-sec-reminders')?.checked) sections.push('reminders');
+      if (document.getElementById('digest-sec-goals')?.checked) sections.push('goals');
+
+      try {
+        const res = await fetch('/api/user/digest/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+          body: JSON.stringify({ enabled, sendTime, timezone, whenEmpty, sections })
+        });
+        const data = await res.json();
+        if (data.success) {
+          alert('✓ Daily Digest preferences saved successfully!');
+        } else {
+          alert('Failed saving: ' + (data.error || 'Unknown error'));
+        }
+      } catch (err) {
+        alert('Network error saving preferences');
+      }
+    }
+
+    async function sendDailyDigestNow() {
+      const token = localStorage.getItem('wb_session_token');
+      const btn = event.currentTarget;
+      const originalText = btn.innerText;
+      btn.innerText = '⏳ Sending...';
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/user/digest/send-now', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token }
+        });
+        const data = await res.json();
+        if (data.success) {
+          alert('✓ ' + data.message);
+          loadDailyDigestSettings();
+        } else {
+          alert('Could not send digest: ' + (data.error || data.message || 'Error'));
+        }
+      } catch (err) {
+        alert('Failed triggering digest: ' + err.message);
+      } finally {
+        btn.innerText = originalText;
+        btn.disabled = false;
+      }
     }
 
     function handleLogout() {
@@ -3728,6 +3900,9 @@ export function renderUserDashboardHtml(): string {
     window.handleIndexConversation = handleIndexConversation;
     window.copyExtractionPrompt = copyExtractionPrompt;
     window.handleChatAbort = handleChatAbort;
+    window.loadDailyDigestSettings = loadDailyDigestSettings;
+    window.saveDailyDigestSettings = saveDailyDigestSettings;
+    window.sendDailyDigestNow = sendDailyDigestNow;
 
     function escapeHtml(str) {
       if (!str) return '';

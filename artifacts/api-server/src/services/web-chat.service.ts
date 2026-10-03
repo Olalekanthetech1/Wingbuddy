@@ -490,7 +490,7 @@ export class WebChatService {
       // Orchestrator intent detection via semantic interaction resolver
       try {
         const histQuick = await pool.query(
-          `SELECT role, content FROM messages WHERE conversation_id = $1 AND id != $2 ORDER BY created_at DESC LIMIT 6;`,
+          `SELECT role, content FROM messages WHERE conversation_id = $1 AND id != $2 AND status = 'completed' AND kind = 'conversational' ORDER BY created_at DESC LIMIT 6;`,
           [conversationId, userMessage.id]
         );
         const histPayload = histQuick.rows.reverse().map((m) => ({
@@ -567,7 +567,7 @@ export class WebChatService {
 
     // 5. Retrieve past dialogue history for context in this specific conversation
     const historyRes = await pool.query(
-      `SELECT id, role, content FROM messages WHERE conversation_id = $1 AND id != $2 ORDER BY created_at DESC LIMIT 12;`,
+      `SELECT id, role, content FROM messages WHERE conversation_id = $1 AND id != $2 AND status = 'completed' AND kind = 'conversational' ORDER BY created_at DESC LIMIT 12;`,
       [conversationId, userMessage.id]
     );
     const historyPayload = historyRes.rows.reverse().map((m) => ({
@@ -908,7 +908,7 @@ export class WebChatService {
     } else if (/\b(image|picture|photo|illustration|drawing|paint|video|animation|clip|movie|generate|draw|create|render)\b/i.test(trimmedInput)) {
       try {
         const histQuick = await pool.query(
-          `SELECT role, content FROM messages WHERE conversation_id = $1 AND id != $2 ORDER BY created_at DESC LIMIT 6;`,
+          `SELECT role, content FROM messages WHERE conversation_id = $1 AND id != $2 AND status = 'completed' AND kind = 'conversational' ORDER BY created_at DESC LIMIT 6;`,
           [conversationId, userMessage.id]
         );
         const histPayload = histQuick.rows.reverse().map((m) => ({
@@ -989,7 +989,7 @@ export class WebChatService {
     }
 
     const historyRes = await pool.query(
-      `SELECT id, role, content FROM messages WHERE conversation_id = $1 AND id != $2 ORDER BY created_at DESC LIMIT 12;`,
+      `SELECT id, role, content FROM messages WHERE conversation_id = $1 AND id != $2 AND status = 'completed' AND kind = 'conversational' ORDER BY created_at DESC LIMIT 12;`,
       [conversationId, userMessage.id]
     );
     const historyPayload = historyRes.rows.reverse().map((m) => ({
@@ -1086,8 +1086,8 @@ export class WebChatService {
     let lastDbUpdate = Date.now();
     let isLeaking = false;
 
-    // Small word-boundary hold-back buffer (~45 characters)
-    const HOLD_BACK_TARGET = 45;
+    // Word-boundary hold-back buffer for secret scanning
+    const HOLD_BACK_TARGET = OutputGuardService.HOLD_BACK_TARGET;
 
     try {
       const stream = adaptiveAIRouterService.routeStream(
@@ -1120,12 +1120,11 @@ export class WebChatService {
           // Run output guard check on accumulated text
           const leakCheck = OutputGuardService.detectLeak({
             response: fullText,
-            systemPrompt,
             userQuery: content,
           });
 
-          if (leakCheck.isLeak) {
-            logger.warn({ reason: leakCheck.reason }, "Prompt leak detected in streaming buffer. Stopping stream.");
+          if (leakCheck.isHardBlock) {
+            logger.warn({ reason: leakCheck.reason, ruleId: leakCheck.ruleId }, "Prompt leak hard block detected in web streaming buffer. Stopping stream.");
             isLeaking = true;
             break;
           }
@@ -1178,7 +1177,7 @@ export class WebChatService {
       if (isAborted) {
         // Finalize DB row as stopped
         await pool.query(
-          `UPDATE messages SET content = $1, metadata_json = $2 WHERE id = $3;`,
+          `UPDATE messages SET content = $1, kind = 'system_notice', status = 'interrupted', metadata_json = $2 WHERE id = $3;`,
           [releasedText, JSON.stringify({ status: "stopped", text: releasedText }), assistantMessageId]
         );
         isFinished = true;
@@ -1187,14 +1186,13 @@ export class WebChatService {
       }
 
       if (isLeaking) {
-        const sanitized = categorizeAndLogError(new Error("Secure policy violation: Prompt leak detected."));
-        const fallbackText = `⚠️ I am Wingbuddy, your dedicated assistant. I cannot share technical configuration details. (Reference ID: ${sanitized.referenceId})`;
-        releasedText = fallbackText;
-        sendEvent("leak_detected", { text: fallbackText, messageId: assistantMessageId });
+        const neutralNotice = "That reply was interrupted. Would you like to retry?";
+        releasedText = neutralNotice;
+        sendEvent("interrupted", { message: neutralNotice, messageId: assistantMessageId });
 
         await pool.query(
-          `UPDATE messages SET content = $1, metadata_json = $2 WHERE id = $3;`,
-          [fallbackText, JSON.stringify({ status: "interrupted", reason: "policy_violation", referenceId: sanitized.referenceId }), assistantMessageId]
+          `UPDATE messages SET content = $1, kind = 'system_notice', status = 'interrupted', metadata_json = $2 WHERE id = $3;`,
+          [neutralNotice, JSON.stringify({ status: "interrupted", reason: "guard_block" }), assistantMessageId]
         );
 
         eventBusService.emitUserEvent({
@@ -1205,14 +1203,14 @@ export class WebChatService {
             id: assistantMessageId,
             conversationId,
             role: "model",
-            content: fallbackText,
+            content: neutralNotice,
             mediaType: "text",
             source: "web",
             createdAt: asstRes.rows[0].created_at,
           },
         });
 
-        sendEvent("done", { text: fallbackText, conversationId });
+        sendEvent("done", { text: neutralNotice, conversationId });
         isFinished = true;
         res.end();
         return;
@@ -1227,6 +1225,11 @@ export class WebChatService {
         }
         sendEvent("delta", { delta: remaining });
       }
+
+      await pool.query(
+        `UPDATE messages SET content = $1, kind = 'conversational', status = 'completed', metadata_json = $2 WHERE id = $3;`,
+        [fullText, JSON.stringify({ status: "completed", tokenCount: fullText.length / 4 }), assistantMessageId]
+      );
 
       const t_done = Date.now();
       logger.info({

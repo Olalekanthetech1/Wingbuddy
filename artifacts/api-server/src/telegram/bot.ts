@@ -82,6 +82,10 @@ import {
   reminderScheduler,
   reminderService,
 } from "../services/reminder.service";
+import {
+  dailyDigestService,
+  dailyDigestScheduler,
+} from "../services/daily-digest.service";
 import { StreamingResponder } from "./streaming-responder";
 import { onboardingService } from "../services/onboarding.service";
 import { timezoneService } from "../services/timezone.service";
@@ -702,6 +706,57 @@ export function createTelegramBot(): TelegramBotRuntime {
     }
   });
 
+  bot.command(["digest", "briefing", "daily"], async (ctx) => {
+    if (!(await requireAuthorized(ctx))) return;
+    if (!ctx.from || !ctx.chat) return;
+    await upsertUser(ctx);
+
+    const arg = (ctx.match || "").trim().toLowerCase();
+    if (arg === "settings" || arg === "config" || arg === "setup") {
+      const prefs = await dailyDigestService.getPreferences(ctx.from.id);
+      const sectionsDisplay = prefs.sections.map((s) => s.toUpperCase()).join(", ");
+      const daysDisplay = prefs.days.length === 7 ? "Every Day" : prefs.days.map((d) => d.toUpperCase()).join(", ");
+      const lastSentDisplay = prefs.lastSentAt
+        ? new Intl.DateTimeFormat("en-US", { timeZone: prefs.timezone, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(prefs.lastSentAt))
+        : "Never sent yet";
+
+      const text = [
+        `⚙️ <b>Daily Executive Digest Settings</b>`,
+        ``,
+        `• <b>Status:</b> ${prefs.enabled ? "🟢 Active (Daily Push)" : "🔴 Paused / Disabled"}`,
+        `• <b>Send Time:</b> <code>${prefs.sendTime}</code> (${prefs.timezone})`,
+        `• <b>Timezone:</b> <code>${prefs.timezone}</code>`,
+        `• <b>Active Sections:</b> ${sectionsDisplay || "None"}`,
+        `• <b>Scheduled Days:</b> ${daysDisplay}`,
+        `• <b>When Empty:</b> ${prefs.whenEmpty === "message" ? "Send 'Nothing scheduled' message" : "Silent (Skip message)"}`,
+        `• <b>Last Sent:</b> ${lastSentDisplay} (${prefs.lastItemCount || 0} items)`,
+      ].join("\n");
+
+      const keyboard = new InlineKeyboard()
+        .text(prefs.enabled ? "⏸️ Pause Digest" : "▶️ Enable Digest", "digest:toggle:enabled")
+        .text("⚡ Send Digest Now", "digest:send_now")
+        .row()
+        .text(`Tasks: ${prefs.sections.includes("tasks") ? "✅" : "❌"}`, "digest:toggle:section:tasks")
+        .text(`Reminders: ${prefs.sections.includes("reminders") ? "✅" : "❌"}`, "digest:toggle:section:reminders")
+        .text(`Goals: ${prefs.sections.includes("goals") ? "✅" : "❌"}`, "digest:toggle:section:goals")
+        .row()
+        .text(`Empty: ${prefs.whenEmpty === "message" ? "💬 Message" : "🤫 Skip"}`, "digest:toggle:when_empty")
+        .text("🌐 Web Workspace", "cmd:open_workspace");
+
+      await ctx.reply(text, { parse_mode: "HTML", reply_markup: keyboard });
+      return;
+    }
+
+    const statusMsg = await ctx.reply("⏳ <i>Compiling today's live executive briefing...</i>", { parse_mode: "HTML" });
+    try {
+      const digest = await dailyDigestService.buildDigest(ctx.from.id, { forceSend: true });
+      await ctx.api.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
+      await ctx.reply(digest.htmlText, { parse_mode: "HTML", reply_markup: digest.keyboard });
+    } catch (err: any) {
+      await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `⚠️ Failed compiling daily digest: ${err.message}`, { parse_mode: "HTML" }).catch(() => {});
+    }
+  });
+
   bot.command(["tier", "quota", "account", "plan", "upgrade", "premium"], async (ctx) => {
     if (!(await requireAuthorized(ctx))) return;
     if (!ctx.from || !ctx.chat) return;
@@ -1095,6 +1150,210 @@ export function createTelegramBot(): TelegramBotRuntime {
       });
     });
   });
+
+  // Daily Digest Callbacks
+  bot.callbackQuery(/^digest:done:task:(\d+)$/, async (ctx) => {
+    if (!ctx.from || !authorized(ctx.from.id)) {
+      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
+      return;
+    }
+    const taskId = parseInt(ctx.match[1], 10);
+    try {
+      await prisma.agentTask.update({
+        where: { id: taskId },
+        data: { status: "completed", completedAt: new Date() },
+      });
+      await ctx.answerCallbackQuery({ text: `✅ Task #${taskId} completed!` });
+    } catch {
+      await ctx.answerCallbackQuery({ text: "Could not update task." });
+    }
+  });
+
+  bot.callbackQuery(/^digest:snooze:rem:(\d+):(\d+)$/, async (ctx) => {
+    if (!ctx.from || !authorized(ctx.from.id)) {
+      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
+      return;
+    }
+    const remId = parseInt(ctx.match[1], 10);
+    const mins = parseInt(ctx.match[2], 10) || 60;
+    try {
+      await reminderService.snoozeReminder(remId, mins, ctx.from.id);
+      await ctx.answerCallbackQuery({ text: `⏰ Snoozed reminder for ${mins} minutes!` });
+    } catch {
+      await ctx.answerCallbackQuery({ text: "Could not snooze reminder." });
+    }
+  });
+
+  bot.callbackQuery("digest:send_now", async (ctx) => {
+    if (!ctx.from || !authorized(ctx.from.id)) {
+      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
+      return;
+    }
+    await ctx.answerCallbackQuery({ text: "Compiling and sending digest..." });
+    try {
+      const digest = await dailyDigestService.buildDigest(ctx.from.id, { forceSend: true });
+      await ctx.reply(digest.htmlText, { parse_mode: "HTML", reply_markup: digest.keyboard });
+    } catch (err: any) {
+      await ctx.reply(`⚠️ Failed sending digest: ${err.message}`);
+    }
+  });
+
+  bot.callbackQuery("digest:settings", async (ctx) => {
+    if (!ctx.from || !authorized(ctx.from.id)) {
+      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
+      return;
+    }
+    await ctx.answerCallbackQuery();
+    const prefs = await dailyDigestService.getPreferences(ctx.from.id);
+    const sectionsDisplay = prefs.sections.map((s) => s.toUpperCase()).join(", ");
+    const daysDisplay = prefs.days.length === 7 ? "Every Day" : prefs.days.map((d) => d.toUpperCase()).join(", ");
+    const lastSentDisplay = prefs.lastSentAt
+      ? new Intl.DateTimeFormat("en-US", { timeZone: prefs.timezone, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(prefs.lastSentAt))
+      : "Never sent yet";
+
+    const text = [
+      `⚙️ <b>Daily Executive Digest Settings</b>`,
+      ``,
+      `• <b>Status:</b> ${prefs.enabled ? "🟢 Active (Daily Push)" : "🔴 Paused / Disabled"}`,
+      `• <b>Send Time:</b> <code>${prefs.sendTime}</code> (${prefs.timezone})`,
+      `• <b>Timezone:</b> <code>${prefs.timezone}</code>`,
+      `• <b>Active Sections:</b> ${sectionsDisplay || "None"}`,
+      `• <b>Scheduled Days:</b> ${daysDisplay}`,
+      `• <b>When Empty:</b> ${prefs.whenEmpty === "message" ? "Send 'Nothing scheduled' message" : "Silent (Skip message)"}`,
+      `• <b>Last Sent:</b> ${lastSentDisplay} (${prefs.lastItemCount || 0} items)`,
+    ].join("\n");
+
+    const keyboard = new InlineKeyboard()
+      .text(prefs.enabled ? "⏸️ Pause Digest" : "▶️ Enable Digest", "digest:toggle:enabled")
+      .text("⚡ Send Digest Now", "digest:send_now")
+      .row()
+      .text(`Tasks: ${prefs.sections.includes("tasks") ? "✅" : "❌"}`, "digest:toggle:section:tasks")
+      .text(`Reminders: ${prefs.sections.includes("reminders") ? "✅" : "❌"}`, "digest:toggle:section:reminders")
+      .text(`Goals: ${prefs.sections.includes("goals") ? "✅" : "❌"}`, "digest:toggle:section:goals")
+      .row()
+      .text(`Empty: ${prefs.whenEmpty === "message" ? "💬 Message" : "🤫 Skip"}`, "digest:toggle:when_empty")
+      .text("🌐 Web Workspace", "cmd:open_workspace");
+
+    await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: keyboard }).catch(async () => {
+      await ctx.reply(text, { parse_mode: "HTML", reply_markup: keyboard });
+    });
+  });
+
+  bot.callbackQuery("digest:toggle:enabled", async (ctx) => {
+    if (!ctx.from || !authorized(ctx.from.id)) {
+      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
+      return;
+    }
+    const current = await dailyDigestService.getPreferences(ctx.from.id);
+    const updated = await dailyDigestService.updatePreferences(ctx.from.id, { enabled: !current.enabled });
+    await ctx.answerCallbackQuery({ text: updated.enabled ? "✅ Daily digest enabled" : "⏸️ Daily digest paused" });
+
+    const sectionsDisplay = updated.sections.map((s) => s.toUpperCase()).join(", ");
+    const daysDisplay = updated.days.length === 7 ? "Every Day" : updated.days.map((d) => d.toUpperCase()).join(", ");
+    const text = [
+      `⚙️ <b>Daily Executive Digest Settings</b>`,
+      ``,
+      `• <b>Status:</b> ${updated.enabled ? "🟢 Active (Daily Push)" : "🔴 Paused / Disabled"}`,
+      `• <b>Send Time:</b> <code>${updated.sendTime}</code> (${updated.timezone})`,
+      `• <b>Timezone:</b> <code>${updated.timezone}</code>`,
+      `• <b>Active Sections:</b> ${sectionsDisplay || "None"}`,
+      `• <b>Scheduled Days:</b> ${daysDisplay}`,
+      `• <b>When Empty:</b> ${updated.whenEmpty === "message" ? "Send 'Nothing scheduled' message" : "Silent (Skip message)"}`,
+    ].join("\n");
+
+    const keyboard = new InlineKeyboard()
+      .text(updated.enabled ? "⏸️ Pause Digest" : "▶️ Enable Digest", "digest:toggle:enabled")
+      .text("⚡ Send Digest Now", "digest:send_now")
+      .row()
+      .text(`Tasks: ${updated.sections.includes("tasks") ? "✅" : "❌"}`, "digest:toggle:section:tasks")
+      .text(`Reminders: ${updated.sections.includes("reminders") ? "✅" : "❌"}`, "digest:toggle:section:reminders")
+      .text(`Goals: ${updated.sections.includes("goals") ? "✅" : "❌"}`, "digest:toggle:section:goals")
+      .row()
+      .text(`Empty: ${updated.whenEmpty === "message" ? "💬 Message" : "🤫 Skip"}`, "digest:toggle:when_empty")
+      .text("🌐 Web Workspace", "cmd:open_workspace");
+
+    await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: keyboard }).catch(() => {});
+  });
+
+  bot.callbackQuery(/^digest:toggle:section:(tasks|reminders|goals)$/, async (ctx) => {
+    if (!ctx.from || !authorized(ctx.from.id)) {
+      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
+      return;
+    }
+    const sec = ctx.match[1];
+    const current = await dailyDigestService.getPreferences(ctx.from.id);
+    let sections = [...current.sections];
+    if (sections.includes(sec)) {
+      sections = sections.filter((s) => s !== sec);
+    } else {
+      sections.push(sec);
+    }
+    const updated = await dailyDigestService.updatePreferences(ctx.from.id, { sections });
+    await ctx.answerCallbackQuery({ text: `Updated ${sec} section` });
+
+    const sectionsDisplay = updated.sections.map((s) => s.toUpperCase()).join(", ");
+    const daysDisplay = updated.days.length === 7 ? "Every Day" : updated.days.map((d) => d.toUpperCase()).join(", ");
+    const text = [
+      `⚙️ <b>Daily Executive Digest Settings</b>`,
+      ``,
+      `• <b>Status:</b> ${updated.enabled ? "🟢 Active (Daily Push)" : "🔴 Paused / Disabled"}`,
+      `• <b>Send Time:</b> <code>${updated.sendTime}</code> (${updated.timezone})`,
+      `• <b>Timezone:</b> <code>${updated.timezone}</code>`,
+      `• <b>Active Sections:</b> ${sectionsDisplay || "None"}`,
+      `• <b>Scheduled Days:</b> ${daysDisplay}`,
+      `• <b>When Empty:</b> ${updated.whenEmpty === "message" ? "Send 'Nothing scheduled' message" : "Silent (Skip message)"}`,
+    ].join("\n");
+
+    const keyboard = new InlineKeyboard()
+      .text(updated.enabled ? "⏸️ Pause Digest" : "▶️ Enable Digest", "digest:toggle:enabled")
+      .text("⚡ Send Digest Now", "digest:send_now")
+      .row()
+      .text(`Tasks: ${updated.sections.includes("tasks") ? "✅" : "❌"}`, "digest:toggle:section:tasks")
+      .text(`Reminders: ${updated.sections.includes("reminders") ? "✅" : "❌"}`, "digest:toggle:section:reminders")
+      .text(`Goals: ${updated.sections.includes("goals") ? "✅" : "❌"}`, "digest:toggle:section:goals")
+      .row()
+      .text(`Empty: ${updated.whenEmpty === "message" ? "💬 Message" : "🤫 Skip"}`, "digest:toggle:when_empty")
+      .text("🌐 Web Workspace", "cmd:open_workspace");
+
+    await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: keyboard }).catch(() => {});
+  });
+
+  bot.callbackQuery("digest:toggle:when_empty", async (ctx) => {
+    if (!ctx.from || !authorized(ctx.from.id)) {
+      await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
+      return;
+    }
+    const current = await dailyDigestService.getPreferences(ctx.from.id);
+    const whenEmpty = current.whenEmpty === "message" ? "skip" : "message";
+    const updated = await dailyDigestService.updatePreferences(ctx.from.id, { whenEmpty });
+    await ctx.answerCallbackQuery({ text: `When empty: ${whenEmpty}` });
+
+    const sectionsDisplay = updated.sections.map((s) => s.toUpperCase()).join(", ");
+    const daysDisplay = updated.days.length === 7 ? "Every Day" : updated.days.map((d) => d.toUpperCase()).join(", ");
+    const text = [
+      `⚙️ <b>Daily Executive Digest Settings</b>`,
+      ``,
+      `• <b>Status:</b> ${updated.enabled ? "🟢 Active (Daily Push)" : "🔴 Paused / Disabled"}`,
+      `• <b>Send Time:</b> <code>${updated.sendTime}</code> (${updated.timezone})`,
+      `• <b>Timezone:</b> <code>${updated.timezone}</code>`,
+      `• <b>Active Sections:</b> ${sectionsDisplay || "None"}`,
+      `• <b>Scheduled Days:</b> ${daysDisplay}`,
+      `• <b>When Empty:</b> ${updated.whenEmpty === "message" ? "Send 'Nothing scheduled' message" : "Silent (Skip message)"}`,
+    ].join("\n");
+
+    const keyboard = new InlineKeyboard()
+      .text(updated.enabled ? "⏸️ Pause Digest" : "▶️ Enable Digest", "digest:toggle:enabled")
+      .text("⚡ Send Digest Now", "digest:send_now")
+      .row()
+      .text(`Tasks: ${updated.sections.includes("tasks") ? "✅" : "❌"}`, "digest:toggle:section:tasks")
+      .text(`Reminders: ${updated.sections.includes("reminders") ? "✅" : "❌"}`, "digest:toggle:section:reminders")
+      .text(`Goals: ${updated.sections.includes("goals") ? "✅" : "❌"}`, "digest:toggle:section:goals")
+      .row()
+      .text(`Empty: ${updated.whenEmpty === "message" ? "💬 Message" : "🤫 Skip"}`, "digest:toggle:when_empty")
+      .text("🌐 Web Workspace", "cmd:open_workspace");
+
+    await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: keyboard }).catch(() => {});
+  });
   bot.callbackQuery(/^rem(?:_done|:done):(\d+)$/, async (ctx) => {
     if (!ctx.from || !authorized(ctx.from.id)) {
       await ctx.answerCallbackQuery({ text: PRIVATE_MESSAGE, show_alert: true });
@@ -1324,12 +1583,75 @@ export function createTelegramBot(): TelegramBotRuntime {
     }
   });
 
+  bot.callbackQuery("retry:last_turn", async (ctx) => {
+    await ctx.answerCallbackQuery({ text: "Retrying previous turn..." }).catch(() => {});
+    if (!ctx.from || !ctx.chat) return;
+    try {
+      const conversationId = await conversations.getOrCreateConversation(ctx.from.id, ctx.chat.id);
+      const messages = await conversations.getRecentMessages(conversationId, 5, true);
+      const lastUserMsg = messages.filter((m) => m.role === "user").pop();
+      if (lastUserMsg && lastUserMsg.content) {
+        await handleIncomingTelegramMessage(ctx, { rawText: lastUserMsg.content });
+      } else {
+        await ctx.reply("No previous message found to retry. Please send your query again.");
+      }
+    } catch (retryErr) {
+      logger.error({ error: safeErrorMetadata(retryErr) }, "Failed executing retry callback query");
+      await ctx.reply("Could not retry that message. Please type and send it again.");
+    }
+  });
+
+  const processedUpdateIds = new Set<number>();
+  interface ActiveTurnRecord {
+    prompt: string;
+    startedAt: number;
+    abortController: AbortController;
+    status: "running" | "completed" | "interrupted" | "failed";
+  }
+  const activeUserTurns = new Map<number, ActiveTurnRecord>();
+
   async function handleIncomingTelegramMessage(ctx: Context, payload: { rawText?: string; media?: { fileId: string; mediaType: "image" | "document" | "voice" | "audio"; reportedMime?: string; fileName?: string; fileSize?: number; }; }) {
     if (!(await requireAuthorized(ctx))) return;
     if (!ctx.from || !ctx.chat) return;
+
+    // Idempotency: skip duplicate Telegram update deliveries
+    const updateId = ctx.update?.update_id;
+    if (updateId) {
+      if (processedUpdateIds.has(updateId)) {
+        logger.info({ updateId }, "Skipping duplicate Telegram update_id delivery");
+        return;
+      }
+      processedUpdateIds.add(updateId);
+      if (processedUpdateIds.size > 2000) {
+        const first = processedUpdateIds.values().next().value;
+        if (first !== undefined) processedUpdateIds.delete(first);
+      }
+    }
+
     if (!await rateLimiter.consumeAsync(ctx.from.id)) { await ctx.reply("You’re sending messages a little too quickly. Please wait a moment and try again."); return; }
     const { rawText, media } = payload;
     if (!media && (!rawText || !rawText.trim())) { await ctx.reply("Please send a message with some text or attach an image, document, or voice note."); return; }
+
+    const prompt = MediaProcessorService.buildMultimodalPrompt(rawText, media?.mediaType, media?.fileName);
+
+    // Tighter re-send conditions:
+    // Only supersede if previous turn is currently running OR ended in interrupted/failed state.
+    // If completed normally, treat the new message as a legitimate new distinct turn.
+    const previousTurn = activeUserTurns.get(ctx.from.id);
+    if (previousTurn && previousTurn.prompt.trim() === prompt.trim() && (Date.now() - previousTurn.startedAt < 60000)) {
+      if (previousTurn.status === "running") {
+        logger.info({ userId: ctx.from.id }, "Aborting in-flight duplicate turn and superseding");
+        previousTurn.abortController.abort();
+      }
+    }
+
+    const turnAbortController = new AbortController();
+    activeUserTurns.set(ctx.from.id, {
+      prompt,
+      startedAt: Date.now(),
+      abortController: turnAbortController,
+      status: "running",
+    });
 
     const quotaCheck = await userTierService.checkAndRecordUsage(ctx.from.id, {
       username: ctx.from.username,
@@ -1337,11 +1659,10 @@ export function createTelegramBot(): TelegramBotRuntime {
       lastName: ctx.from.last_name,
     });
     if (!quotaCheck.allowed) {
+      activeUserTurns.get(ctx.from.id)!.status = "failed";
       await ctx.reply(quotaCheck.message || "⏳ Daily quota exceeded. Please contact the administrator.");
       return;
     }
-
-    const prompt = MediaProcessorService.buildMultimodalPrompt(rawText, media?.mediaType, media?.fileName);
 
     const stopTyping = startTypingIndicator(ctx, { state: "understanding", operationLabel: media ? "incoming media" : "request interpretation", userFacingProgress: false });
     try {
@@ -1869,8 +2190,23 @@ export function createTelegramBot(): TelegramBotRuntime {
       await runStage("telegram_streaming_finalize", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => streamingResponder.finalize(reply));
       const persistentUserMessage = media ? `[Attached ${media.mediaType}: ${media.fileName || media.reportedMime || "file"}]\n${prompt}` : prompt;
       const cleanReply = stripMediaArtifactMetadata(reply);
-      await runStage("user_message_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => conversations.addMessage(globalContextData.conversationId, "user", persistentUserMessage));
-      await runStage("model_response_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () => conversations.addMessage(globalContextData.conversationId, "model", cleanReply));
+      const isInterrupted = cleanReply.includes("That reply was interrupted") || cleanReply.includes("interrupted");
+      if (activeUserTurns.has(ctx.from.id)) {
+        activeUserTurns.get(ctx.from.id)!.status = isInterrupted ? "interrupted" : "completed";
+      }
+
+      await runStage("user_message_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () =>
+        conversations.addMessage(globalContextData.conversationId, "user", persistentUserMessage, {
+          kind: "conversational",
+          status: "completed",
+        })
+      );
+      await runStage("model_response_save", { telegramUserId: ctx.from.id, chatId: ctx.chat.id }, () =>
+        conversations.addMessage(globalContextData.conversationId, "model", cleanReply, {
+          kind: isInterrupted ? "system_notice" : "conversational",
+          status: isInterrupted ? "interrupted" : "completed",
+        })
+      );
       
       // Emit real-time synchronization event to Web workspace
       eventBusService.emitUserEvent({
@@ -1882,16 +2218,23 @@ export function createTelegramBot(): TelegramBotRuntime {
           content: cleanReply,
           mediaType: "text",
           source: "telegram",
+          kind: isInterrupted ? "system_notice" : "conversational",
+          status: isInterrupted ? "interrupted" : "completed",
           createdAt: new Date().toISOString(),
         },
       });
 
       if (activeTaskContext) await taskService.syncTaskProgressFromResponse(activeTaskContext.task.id, reply);
-      if (await onboardingService.memoryEnabled(ctx.from.id)) void memoryService.processBackgroundExtraction(ctx.from.id, currentPrompt, globalContextData.conversationId);
+      if (!isInterrupted && await onboardingService.memoryEnabled(ctx.from.id)) {
+        void memoryService.processBackgroundExtraction(ctx.from.id, currentPrompt, globalContextData.conversationId);
+      }
       if (registeredRequest) requestRegistryService.markCompleted(registeredRequest.requestId);
       stopTyping.complete();
     } catch (error) {
       stopTyping.fail();
+      if (activeUserTurns.has(ctx.from.id)) {
+        activeUserTurns.get(ctx.from.id)!.status = "failed";
+      }
       if (ctx.message?.message_id && ctx.from?.id && ctx.chat?.id) {
         const request = requestRegistryService.getByTelegramMessage(ctx.from.id, ctx.chat.id, ctx.message.message_id);
         if (request) requestRegistryService.markFailed(request.requestId, { error: safeErrorMetadata(error) });
@@ -1905,7 +2248,9 @@ export function createTelegramBot(): TelegramBotRuntime {
       if (isRateLimit) {
         await ctx.reply("⏳ <b>Google Gemini quota or rate limit temporarily reached (429).</b>\n\nPlease wait about 30 seconds before sending another message. You can also connect additional Gemini API keys in your Web Dashboard.", { parse_mode: "HTML" }).catch(() => {});
       } else {
-        await ctx.reply(`⚠️ ${escapeHtml(taxonomical.userMessage)}\n\n<i>(Reference ID: <code>${taxonomical.referenceId}</code>)</i>`, { parse_mode: "HTML" }).catch(() => {});
+        await ctx.reply("That reply was interrupted. Would you like to retry?", {
+          reply_markup: new InlineKeyboard().text("🔄 Retry", "retry:last_turn"),
+        }).catch(() => {});
       }
     } finally {
       stopTyping();
@@ -1936,11 +2281,13 @@ export function createTelegramBot(): TelegramBotRuntime {
       await rateLimiter.initializeDb();
       if (!bot.isInited()) { try { await bot.init(); } catch (err) { logger.warn({ error: safeErrorMetadata(err) }, "Failed to initialize bot during start()"); } }
       reminderScheduler.start(bot);
+      dailyDigestScheduler.start(bot);
       
       // Register official Telegram command list dynamically derived from handlers
       try {
         await bot.api.setMyCommands([
           { command: "workspace", description: "🌐 Open Desktop Web Workspace" },
+          { command: "digest", description: "🌅 Daily Morning Executive Briefing" },
           { command: "tasks", description: "⚡ View Scheduled Autonomous Tasks" },
           { command: "memories", description: "🧠 View & Manage Memory Vault" },
           { command: "reminders", description: "⏰ View Active Reminders" },
@@ -1977,7 +2324,13 @@ export function createTelegramBot(): TelegramBotRuntime {
       await bot.api.setWebhook(config.telegramWebhookUrl!, { secret_token: config.telegramWebhookSecret });
       logger.info({ webhookUrlConfigured: true }, "Telegram webhook configured");
     },
-    async stop() { reminderScheduler.stop(); await telegramWorkerQueue.drain(3000); await bot.stop(); logger.info("Telegram bot stopped"); },
+    async stop() {
+      reminderScheduler.stop();
+      dailyDigestScheduler.stop();
+      await telegramWorkerQueue.drain(3000);
+      await bot.stop();
+      logger.info("Telegram bot stopped");
+    },
     mountWebhook(app) {
       app.get("/api/telegram/queue-metrics", (_req: Request, res: Response) => { res.json({ status: "ok", workerQueue: telegramWorkerQueue.getMetrics() }); });
       if (config.usePolling) return;

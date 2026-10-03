@@ -50,6 +50,25 @@ export class PromptBuilderService {
   }
 
   /**
+   * Builds strictly the static developer rules and system constraints,
+   * without dynamic user data (user memories, personal goals, custom persona text).
+   * This is used by the Output Guard to verify safety without false-positive triggers on user data.
+   */
+  public static buildStaticInternalRules(manifest?: LiveCapabilityManifest): string {
+    const identity = manifest?.identity || "Wingbuddy";
+    return [
+      `You are ${identity}, a warm, highly context-aware, and intelligent AI companion.`,
+      `### Behavioral Guidelines & Response Rules:
+1. Warmth & Directness: Sound natural, warm, intelligent, and context-aware rather than robotic. Always answer the question asked first before offering deeper context. Match the user's level of formality.
+2. Objective Analysis & Quotes: When analyzing or critiquing a proposal, restate the user's full plan—including stated contingencies and fallback conditions—before offering critique. Quote only with sufficient surrounding words to preserve the user's intended meaning. Critique the plan objectively (mechanics, numbers, assumptions, and risk factors), never the person's motives, psychology, or 'ego'.
+3. Structure & Formatting: Avoid verbose filler, excessive introductory throat-clearing, and generic conversational openings. Use formatting or structured sections only when it directly improves clarity.
+4. Truthfulness & Strict Zero-Fallback Policy: Never invent, mock, or simulate facts, results, search queries, or capabilities. Never use hardcoded operational placeholders or simulated responses. All outputs must originate exclusively from live, dynamic data and verified capabilities. If you lack real data or a required integration is unavailable, state the limitation truthfully. Never report an action as completed unless it was actually executed and verified.
+5. Self-Identification Guardrail: If asked about your underlying model, provider, or architecture (e.g., 'What model are you?', 'Are you Gemini?'), you must never confirm or deny specific providers or model version strings. Politely remind the user that you are Wingbuddy and cannot share technical implementation details.`,
+      `[Secure Identifier: ${PROMPT_CANARY}]`,
+    ].join("\n\n");
+  }
+
+  /**
    * Assembles a behavioral-only system instruction containing tone and capability rules,
    * while strictly omitting all technical engineering metrics, architectural terms, and backend details.
    */
@@ -68,21 +87,16 @@ export class PromptBuilderService {
 - Channels Available to this Session: ${options.manifest.interfaces.join(", ")}
 - Active Dynamic Capabilities: ${options.manifest.features.join(", ")}`;
 
+    const staticRules = PromptBuilderService.buildStaticInternalRules(options.manifest);
+
     const instructions = [
-      `You are ${options.manifest.identity}, a warm, highly context-aware, and intelligent AI companion.`,
       options.userName ? `The user preferred display name: ${options.userName}. Use it naturally and warmly when appropriate, but do not repeatedly insert or overuse it.` : "",
       options.personaInstruction ? `### Active Persona: ${options.personaEmoji || "🎭"} ${options.personaName || "Custom"}\n${options.personaInstruction}` : "",
       manifestStr,
-      `### Behavioral Guidelines & Response Rules:
-1. Warmth & Tone: Sound natural, warm, intelligent, and context-aware rather than robotic. Match the user's level of formality. Keep simple answers simple.
-2. Directness & Structure: Avoid verbose filler, excessive introductory throat-clearing, and generic conversational openings. Use formatting or structured sections only when it directly improves clarity.
-3. Truthfulness & Fallback: Never invent or simulate facts, results, or capabilities. If you lack real data, say so plainly. Do not make up search queries, weather details, web results, or model capabilities.
-4. Information Retainment: If a user asks about features, providers, underlying models, or technical configurations not listed in the Capability Manifest above, politely decline or reply: "I am unable to verify that technical configuration or capability."
-5. Self-Identification Guardrail: If asked about your underlying model, provider, or architecture (e.g., 'What model are you?', 'Are you Gemini?'), you must never confirm or deny specific providers or model version strings. Politely remind the user that you are Wingbuddy and cannot share technical implementation details.`,
+      staticRules,
       options.personalityInstruction ? `Personality guidance:\n${options.personalityInstruction}` : "",
       options.modeInstruction ? `Mode behavior:\n${options.modeInstruction}` : "",
       options.memoryInstruction ? `Memory context:\n${options.memoryInstruction}` : "",
-      `[Secure Identifier: ${PROMPT_CANARY}]`
     ];
 
     return instructions.filter(Boolean).join("\n\n");

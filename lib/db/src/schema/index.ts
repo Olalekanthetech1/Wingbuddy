@@ -81,12 +81,18 @@ export const messagesTable = pgTable(
     metadataJson: text("metadata_json"),
     externalId: text("external_id"),
     embeddingJson: text("embedding_json"),
+    kind: text("kind").default("conversational").notNull(),
+    status: text("status").default("completed").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
     index("messages_conversation_created_idx").on(
       table.conversationId,
       table.createdAt,
+    ),
+    index("messages_conversation_status_idx").on(
+      table.conversationId,
+      table.status,
     ),
     index("messages_external_id_idx").on(table.externalId),
   ],
@@ -108,7 +114,7 @@ export const webUsersTable = pgTable(
     fullName: text("full_name"),
     givenName: text("given_name"),
     familyName: text("family_name"),
-    notificationPreference: text("notification_preference").default("full").notNull(), // 'full' | 'digest_only' | 'silent'
+    notificationPreference: text("notification_preference").default("digest_only").notNull(), // 'full' | 'digest_only' | 'silent'
     contextSyncMode: text("context_sync_mode").default("compact").notNull(), // 'compact' | 'full'
     themePreference: text("theme_preference").default("system").notNull(), // 'light' | 'dark' | 'system'
     lastLoginAt: timestamp("last_login_at", { withTimezone: true }).defaultNow().notNull(),

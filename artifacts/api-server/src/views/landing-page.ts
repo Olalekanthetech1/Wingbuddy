@@ -232,15 +232,15 @@ export function renderLandingPageHtml(): string {
                     <span>YOU (Web Input)</span>
                     <span class="text-slate-400 font-normal">10:42 AM</span>
                   </div>
-                  <p class="leading-relaxed">Find remote AI Engineer openings paying $150k+ and schedule a daily 8 AM digest to my Telegram.</p>
+                  <p class="leading-relaxed">Schedule my daily morning briefing with active goals and reminders to my Telegram at 8:00 AM UTC.</p>
                 </div>
 
                 <div class="p-3 rounded-xl bg-[#131b2e] border border-[#1e293b] text-slate-200">
                   <div class="flex items-center justify-between text-[11px] text-emerald-400 font-bold mb-1">
                     <span>WINGBUDDY AI</span>
-                    <span class="bg-emerald-500/20 text-emerald-300 px-1.5 py-0.2 rounded text-[10px] font-mono">Task #1121</span>
+                    <span class="bg-emerald-500/20 text-emerald-300 px-1.5 py-0.2 rounded text-[10px] font-mono">Digest Engine</span>
                   </div>
-                  <p class="leading-relaxed">⚡ Scheduled! Autonomous graph will run daily at 08:00 UTC and broadcast directly to your connected Telegram.</p>
+                  <p class="leading-relaxed">⚡ Scheduled! Autonomous engine compiles your live priorities, reminders, and goals daily at 08:00 UTC directly to Telegram.</p>
                 </div>
               </div>
             </div>
@@ -262,10 +262,11 @@ export function renderLandingPageHtml(): string {
               <div class="space-y-3 font-sans text-xs sm:text-sm">
                 <div class="p-3.5 rounded-xl bg-[#242f3d] text-slate-100 border border-white/5">
                   <div class="text-[11px] text-sky-400 font-bold mb-1">Wingbuddy AI 🤖 • 08:00 AM UTC</div>
-                  <p class="font-bold text-white mb-1.5">🎯 Daily Remote AI Jobs Digest (Task 1121):</p>
+                  <p class="font-bold text-white mb-1.5">🌅 Morning Executive Briefing:</p>
                   <div class="text-slate-300 text-xs space-y-1 leading-relaxed">
-                    <div>1. <b>Senior LLM Systems Architect</b> - Anthropic ($180k-$240k)</div>
-                    <div>2. <b>AI Workflow Engineer</b> - Scale AI ($160k-$210k)</div>
+                    <div>🎯 <b>Top Priority</b>: Review acquisition wedge roadmap</div>
+                    <div>📊 <b>Active Goal</b>: 3M Savings Plan (Day 1 logged)</div>
+                    <div>⏰ <b>Reminders</b>: 1 reminder scheduled for today</div>
                   </div>
                   <div class="mt-3 pt-2.5 border-t border-white/10 flex flex-wrap gap-2">
                     <span class="px-2.5 py-1 rounded bg-[#2b5278] text-[10px] font-bold text-white">[🔍 View in Web]</span>

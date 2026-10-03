@@ -121,14 +121,14 @@ router.get("/overview", async (req: Request, res: Response) => {
     const quickPrompts = [
       taskCount > 0
         ? { id: "check_tasks", label: "Check Scheduled Tasks", prompt: "Summarize all active scheduled tasks and their execution status", icon: "⚡" }
-        : { id: "create_task", label: "Create Automated Task", prompt: "Help me create an automated recurring research task for remote AI engineering jobs", icon: "⚡" },
+        : { id: "create_task", label: "Create Automated Task", prompt: "Help me create an automated recurring strategic briefing task", icon: "⚡" },
       memoryCount > 0
         ? { id: "review_memories", label: "Review Memory Vault", prompt: "Review and summarize the key facts you remember about me in my Memory Vault", icon: "🧠" }
         : { id: "teach_facts", label: "Teach Assistant Facts", prompt: "Here are some facts and background about me you should remember for future tasks: ", icon: "🧠" },
       reminderCount > 0
         ? { id: "check_reminders", label: "Check Reminders", prompt: "What reminders and upcoming alarms do I have scheduled?", icon: "⏰" }
         : { id: "create_reminder", label: "Set a Reminder", prompt: "Set a reminder for me in 30 minutes to review my daily tasks", icon: "⏰" },
-      { id: "job_search", label: "Search Remote AI Jobs", prompt: "Search the web for the latest high-paying remote AI Engineer jobs with direct application links", icon: "💼" },
+      { id: "daily_digest", label: "Send Today's Digest", prompt: "Generate and send my daily morning digest now", icon: "🌅" },
     ];
 
     // Resolve user display name through central userIdentityResolverService

@@ -95,16 +95,48 @@ export class ConversationService {
     return conversation[0].id;
   }
 
-  async addMessage(conversationId: number, role: "user" | "model", content: string): Promise<void> {
+  async addMessage(
+    conversationId: number,
+    role: "user" | "model",
+    content: string,
+    options?: {
+      kind?: "conversational" | "system_notice" | "interrupted";
+      status?: "completed" | "interrupted" | "failed";
+    },
+  ): Promise<void> {
     const persistedContent = role === "model"
       ? mediaArtifactContextService.enrichGeneratedMessage(content)
       : content;
-    await db.insert(messagesTable).values({ conversationId, role, content: persistedContent });
+    const kind = options?.kind ?? "conversational";
+    const status = options?.status ?? "completed";
+    await db.insert(messagesTable).values({
+      conversationId,
+      role,
+      content: persistedContent,
+      kind,
+      status,
+    });
     await db.update(conversationsTable).set({ updatedAt: new Date() }).where(eq(conversationsTable.id, conversationId));
   }
 
-  async getRecentMessages(conversationId: number, limit: number): Promise<Message[]> {
-    const messages = await db.select().from(messagesTable).where(eq(messagesTable.conversationId, conversationId)).orderBy(desc(messagesTable.createdAt)).limit(limit);
+  async getRecentMessages(
+    conversationId: number,
+    limit: number,
+    includeNonConversational = false,
+  ): Promise<Message[]> {
+    const conditions = [eq(messagesTable.conversationId, conversationId)];
+    if (!includeNonConversational) {
+      conditions.push(
+        eq(messagesTable.status, "completed"),
+        eq(messagesTable.kind, "conversational"),
+      );
+    }
+    const messages = await db
+      .select()
+      .from(messagesTable)
+      .where(and(...conditions))
+      .orderBy(desc(messagesTable.createdAt))
+      .limit(limit);
     return messages.reverse();
   }
 

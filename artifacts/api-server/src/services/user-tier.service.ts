@@ -893,15 +893,24 @@ export class UserTierService {
   }
 
   async cleanupMockUsers(): Promise<{ deletedUserIds: number[]; count: number }> {
-    const mockIds = [888111000, 1000001, 1000002];
+    const mockIds = [
+      111111, 999888777, 987654321, 99887766,
+      9000000001, 9000000002, 9000000014, 9000000020, 9000000102, 9000000104,
+      888111000, 1000001, 1000002
+    ];
     const deleted: number[] = [];
     for (const id of mockIds) {
       try {
         await this.deleteUser(id);
         deleted.push(id);
-      } catch (err) {
-        logger.warn({ id, error: String(err) }, "Failed deleting mock user during cleanup");
+      } catch {
+        // Ignored if already cleaned up
       }
+    }
+    try {
+      await pool.query(`DELETE FROM web_users WHERE email LIKE '%@example.com' OR email LIKE '%@telegram.ai';`);
+    } catch {
+      // Ignored
     }
     return { deletedUserIds: deleted, count: deleted.length };
   }

@@ -1,5 +1,6 @@
-import type { Context } from "grammy";
+import { InlineKeyboard, type Context } from "grammy";
 import { AdaptiveEngineService } from "../services/adaptive-engine.service";
+import { OutputGuardService } from "../services/output-guard.service";
 import { safeErrorMetadata } from "../utils/safe-error";
 import { formatTelegramMessage, stripTelegramHtml } from "../utils/telegram-formatter";
 import { logger } from "../lib/logger";
@@ -79,12 +80,27 @@ export class StreamingResponder {
   async onChunk(accumulatedText: string): Promise<void> {
     if (this.isFinalized) return;
 
-    this.latestText = accumulatedText;
+    // Word-boundary hold-back buffer: do not emit the trailing unverified buffer window to Telegram
+    const holdBackTarget = OutputGuardService.HOLD_BACK_TARGET;
+    let safeText = accumulatedText;
+    if (accumulatedText.length > holdBackTarget) {
+      const candidateEnd = accumulatedText.length - holdBackTarget;
+      const lastSpace = accumulatedText.lastIndexOf(" ", candidateEnd);
+      const lastNewline = accumulatedText.lastIndexOf("\n", candidateEnd);
+      const boundary = Math.max(lastSpace, lastNewline);
+      safeText = boundary > 0 ? accumulatedText.slice(0, boundary) : accumulatedText.slice(0, candidateEnd);
+    } else {
+      // Buffer initial tokens while within hold-back target
+      return;
+    }
+
+    if (!safeText.trim()) return;
+    this.latestText = safeText;
     const now = Date.now();
 
-    // If initial message bubble hasn't been sent yet and we have accumulated enough text
-    if (!this.messageId && accumulatedText.trim().length >= 15) {
-      const formatted = formatTelegramMessage(`${accumulatedText.slice(0, 3800)} ▍`, {
+    // If initial message bubble hasn't been sent yet and we have accumulated enough safe text
+    if (!this.messageId && safeText.trim().length >= 15) {
+      const formatted = formatTelegramMessage(`${safeText.slice(0, 3800)} ▍`, {
         telegramUserId: this.ctx.from?.id,
         source: "StreamingResponder.onChunk",
         isStreaming: true,
@@ -108,10 +124,10 @@ export class StreamingResponder {
     if (!this.messageId) return;
 
     const elapsedSinceStart = Math.max(1, (now - (this.streamStartTime || now)) / 1000);
-    const velocityCharsPerSec = Math.round(accumulatedText.length / elapsedSinceStart);
+    const velocityCharsPerSec = Math.round(safeText.length / elapsedSinceStart);
 
     const dynamicIntervalMs = AdaptiveEngineService.computeAdaptiveStreamingInterval({
-      characterLength: accumulatedText.length,
+      characterLength: safeText.length,
       velocityCharsPerSec,
       lastApiLatencyMs: this.lastApiLatencyMs,
     });
@@ -139,14 +155,20 @@ export class StreamingResponder {
     await this.renderFinalText(this.latestText);
   }
 
-  async fail(message = "⚠️ I hit a temporary issue while generating that response. Please try again."): Promise<void> {
+  async fail(
+    message = "That reply was interrupted. Would you like to retry?",
+    options?: { showRetryButton?: boolean; referenceId?: string },
+  ): Promise<void> {
     if (this.isFinalized) return;
     this.isFinalized = true;
     this.clearPendingTimer();
-    const safeMessage = message.trim() || "⚠️ I couldn't complete that response.";
+    const safeMessage = message.trim() || "That reply was interrupted. Would you like to retry?";
+    const replyMarkup = options?.showRetryButton !== false
+      ? new InlineKeyboard().text("🔄 Retry", "retry:last_turn")
+      : undefined;
 
     if (!this.messageId || !this.ctx.chat) {
-      await this.ctx.reply(safeMessage).catch(() => {});
+      await this.ctx.reply(safeMessage, { reply_markup: replyMarkup }).catch(() => {});
       return;
     }
 
@@ -156,10 +178,15 @@ export class StreamingResponder {
     });
 
     try {
-      await this.ctx.api.editMessageText(this.ctx.chat.id, this.messageId, formatted, { parse_mode: "HTML" });
+      await this.ctx.api.editMessageText(this.ctx.chat.id, this.messageId, formatted, {
+        parse_mode: "HTML",
+        reply_markup: replyMarkup,
+      });
     } catch {
       try {
-        await this.ctx.api.editMessageText(this.ctx.chat.id, this.messageId, stripTelegramHtml(formatted));
+        await this.ctx.api.editMessageText(this.ctx.chat.id, this.messageId, stripTelegramHtml(formatted), {
+          reply_markup: replyMarkup,
+        });
       } catch (error) {
         logger.debug({ error: safeErrorMetadata(error) }, "Streaming failure message edit failed");
       }

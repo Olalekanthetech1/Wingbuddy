@@ -78,12 +78,15 @@ model Message {
   tokenCount     Int?         @map("token_count")
   externalId     String?      @map("external_id")
   embeddingJson  String?      @map("embedding_json") @db.Text
+  kind           String       @default("conversational")
+  status         String       @default("completed")
   createdAt      DateTime     @default(now()) @map("created_at")
 
   // Relationships
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@index([conversationId, createdAt], map: "messages_conversation_created_idx")
+  @@index([conversationId, status], map: "messages_conversation_status_idx")
   @@index([externalId], map: "messages_external_id_idx")
   @@map("messages")
 }
@@ -102,7 +105,7 @@ model WebUser {
   fullName               String?  @map("full_name")
   givenName              String?  @map("given_name")
   familyName             String?  @map("family_name")
-  notificationPreference String   @default("full") @map("notification_preference")
+  notificationPreference String   @default("digest_only") @map("notification_preference")
   contextSyncMode        String   @default("compact") @map("context_sync_mode")
   themePreference        String   @default("system") @map("theme_preference")
   lastLoginAt            DateTime @default(now()) @map("last_login_at")
@@ -421,3 +424,43 @@ model ExecutionApprovalRecord {
   @@index([status], map: "execution_approvals_status_idx")
   @@map("execution_approvals")
 }
+
+/// User Daily Digest Preferences
+model UserDailyDigestPreference {
+  id                   Int       @id @default(autoincrement())
+  telegramUserId       BigInt    @unique @map("telegram_user_id")
+  enabled              Boolean   @default(true)
+  sendTime             String    @default("08:00") @map("send_time")
+  timezone             String    @default("UTC")
+  sections             String    @default("[\"tasks\",\"reminders\",\"goals\"]")
+  days                 String    @default("[\"mon\",\"tue\",\"wed\",\"thu\",\"fri\",\"sat\",\"sun\"]")
+  whenEmpty            String    @default("skip") @map("when_empty")
+  includeWeeklySummary Boolean   @default(false) @map("include_weekly_summary")
+  pausedUntil          DateTime? @map("paused_until")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  @@map("user_daily_digest_preferences")
+}
+
+/// Idempotent record of daily digest deliveries per (user, date)
+model DailyDigestDelivery {
+  id               Int       @id @default(autoincrement())
+  telegramUserId   BigInt    @map("telegram_user_id")
+  deliveryDate     String    @map("delivery_date")
+  scheduledFor     DateTime  @default(now()) @map("scheduled_for")
+  deliveredAt      DateTime? @map("delivered_at")
+  status           String    @default("pending")
+  sectionsIncluded String    @default("[]") @map("sections_included")
+  itemCount        Int       @default(0) @map("item_count")
+  summaryText      String?   @map("summary_text") @db.Text
+  errorMessage     String?   @map("error_message") @db.Text
+  retryCount       Int       @default(0) @map("retry_count")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  @@unique([telegramUserId, deliveryDate], map: "daily_digest_deliveries_user_date_uniq")
+  @@index([telegramUserId, status], map: "daily_digest_deliveries_user_status_idx")
+  @@map("daily_digest_deliveries")
+}
+

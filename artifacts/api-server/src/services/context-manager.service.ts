@@ -177,11 +177,15 @@ export class ContextManagerService {
     if (formattedTaskContext) {
       fullSystemPrompt += `\n\n${formattedTaskContext}`;
       if (taskIntent === "NEW_TASK") {
-        fullSystemPrompt += `\n\n[SYSTEM DIRECTIVE]\nYou have successfully created the above background task to fulfill the user's request. DO NOT hallucinate that you are unable to perform the action. Instead, playfully and enthusiastically confirm to the user that the task is locked in and will be handled in the background!`;
+        fullSystemPrompt += `\n\n[TASK CONTEXT]\nA background task record (#${activeTaskData?.task?.id}) has been created for tracking this initiative. Directly answer the user's message, perform required evaluations or reasoning in this reply, and do not make false claims of execution that has not occurred.`;
       }
     }
     fullSystemPrompt +=
-      "\n\n[STRICT ZERO-FALLBACK POLICY]\nNever use mock data, hardcoded placeholder values, static fallbacks, or simulated responses. All outputs and features must rely exclusively on live, dynamic, adaptive data, verified system capabilities, real search results, and accurate reasoning. Never fabricate or assume results.";
+      "\n\n[STRICT ZERO-FALLBACK POLICY]\n" +
+      "- Never use mock data, hardcoded placeholder values, static fallbacks, or simulated responses.\n" +
+      "- All outputs, metrics, and responses must rely exclusively on live, verified data and real capabilities.\n" +
+      "- No fake completion: Never report an action as completed unless it was actually executed and verified.\n" +
+      "- Failure transparency: If data or a capability is unavailable, explicitly state the limitation rather than fabricating or assuming results.";
     fullSystemPrompt +=
       "\n\n[MEMORY SILENCE POLICY]\nTreat long-term memory as silent background context. Never say that you remember something, never list stored memories, never reveal memory keys or retrieval details, and never attribute an answer to a stored memory unless the user explicitly asks about memory itself.";
 

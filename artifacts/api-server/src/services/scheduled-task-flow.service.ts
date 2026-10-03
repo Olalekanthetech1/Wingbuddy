@@ -25,7 +25,7 @@ function escapeHtml(str: string): string {
 
 const prisma = new PrismaClient();
 
-export type TaskCategory = "Jobs & Career" | "News & Research" | "Personal & Productivity" | "Work Routine" | "General";
+export type TaskCategory = "Strategic Briefings" | "News & Research" | "Personal & Productivity" | "Work Routine" | "General";
 
 export interface ScheduledTaskMetadata {
   category: TaskCategory;
@@ -49,16 +49,15 @@ export class ScheduledTaskFlowService {
   categorizeTask(text: string): TaskCategory {
     const lower = text.toLowerCase();
     if (
-      lower.includes("job") ||
-      lower.includes("career") ||
-      lower.includes("role") ||
-      lower.includes("hiring") ||
-      lower.includes("vacancy") ||
-      lower.includes("interview") ||
-      lower.includes("remote work") ||
-      lower.includes("salary")
+      lower.includes("briefing") ||
+      lower.includes("digest") ||
+      lower.includes("priority") ||
+      lower.includes("priorities") ||
+      lower.includes("strategy") ||
+      lower.includes("savings") ||
+      lower.includes("goal")
     ) {
-      return "Jobs & Career";
+      return "Strategic Briefings";
     }
     if (
       lower.includes("admin") ||
@@ -113,8 +112,8 @@ export class ScheduledTaskFlowService {
     switch (category) {
       case "Work Routine":
         return "📊";
-      case "Jobs & Career":
-        return "💼";
+      case "Strategic Briefings":
+        return "🎯";
       case "News & Research":
         return "🌍";
       case "Personal & Productivity":
@@ -254,10 +253,10 @@ export class ScheduledTaskFlowService {
     previewFormat: string;
   } {
     switch (category) {
-      case "Jobs & Career":
+      case "Strategic Briefings":
         return {
-          expectedOutput: "Ranked opportunities with relevance explanations, requirements, and application links",
-          previewFormat: "Digest with top 3–5 matched roles + criteria analysis",
+          expectedOutput: "Actionable strategic briefing, priority checklist, and execution guidance",
+          previewFormat: "Digest with top priorities, project milestones, and key decisions",
         };
       case "News & Research":
         return {
@@ -308,8 +307,8 @@ export class ScheduledTaskFlowService {
 
     const title =
       params.title ||
-      (category === "Jobs & Career"
-        ? "Recurring Job Search & Matching"
+      (category === "Strategic Briefings"
+        ? "Daily Strategic Briefing"
         : category === "News & Research"
         ? "Scheduled Intelligence Briefing"
         : category === "Work Routine"
@@ -463,10 +462,10 @@ export class ScheduledTaskFlowService {
     try {
       // 1. Plan & execute with Agent Planner
       const isResearchTask =
-        metadata.category === "Jobs & Career" ||
+        metadata.category === "Strategic Briefings" ||
         metadata.category === "News & Research" ||
         metadata.type === "digest" ||
-        /\b(search|job|opening|news|digest|market|remote|career|find|hire|opportunity|opportunities|growth|sales|operations)\b/i.test(`${task.goal} ${task.title}`);
+        /\b(briefing|digest|priority|strategy|savings|goals|research|intel)\b/i.test(`${task.goal} ${task.title}`);
 
       const planResult = await agentPlannerService.planAndCompile({
         telegramUserId: Number(task.telegramUserId),
@@ -563,13 +562,13 @@ export class ScheduledTaskFlowService {
         const systemPrompt = [
           `You are executing a scheduled standing instruction for the user: "${task.title}".`,
           `Category: ${metadata.category}`,
-          `Format: ${metadata.previewFormat || "Digest"}. Make it high-signal, ranked, with concrete opportunities, actionable takeaways, requirements, and direct application links where available.`,
+          `Format: ${metadata.previewFormat || "Digest"}. Make it high-signal, structured, with actionable takeaways and key findings based strictly on live data.`,
           `ZERO-FALLBACK POLICY: Do not output generic filler, boilerplate system checks ("All systems normal"), or simulated responses. Ground all recommendations strictly in the verified live data provided.`,
           liveSearchFindings ? `\n--- VERIFIED LIVE SEARCH FINDINGS ---\n${liveSearchFindings}\n--- END LIVE FINDINGS ---` : ""
         ].filter(Boolean).join("\n");
 
         let generationError: string | null = null;
-        const userPrompt = `${task.goal}\n\nDeliver the ranked, curated report based strictly on the live findings above. Include genuine job titles, company/platform names, key requirements, match rationale, and direct links.`;
+        const userPrompt = `${task.goal}\n\nDeliver the structured, actionable report based strictly on the live findings above. Include genuine data points, source names, key takeaways, and direct references where available.`;
 
         // 1. Try Adaptive AI Router across healthy registered providers
         try {
@@ -648,7 +647,7 @@ export class ScheduledTaskFlowService {
       const isDigest =
         !isReminder ||
         metadata.type === "digest" ||
-        metadata.category === "Jobs & Career" ||
+        metadata.category === "Strategic Briefings" ||
         metadata.category === "News & Research";
 
       let formattedMessage: string;
@@ -756,7 +755,7 @@ export class ScheduledTaskFlowService {
     const isDigest =
       !isReminder ||
       metadata.type === "digest" ||
-      metadata.category === "Jobs & Career" ||
+      metadata.category === "Strategic Briefings" ||
       metadata.category === "News & Research";
 
     if (!isDigest) {
@@ -795,14 +794,14 @@ export class ScheduledTaskFlowService {
     if (tasks.length === 0) {
       const keyboard = new InlineKeyboard().text("➕ Schedule a New Task", "menu:chat");
       return {
-        text: `📋 <b>No Scheduled Tasks Active</b>\n\nYou don't have any recurring standing instructions yet.\n\n<b>Examples:</b>\n• <i>"Every Monday, find remote growth marketing jobs"</i>\n• <i>"Daily at 9 AM, give me a summary of AI developments"</i>\n• <i>"Remind me in 3 hours to charge my S10"</i>`,
+        text: `📋 <b>No Scheduled Tasks Active</b>\n\nYou don't have any recurring standing instructions yet.\n\n<b>Examples:</b>\n• <i>"Daily at 8 AM, send me my strategic morning briefing"</i>\n• <i>"Daily at 9 AM, give me a summary of AI developments"</i>\n• <i>"Remind me in 3 hours to review my notes"</i>`,
         keyboard,
       };
     }
 
     // Group tasks by category
     const grouped: Record<string, typeof tasks> = {
-      "Jobs & Career": [],
+      "Strategic Briefings": [],
       "News & Research": [],
       "Personal & Productivity": [],
       General: [],

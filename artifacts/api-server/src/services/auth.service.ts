@@ -152,7 +152,7 @@ class AuthService {
       role: row.role as "admin" | "user",
       telegramUserId: row.telegram_user_id ? BigInt(row.telegram_user_id) : undefined,
       telegramUsername: row.telegram_username || undefined,
-      notificationPreference: (row.notification_preference as any) || "full",
+      notificationPreference: (row.notification_preference as any) || "digest_only",
       contextSyncMode: (row.context_sync_mode as any) || "compact",
       themePreference: (row.theme_preference as any) || "system",
     };
@@ -219,7 +219,7 @@ class AuthService {
       role: row.role as "admin" | "user",
       telegramUserId: row.telegram_user_id ? BigInt(row.telegram_user_id) : undefined,
       telegramUsername: row.telegram_username || undefined,
-      notificationPreference: (row.notification_preference as any) || "full",
+      notificationPreference: (row.notification_preference as any) || "digest_only",
       contextSyncMode: (row.context_sync_mode as any) || "compact",
       themePreference: (row.theme_preference as any) || "system",
     };
@@ -389,7 +389,7 @@ class AuthService {
       role: webUser.role as "admin" | "user",
       telegramUserId: webUser.telegram_user_id ? BigInt(webUser.telegram_user_id) : undefined,
       telegramUsername: webUser.telegram_username || undefined,
-      notificationPreference: (webUser.notification_preference as any) || "full",
+      notificationPreference: (webUser.notification_preference as any) || "digest_only",
       contextSyncMode: (webUser.context_sync_mode as any) || "compact",
       themePreference: (webUser.theme_preference as any) || "system",
     };

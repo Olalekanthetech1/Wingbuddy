@@ -149,8 +149,11 @@ export async function ensureDatabaseSchema(pgPool?: pg.Pool): Promise<void> {
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS asset_id INTEGER;
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS job_id TEXT;
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS metadata_json TEXT;
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'conversational';
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'completed';
 
     CREATE INDEX IF NOT EXISTS messages_conversation_created_idx ON messages(conversation_id, created_at);
+    CREATE INDEX IF NOT EXISTS messages_conversation_status_idx ON messages(conversation_id, status);
     CREATE INDEX IF NOT EXISTS messages_external_id_idx ON messages(external_id);
 
     -- Web Users Table for Google Sign-In & Dashboard Accounts
