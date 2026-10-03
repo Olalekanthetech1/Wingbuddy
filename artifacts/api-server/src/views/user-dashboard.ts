@@ -2963,7 +2963,7 @@ Exclude passwords, API keys, financial account details, government IDs, health, 
     }
 
     async function clearAllMemories() {
-      if (!confirm("⚠️ WARNING: This will permanently delete ALL long-term memories in your Memory Vault.\n\nThis action cannot be undone. Are you sure you want to proceed?")) return;
+      if (!confirm("⚠️ WARNING: This will permanently delete ALL long-term memories in your Memory Vault. This action cannot be undone. Are you sure you want to proceed?")) return;
       const token = localStorage.getItem("wb_session_token");
       try {
         const res = await fetch("/api/user/memories/clear-all", {
